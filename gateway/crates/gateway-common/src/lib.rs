@@ -26,14 +26,12 @@
 //!     admin block and in the registry sweeper) so a state change in
 //!     the DB also tears down the live tunnel registrations the proxy
 //!     fleet holds for the user.
-//!   * `devserver_gate`: shared JWT envelope and HS256 encode/decode
-//!     helpers for the devserver-gate handoff. identity mints entry
-//!     tokens; devserver-proxy verifies entry tokens and mints session
-//!     tokens. Same envelope, same secret (DEVSERVER_GATE_SECRET),
-//!     distinct `typ` claim.
+//!   * `devserver_gate`: Ed25519 entry credentials and exact binding
+//!     validation for the body-only identity-to-proxy handoff.
 
 pub mod devserver_control_client;
 pub mod devserver_gate;
+pub mod internal_transport;
 pub mod profile_client;
 pub mod shutdown;
 pub mod static_files;

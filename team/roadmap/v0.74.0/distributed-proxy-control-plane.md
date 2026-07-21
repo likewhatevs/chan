@@ -1,12 +1,26 @@
 # chan-gateway v0.72.0 distributed proxy control plane
 
-Status: accepted scope for v0.74.0, deferred out of both v0.72.0 and v0.73.0. **Steps 1 to 9 are implemented, own-gated, reviewed, and live-verified on the unmerged branch `v074/ctl`.** Steps 1 to 4 landed on `v073/ctl`; steps 5 to 9 plus the accepted joining ruling landed on `v074/ctl`, which is `v073/ctl` rebased onto main. Steps 5 to 9 turned out to be comparable in size to 1 to 4, which is why v0.73.0 closed without this item rather than holding the release or merging a half-cut-over proxy. See [release-v0.73.0](../../release/release-v0.73.0.md).
+Status: accepted scope for v0.74.0, deferred out of both v0.72.0 and v0.73.0.
+**Steps 1 to 9 and the accepted security hardening are implemented,
+own-gated, adversarially reviewed, live-verified, and final-gated on the
+unmerged branch `v074/ctl`. The branch is ready to merge when the v0.74.0
+integration window opens.** Steps 1 to 4 landed on
+`v073/ctl`; steps 5 to 9 plus the joining ruling and hardening landed on
+`v074/ctl`, which is `v073/ctl` rebased onto main. The size of the complete
+cutover is why v0.73.0 closed without it rather than merging a half-cut-over
+proxy. See [release-v0.73.0](../../release/release-v0.73.0.md).
 
 What is already done on that branch: the controller state machine with session incarnations, generation contiguity, pending-claim expiry, deterministic restart reconciliation and convergence; the runnable service with separately bound admin/health and raw h2c proxy listeners; the proxy-side cutover that deletes `admin.rs`; and a live three-proxy vertical slice proving each node serves only its own tunnel and returns 404 for the others. An integrator review found and the lane fixed four defects a green gate could not see: a cancellation-unsafe framed read inside a `select!`, a connection and semaphore-permit leak on heartbeat death, an unbounded command wedge, and a terminal convergence latch.
 
 What the `v074/ctl` round added: the live-first joining ruling (live rows are immutable winners; pending claims reserve their key and capacity; the lexicographic rule stays confined to initial restart reconciliation); the aggregate admin kill tree with registration-UUID routing, pending-claim cancellation, concurrent fan-out, and 502 partial-kill reporting; the `DevserverControlClient` rename with identity, profile, and admin migration; identity entry origins minted from controller-validated node bases with roster `proxy_origin`; the desktop move-node lifecycle; the extended three-proxy zone E2E (node matrix, shared-ingress distribution, controller restart, proxy control-stream drop, controller outage, and ownership move); fifth-service packaging, kube and sdme examples, ADR 0002, and the 0.74.0 version pins. Review of this round found and the lane fixed three more defects a green gate could not see: a forced resync after every confirmed kill that retracted uninvolved rows from the aggregate, a joining plan that ignored pending claims and could exceed the per-user cap, and an Active-with-no-generation zombie when a force-resync interrupted joining reconciliation. The full pre-push gate and the full zone suite (139 assertions) are green on the branch tip.
 
-The hardening proposal in [distributed-proxy-control-plane-hardening.md](distributed-proxy-control-plane-hardening.md) remains a proposal: its amendments A1 through A23 are not implemented on this branch, and its acceptance list names A1 through A4 and A18 through A21 as load-bearing before broad consumer migration. That decision belongs to the integrator before this branch merges.
+The hardening plan in
+[distributed-proxy-control-plane-hardening.md](distributed-proxy-control-plane-hardening.md)
+is accepted and implemented. Its implementation-closure section supersedes the
+pre-hardening protocol, credential, browser-session, revocation, and deployment
+details in this original plan. The original text below remains as a historical
+record of the initial distributed-control design rather than the current
+security contract.
 
 The plan below is unchanged from its original v0.72.0 target, so the version it names throughout is the version it ships in, now v0.74.0. Grounded against `46722392` on 2026-07-19.
 

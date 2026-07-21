@@ -55,73 +55,34 @@ npm run build -w @chan/profile
 
 Register one at https://github.com/settings/developers:
 
-- Homepage URL: `http://127.0.0.1:7000`
-- Authorization callback URL: `http://127.0.0.1:7000/auth/github/callback`
+- Homepage URL: `https://id.localtest.me:17000`
+- Authorization callback URL: `https://id.localtest.me:17000/auth/github/callback`
 
 Save the client id and secret.
 
 ### Run
 
-Four terminals; profile first.
-
-Terminal 1 (profile-service, internal API on 7001):
-
-```sh
-export DATABASE_URL=postgres://chan:chan@127.0.0.1/chan_gateway
-export BIND_ADDR=127.0.0.1:7001
-export PROFILE_AUTH_TOKEN=dev-token
-cargo run -p profile
-```
-
-Terminal 2 (identity-service, id.chan.app surface on 7000):
+Use the checked-in local-stack scripts from the repository root. They generate
+distinct scoped bearers and Ed25519 admission/entry keypairs, run identity once
+with `CHAN_GATEWAY_MIGRATIONS=only`, then start identity and profile with
+`CHAN_GATEWAY_MIGRATIONS=external`:
 
 ```sh
-export DATABASE_URL=postgres://chan:chan@127.0.0.1/chan_gateway
-export BIND_ADDR=127.0.0.1:7000
-export BASE_URL=http://127.0.0.1:7000
-export DEVSERVER_PROXY_ORIGIN=http://127.0.0.1:7002
-export DEVSERVER_TUNNEL_ORIGIN=http://127.0.0.1:7002
-export COOKIE_SECURE=false
-export PROFILE_SERVICE_URL=http://127.0.0.1:7001
-export PROFILE_AUTH_TOKEN=dev-token
-export IDENTITY_INTERNAL_TOKEN=dev-internal-token
-export DEVSERVER_GATE_SECRET=dev-devserver-gate-secret
-export GITHUB_CLIENT_ID=...
-export GITHUB_CLIENT_SECRET=...
-cargo run -p identity
+cp packaging/gateway/scripts/dev/env.example packaging/gateway/scripts/dev/.env
+# Add the GitHub OAuth client id and secret to .env.
+packaging/gateway/scripts/dev/setup.sh
+packaging/gateway/scripts/dev/run.sh
 ```
 
-Open http://127.0.0.1:7000 and sign in with GitHub.
+Identity serves browser routes on `https://id.localtest.me:17000` through the
+generated local TLS edge and exposes its
+separate internal proxy/operator listener on `127.0.0.1:17004`. Proxies use
+the internal listener for validation. Import
+`packaging/gateway/scripts/dev/secrets/tls/ca.crt` into the development browser.
+The setup script is idempotent; pass `--force` only when every generated
+credential and the local CA should rotate.
 
-Terminal 3 (devserver-control-service, admin tree on 7003, proxy control on 7101):
-
-```sh
-export BIND_ADDR=127.0.0.1:7003
-export PROXY_BIND_ADDR=127.0.0.1:7101
-export DEVSERVER_ADMIN_TOKEN=dev-admin-token
-export DEVSERVER_PROXY_TOKEN=dev-proxy-token
-export DEVSERVER_PROXY_BASE_URL_TEMPLATE=http://{proxy_id}.localtest.me:7002
-cargo run -p devserver-control
-```
-
-Terminal 4 (devserver-proxy-service, devserver.chan.app surface on 7002):
-
-```sh
-export BIND_ADDR=127.0.0.1:7002
-export TUNNEL_BIND_ADDR=127.0.0.1:7100
-export IDENTITY_URL=http://127.0.0.1:7000
-export IDENTITY_INTERNAL_TOKEN=dev-internal-token
-export DEVSERVER_GATE_SECRET=dev-devserver-gate-secret
-export DASHBOARD_URL=http://127.0.0.1:7000/workspaces
-export DEVSERVER_CONTROL_URL=http://127.0.0.1:7101
-export DEVSERVER_PROXY_TOKEN=dev-proxy-token
-export DEVSERVER_PROXY_ID=p1
-export DEVSERVER_PROXY_BASE_URL=http://p1.localtest.me:7002
-export DEVSERVER_TUNNEL_ORIGIN=http://127.0.0.1:7002
-cargo run -p devserver-proxy
-```
-
-devserver-proxy holds no database and reads no identity session, and admits no tunnel until its control session to devserver-control reaches `FleetReady`. A devserver is reached by following the "open workspace" link from the id.chan.app dashboard, which carries the entry token; the proxy exchanges it for `devserver_gate` plus `devserver_csrf` host-only cookies. For the full local stack use `../packaging/gateway/scripts/dev/setup.sh` + `../packaging/gateway/scripts/dev/run.sh`.
+devserver-proxy holds no database and reads no identity session, and admits no tunnel until its control session to devserver-control reaches `FleetReady`. Opening a workspace submits a separate, short-lived Ed25519 entry credential to the fixed `/_chan/entry` endpoint in a bounded form POST from identity's exact origin. The credential never appears in a URL and succeeds once; the proxy exchanges it for opaque `devserver_gate` plus `devserver_csrf` host-only cookies. For the full local stack use `../packaging/gateway/scripts/dev/setup.sh` + `../packaging/gateway/scripts/dev/run.sh`.
 
 For frontend iteration without re-embedding:
 
@@ -164,16 +125,24 @@ sudo apt install ./chan-gateway-profile_*.deb \
                  ./chan-gateway-devserver-proxy_*.deb
 ```
 
-The packages share a system user (`chan-gateway`) and put env templates at `/etc/chan-gateway/{profile,identity,devserver-control,devserver-proxy}.env`. Edit those, then enable + start each service:
+Each package has a distinct system user and a service-only env file under
+`/etc/chan-gateway/`. Use the repository configurator to create scoped
+credentials and the owner-only migration environment, then run the migration
+unit before starting the runtime services:
 
 ```sh
+sudo packaging/gateway/scripts/configure.sh
+sudo systemctl restart chan-gateway-migrate
 sudo systemctl enable --now chan-gateway-profile
 sudo systemctl enable --now chan-gateway-identity
 sudo systemctl enable --now chan-gateway-devserver-control
 sudo systemctl enable --now chan-gateway-devserver-proxy
 ```
 
-The binaries listen on `127.0.0.1:{7001,7000,7003,7101,7002,7100}` by default; front identity and devserver-proxy with nginx + Let's Encrypt for `id.chan.app` and `devserver.chan.app`. The devserver-control listeners (7003 admin, 7101 proxy control) stay on the private network.
+The binaries listen on loopback by default: identity public `7000`, identity
+internal proxy/operator `7004`, profile `7001`, control `7003`/`7101`, and proxy
+`7002`/`7100`. Front only identity `7000` and proxy `7002`/`7100` with TLS.
+Never publish identity `7004` or either control listener.
 
 ## Admin
 
@@ -181,16 +150,21 @@ The binaries listen on `127.0.0.1:{7001,7000,7003,7101,7002,7100}` by default; f
 
 ### Setup
 
-Two service env vars guard the admin trees; rotate them like any other secret:
+Each admin destination has its own credential; rotate them independently:
 
 - profile-service:   `PROFILE_ADMIN_TOKEN=<random>`
-- devserver-control: `DEVSERVER_ADMIN_TOKEN=<random>`
+- identity-service:  `IDENTITY_ADMIN_TOKEN=<random>`
+- devserver-control: `DEVSERVER_OPERATOR_ADMIN_TOKENS=<random>`
 
-A single-token deployment shares one secret across both services; `chan-gateway-admin` reads `CHAN_ADMIN_TOKEN` and sends it to each.
+Do not reuse one bearer across services. `chan-gateway-admin` reads the matching
+scoped variable for each destination:
 
 ```sh
-export CHAN_ADMIN_TOKEN=<same value as the service tokens>
+export CHAN_ADMIN_PROFILE_TOKEN=<PROFILE_ADMIN_TOKEN>
+export CHAN_ADMIN_IDENTITY_TOKEN=<IDENTITY_ADMIN_TOKEN>
+export CHAN_ADMIN_OPERATOR_TOKEN=<one DEVSERVER_OPERATOR_ADMIN_TOKENS value>
 export CHAN_ADMIN_PROFILE_URL=http://127.0.0.1:7001    # optional, default
+export CHAN_ADMIN_IDENTITY_URL=http://127.0.0.1:7004   # optional, internal listener
 export CHAN_ADMIN_WORKSPACE_URL=http://127.0.0.1:7003  # optional, default
 ```
 

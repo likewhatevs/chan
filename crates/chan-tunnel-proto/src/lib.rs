@@ -16,12 +16,14 @@ mod frame;
 pub mod gateway_assertion;
 mod h2_duplex;
 mod io;
+mod lease_refresh;
 mod workspace_name;
 
 pub use control::{error_code, Hello, HelloAck, HelloAckErr, HelloAckOk, ProtocolVersion};
 pub use frame::{decode_frame, encode_frame, FrameError};
 pub use h2_duplex::H2Duplex;
 pub use io::{read_frame, write_frame, IoFrameError};
+pub use lease_refresh::{LeaseRefreshRequest, LeaseRefreshResponse};
 pub use workspace_name::{
     is_valid_username, is_valid_workspace_name, sanitize_workspace_name, MAX_USERNAME_LEN,
     MAX_WORKSPACE_NAME_LEN,

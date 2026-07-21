@@ -39,7 +39,7 @@ async fn run() -> anyhow::Result<()> {
     let (controller, mut actor_task) = spawn_controller_owned(config.max_devservers_per_user);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-    let admin_app = admin_router(controller.clone(), config.admin_token);
+    let admin_app = admin_router(controller.clone(), config.admin_credentials.clone());
     let mut admin_task = {
         let shutdown = shutdown_rx.clone();
         tokio::spawn(async move {
@@ -55,7 +55,8 @@ async fn run() -> anyhow::Result<()> {
             serve_control_listener(
                 proxy_listener,
                 controller,
-                config.proxy_token,
+                config.proxy_credentials,
+                config.admission_lease_verifier,
                 config.proxy_base_url_template,
                 shutdown,
             )

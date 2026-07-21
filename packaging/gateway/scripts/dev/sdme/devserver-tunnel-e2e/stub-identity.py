@@ -1,134 +1,200 @@
 #!/usr/bin/env python3
-"""Stub identity-service for the devserver-proxy tunnel e2e.
+"""Narrow identity fixture for the cross-container tunnel E2E.
 
-The proxy validates every tunnel dial's PAT against
-  POST {IDENTITY_URL}/internal/v1/tokens/validate
-  Authorization: Bearer <IDENTITY_INTERNAL_TOKEN>
-  body {"token": "<chan_pat_*>"}
-and expects 200 {user_id, username, devserver_id, scopes}. This stub
-answers every well-formed validate with a fixed tunnel identity. It also
-exposes the desktop entry endpoint used by this rig: two explicit bearer
-tokens mint precomputed owner/editor entry JWTs, and every requested
-owner/full-id/path is validated before the exact response is returned.
-The proxy and devserver remain the real binaries while postgres-backed
-identity and profile are the only omitted services.
-
-Env (all optional, sane defaults):
-  STUB_BIND        default 0.0.0.0:7000
-  STUB_USER_ID     default 11111111-1111-4111-8111-111111111111
-  STUB_USERNAME    default alice
-  STUB_DEVSERVER_ID default 64-hex
-  STUB_SCOPES      default "tunnel" (comma-separated)
-  STUB_PROXY_ORIGIN exact public proxy origin for desktop entry responses
-  STUB_DESKTOP_OWNER_PAT / STUB_DESKTOP_EDITOR_PAT accepted desktop bearers
-  STUB_OWNER_ENTRY_TOKEN / STUB_EDITOR_ENTRY_TOKEN precomputed entry JWTs
-Requests are logged to stderr; stdout stays clean.
+The real proxy still verifies signed admission and entry credentials. This
+fixture owns only the omitted postgres-backed identity boundary: one exact PAT,
+one immutable devserver owner, and two binary callers (owner or grantee).
 """
-import json, os, sys
+
 from datetime import datetime, timedelta, timezone
+import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
-USER_ID = os.environ.get("STUB_USER_ID", "11111111-1111-4111-8111-111111111111")
-USERNAME = os.environ.get("STUB_USERNAME", "alice")
-DEVSERVER_ID = os.environ.get(
-    "STUB_DEVSERVER_ID",
-    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-)
-SCOPES = [s for s in os.environ.get("STUB_SCOPES", "tunnel").split(",") if s]
-PROXY_ORIGIN = os.environ.get("STUB_PROXY_ORIGIN", "")
-OWNER_PAT = os.environ.get("STUB_DESKTOP_OWNER_PAT", "")
-EDITOR_PAT = os.environ.get("STUB_DESKTOP_EDITOR_PAT", "")
-OWNER_ENTRY_TOKEN = os.environ.get("STUB_OWNER_ENTRY_TOKEN", "")
-EDITOR_ENTRY_TOKEN = os.environ.get("STUB_EDITOR_ENTRY_TOKEN", "")
+import json
+import os
+import subprocess
+import sys
 
 
-class H(BaseHTTPRequestHandler):
+USER_ID = os.environ["STUB_USER_ID"]
+USERNAME = os.environ["STUB_USERNAME"]
+GRANTEE_USER_ID = os.environ["STUB_GRANTEE_USER_ID"]
+DEVSERVER_ID = os.environ["STUB_DEVSERVER_ID"]
+PROXY_ID = os.environ["STUB_PROXY_ID"]
+PROXY_ORIGIN = os.environ["STUB_PROXY_ORIGIN"]
+AUDIENCE = os.environ["STUB_AUDIENCE"]
+TUNNEL_PAT = os.environ["STUB_TUNNEL_PAT"]
+INTERNAL_TOKEN = os.environ["STUB_IDENTITY_INTERNAL_TOKEN"]
+OWNER_PAT = os.environ["STUB_DESKTOP_OWNER_PAT"]
+GRANTEE_PAT = os.environ["STUB_DESKTOP_GRANTEE_PAT"]
+ADMISSION_SIGNING_KEY = os.environ["STUB_ADMISSION_SIGNING_KEY"]
+ENTRY_SIGNING_KEY = os.environ["STUB_ENTRY_SIGNING_KEY"]
+MINT = "/root/mint-signed-credential.py"
+
+
+def mint(*args: str) -> str:
+    result = subprocess.run(
+        [sys.executable, MINT, *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip())
+    return result.stdout.strip()
+
+
+def bearer(headers) -> str:
+    value = headers.get("Authorization", "")
+    return value[7:] if value.startswith("Bearer ") else ""
+
+
+class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         sys.stderr.write("[stub-identity] " + (fmt % args) + "\n")
 
-    def _json(self, code, obj):
-        body = json.dumps(obj).encode()
+    def json_response(self, code: int, value: dict):
+        body = json.dumps(value, separators=(",", ":")).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
+    def request_json(self) -> dict | None:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            return None
+        if length <= 0 or length > 8192:
+            return None
+        try:
+            value = json.loads(self.rfile.read(length))
+        except Exception:
+            return None
+        return value if isinstance(value, dict) else None
+
     def do_POST(self):
-        n = int(self.headers.get("Content-Length", 0))
-        raw = self.rfile.read(n) if n else b""
+        body = self.request_json()
+        if body is None:
+            return self.json_response(400, {"error": "bad request"})
         if self.path == "/internal/v1/tokens/validate":
-            try:
-                tok = json.loads(raw or b"{}").get("token", "")
-            except Exception:
-                tok = ""
-            sys.stderr.write(
-                f"[stub-identity] validate token={tok[:12]}... -> user={USERNAME} "
-                f"devserver_id={DEVSERVER_ID[:12]}... scopes={SCOPES}\n"
-            )
-            return self._json(
-                200,
-                {
-                    "user_id": USER_ID,
-                    "username": USERNAME,
-                    "devserver_id": DEVSERVER_ID,
-                    "scopes": SCOPES,
-                },
-            )
+            return self.validate_token(body)
         if self.path == "/desktop/v1/devserver/entry":
-            bearer = self.headers.get("Authorization", "")
-            if bearer == f"Bearer {OWNER_PAT}" and OWNER_PAT:
-                token, role = OWNER_ENTRY_TOKEN, "owner"
-            elif bearer == f"Bearer {EDITOR_PAT}" and EDITOR_PAT:
-                token, role = EDITOR_ENTRY_TOKEN, "editor"
-            else:
-                return self._json(401, {"error": "unauthorized"})
+            return self.desktop_entry(body)
+        return self.json_response(404, {"error": "not found"})
+
+    def validate_token(self, body: dict):
+        if not hmac.compare_digest(bearer(self.headers), INTERNAL_TOKEN):
+            return self.json_response(401, {"error": "unauthorized"})
+        token = body.get("token")
+        if not isinstance(token, str) or not hmac.compare_digest(token, TUNNEL_PAT):
+            return self.json_response(401, {"error": "unauthorized"})
+
+        response = {
+            "user_id": USER_ID,
+            "username": USERNAME,
+            "devserver_id": DEVSERVER_ID,
+            "scopes": ["tunnel"],
+        }
+        registration_id = body.get("registration_id")
+        proxy_id = body.get("proxy_id")
+        if registration_id is not None or proxy_id is not None:
+            if not isinstance(registration_id, str) or proxy_id != PROXY_ID:
+                return self.json_response(400, {"error": "invalid admission binding"})
             try:
-                body = json.loads(raw or b"{}")
-            except Exception:
-                return self._json(400, {"error": "bad json"})
-            owner = body.get("owner")
-            devserver_id = body.get("devserver_id")
-            path = body.get("path") or "/"
-            if owner != USERNAME or devserver_id != DEVSERVER_ID:
-                return self._json(404, {"error": "not found", "reason": "access_denied"})
-            if not isinstance(path, str) or not path.startswith("/") or "://" in path:
-                return self._json(400, {"error": "invalid entry path"})
-            if not PROXY_ORIGIN or not token:
-                return self._json(503, {"error": "entry fixture is not configured"})
-            sep = "&" if "?" in path else "?"
-            expires = datetime.now(timezone.utc) + timedelta(minutes=5)
-            sys.stderr.write(
-                f"[stub-identity] desktop entry owner={owner} "
-                f"devserver_id={devserver_id[:12]}... role={role} path={path}\n"
+                lease = mint(
+                    "admission",
+                    f"--secret={ADMISSION_SIGNING_KEY}",
+                    "--owner-user-id",
+                    USER_ID,
+                    "--user",
+                    USERNAME,
+                    "--devserver-id",
+                    DEVSERVER_ID,
+                    "--registration-id",
+                    registration_id,
+                    "--proxy-id",
+                    PROXY_ID,
+                )
+            except Exception as error:
+                sys.stderr.write(f"[stub-identity] admission mint failed: {error}\n")
+                return self.json_response(503, {"error": "admission unavailable"})
+            response["admission_lease"] = lease
+            response["admission_lease_expires_at"] = (
+                datetime.now(timezone.utc) + timedelta(seconds=120)
+            ).isoformat().replace("+00:00", "Z")
+        self.json_response(200, response)
+
+    def desktop_entry(self, body: dict):
+        presented = bearer(self.headers)
+        if hmac.compare_digest(presented, OWNER_PAT):
+            subject = USER_ID
+        elif hmac.compare_digest(presented, GRANTEE_PAT):
+            subject = GRANTEE_USER_ID
+        else:
+            return self.json_response(401, {"error": "unauthorized"})
+        if body.get("owner_user_id") != USER_ID or body.get("devserver_id") != DEVSERVER_ID:
+            return self.json_response(404, {"error": "not found", "reason": "access_denied"})
+        next_path = body.get("path") or "/"
+        if (
+            not isinstance(next_path, str)
+            or not next_path.startswith("/")
+            or next_path.startswith("//")
+            or "://" in next_path
+        ):
+            return self.json_response(400, {"error": "invalid entry path"})
+        try:
+            credential = mint(
+                "entry",
+                f"--secret={ENTRY_SIGNING_KEY}",
+                "--sub",
+                subject,
+                "--owner-user-id",
+                USER_ID,
+                "--devserver-id",
+                DEVSERVER_ID,
+                "--audience",
+                AUDIENCE,
+                "--proxy-id",
+                PROXY_ID,
+                "--next-path",
+                next_path,
             )
-            return self._json(
-                200,
-                {
-                    "username": USERNAME,
-                    "devserver_id": DEVSERVER_ID,
-                    "proxy_origin": PROXY_ORIGIN,
-                    "entry_url": f"{PROXY_ORIGIN}{path}{sep}t={token}",
-                    "expires_at": expires.isoformat().replace("+00:00", "Z"),
-                },
-            )
-        return self._json(404, {"error": "not found"})
+        except Exception as error:
+            sys.stderr.write(f"[stub-identity] entry mint failed: {error}\n")
+            return self.json_response(503, {"error": "entry unavailable"})
+        self.json_response(
+            200,
+            {
+                "owner_user_id": USER_ID,
+                "username": USERNAME,
+                "devserver_id": DEVSERVER_ID,
+                "proxy_origin": PROXY_ORIGIN,
+                "entry_exchange_url": f"{PROXY_ORIGIN}/_chan/entry",
+                "entry_credential": credential,
+                "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=30))
+                .isoformat()
+                .replace("+00:00", "Z"),
+            },
+        )
 
     def do_GET(self):
         if self.path == "/healthz":
-            return self._json(200, {"ok": True})
-        return self._json(404, {"error": "not found"})
+            return self.json_response(200, {"ok": True})
+        return self.json_response(404, {"error": "not found"})
 
 
 def main():
-    bind = os.environ.get("STUB_BIND", "0.0.0.0:7000")
+    bind = os.environ.get("STUB_BIND", "127.0.0.1:7799")
     host, port = bind.rsplit(":", 1)
-    srv = ThreadingHTTPServer((host, int(port)), H)
+    server = ThreadingHTTPServer((host, int(port)), Handler)
     sys.stderr.write(
-        f"[stub-identity] listening on {bind}; user={USERNAME} "
-        f"user_id={USER_ID} devserver_id={DEVSERVER_ID}\n"
+        f"[stub-identity] listening on {bind}; "
+        f"devserver_id={DEVSERVER_ID[:12]} proxy_id={PROXY_ID}\n"
     )
-    srv.serve_forever()
+    server.serve_forever()
 
 
 if __name__ == "__main__":

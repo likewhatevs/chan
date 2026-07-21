@@ -19,6 +19,9 @@ pub enum Error {
     #[error("unauthorized")]
     Unauthorized,
 
+    #[error("service unavailable: {0}")]
+    Unavailable(&'static str),
+
     #[error(transparent)]
     Db(#[from] sqlx::Error),
 }
@@ -30,6 +33,7 @@ impl IntoResponse for Error {
             Error::Conflict(m) => (StatusCode::CONFLICT, (*m).to_string()),
             Error::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
             Error::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".to_string()),
+            Error::Unavailable(m) => (StatusCode::SERVICE_UNAVAILABLE, (*m).to_string()),
             Error::Db(e) => {
                 // Postgres unique-violation surfaces here when callers race; map
                 // it to 409 so callers can retry the lookup-or-create flow

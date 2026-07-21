@@ -1,15 +1,66 @@
 #!/bin/sh
 set -e
 
+require_one_line() {
+  file=$1
+  pattern=$2
+  description=$3
+  count=$(grep -Ec "$pattern" "$file" || true)
+  if [ "$count" -ne 1 ]; then
+    echo "chan-gateway-identity: $file must contain exactly one $description" >&2
+    exit 1
+  fi
+}
+
 case "$1" in
   configure)
-    if ! getent passwd chan-gateway >/dev/null; then
-      adduser --system --no-create-home --group chan-gateway
+    if ! getent passwd chan-gateway-identity >/dev/null; then
+      adduser --system --no-create-home --group chan-gateway-identity
     fi
-    install -d -m 0750 -o root -g chan-gateway /etc/chan-gateway
+    if ! getent passwd chan-gateway-migrate >/dev/null; then
+      adduser --system --no-create-home --group chan-gateway-migrate
+    fi
+    install -d -m 0751 -o root -g root /etc/chan-gateway
+    if [ -f /etc/chan-gateway/domain.env ]; then
+      chown root:root /etc/chan-gateway/domain.env
+      chmod 0644 /etc/chan-gateway/domain.env
+    fi
     if [ -f /etc/chan-gateway/identity.env ]; then
-      chown root:chan-gateway /etc/chan-gateway/identity.env
+      chown root:chan-gateway-identity /etc/chan-gateway/identity.env
       chmod 0640 /etc/chan-gateway/identity.env
+      require_one_line /etc/chan-gateway/identity.env \
+        '^DATABASE_URL=' 'DATABASE_URL setting'
+      require_one_line /etc/chan-gateway/identity.env \
+        '^DATABASE_URL=postgres://chan_gateway_identity:[^[:space:]]+@' \
+        'non-owner chan_gateway_identity DATABASE_URL'
+      require_one_line /etc/chan-gateway/identity.env \
+        '^CHAN_GATEWAY_MIGRATIONS=' 'CHAN_GATEWAY_MIGRATIONS setting'
+      require_one_line /etc/chan-gateway/identity.env \
+        '^CHAN_GATEWAY_MIGRATIONS=external$' \
+        'CHAN_GATEWAY_MIGRATIONS=external setting'
+      require_one_line /etc/chan-gateway/identity.env \
+        '^EXPECTED_SQLX_MIGRATION=15$' 'release EXPECTED_SQLX_MIGRATION=15 setting'
+      require_one_line /etc/chan-gateway/identity.env \
+        '^DATABASE_ROLE_POLICY_VERSION=1$' 'release DATABASE_ROLE_POLICY_VERSION=1 setting'
+    fi
+    if [ -f /etc/chan-gateway/migrate.env ]; then
+      chown root:chan-gateway-migrate /etc/chan-gateway/migrate.env
+      chmod 0640 /etc/chan-gateway/migrate.env
+      require_one_line /etc/chan-gateway/migrate.env \
+        '^DATABASE_URL=' 'DATABASE_URL setting'
+      require_one_line /etc/chan-gateway/migrate.env \
+        '^DATABASE_URL=postgres://' 'database-owner DATABASE_URL'
+      require_one_line /etc/chan-gateway/migrate.env \
+        '^CHAN_GATEWAY_MIGRATIONS=' 'CHAN_GATEWAY_MIGRATIONS setting'
+      require_one_line /etc/chan-gateway/migrate.env \
+        '^CHAN_GATEWAY_MIGRATIONS=only$' \
+        'CHAN_GATEWAY_MIGRATIONS=only setting'
+      require_one_line /etc/chan-gateway/migrate.env \
+        '^EXPECTED_SQLX_MIGRATION=15$' \
+        'release EXPECTED_SQLX_MIGRATION=15 setting'
+      require_one_line /etc/chan-gateway/migrate.env \
+        '^DATABASE_ROLE_POLICY_VERSION=1$' \
+        'release DATABASE_ROLE_POLICY_VERSION=1 setting'
     fi
     ;;
 esac

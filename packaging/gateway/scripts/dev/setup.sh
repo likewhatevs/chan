@@ -4,9 +4,8 @@
 # One-time bootstrap for the local dev stack:
 #   * Generates secrets in packaging/gateway/scripts/dev/secrets/*.env if missing.
 #   * Validates that packaging/gateway/scripts/dev/.env has the GitHub OAuth creds.
-#   * Confirms Postgres is reachable and runs profile-service once
-#     with --check (so migrations apply before run.sh starts the
-#     long-lived services).
+#   * Confirms Postgres is reachable and runs the identity binary in
+#     migration-only mode before run.sh starts the long-lived services.
 #
 # Idempotent. Pass --force to regenerate secrets from scratch.
 
@@ -14,7 +13,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 SCRIPT_DIR="$(pwd -P)"
+KEYPAIR_HELPER="$SCRIPT_DIR/../generate-admission-keypair.py"
 SECRETS_DIR="$SCRIPT_DIR/secrets"
+TLS_DIR="$SECRETS_DIR/tls"
 ENV_FILE="$SCRIPT_DIR/.env"
 ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)/gateway"
 
@@ -49,7 +50,27 @@ fi
 
 DATABASE_URL=${DATABASE_URL:-postgres://chan:chan@127.0.0.1/chan_gateway}
 
-mkdir -p "$SECRETS_DIR"
+mkdir -p "$SECRETS_DIR" "$TLS_DIR"
+
+# Public wildcard routing cannot use cleartext DNS names, even when they happen
+# to resolve into 127/8. Generate a local CA and edge certificate; run.sh keeps
+# every Rust service on loopback and terminates TLS in front of identity and
+# each proxy's public/tunnel listeners.
+if [[ ! -f "$TLS_DIR/ca.crt" || ! -f "$TLS_DIR/ca.key" \
+      || ! -f "$TLS_DIR/edge.crt" || ! -f "$TLS_DIR/edge.key" \
+      || $FORCE -eq 1 ]]; then
+    openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+        -subj '/CN=chan local gateway dev CA' \
+        -keyout "$TLS_DIR/ca.key" -out "$TLS_DIR/ca.crt" >/dev/null 2>&1
+    openssl req -newkey rsa:2048 -nodes -subj '/CN=localtest.me' \
+        -addext 'subjectAltName=DNS:id.localtest.me,DNS:devserver.localtest.me,DNS:*.devserver.localtest.me,DNS:*.p1.devserver.localtest.me,DNS:*.p2.devserver.localtest.me,DNS:*.p3.devserver.localtest.me,IP:127.0.0.1,IP:127.0.0.2,IP:127.0.0.3' \
+        -keyout "$TLS_DIR/edge.key" -out "$TLS_DIR/edge.csr" >/dev/null 2>&1
+    openssl x509 -req -days 365 -sha256 -copy_extensions copy \
+        -in "$TLS_DIR/edge.csr" -CA "$TLS_DIR/ca.crt" -CAkey "$TLS_DIR/ca.key" \
+        -CAcreateserial -out "$TLS_DIR/edge.crt" >/dev/null 2>&1
+    chmod 0600 "$TLS_DIR/ca.key" "$TLS_DIR/edge.key"
+    chmod 0644 "$TLS_DIR/ca.crt" "$TLS_DIR/edge.crt"
+fi
 
 # Generate secrets if absent (or always if --force).
 get_existing() {
@@ -63,20 +84,65 @@ rand_hex() { openssl rand -hex 32; }
 PROFILE_AUTH_TOKEN=$(get_existing "$SECRETS_DIR/profile.env" PROFILE_AUTH_TOKEN || true)
 [[ -z "$PROFILE_AUTH_TOKEN" || $FORCE -eq 1 ]] && PROFILE_AUTH_TOKEN=$(rand_hex)
 
-PROFILE_ADMIN_TOKEN=$(get_existing "$SECRETS_DIR/profile.env" PROFILE_ADMIN_TOKEN || true)
-[[ -z "$PROFILE_ADMIN_TOKEN" || $FORCE -eq 1 ]] && PROFILE_ADMIN_TOKEN=$(rand_hex)
-
 IDENTITY_INTERNAL_TOKEN=$(get_existing "$SECRETS_DIR/identity.env" IDENTITY_INTERNAL_TOKEN || true)
 [[ -z "$IDENTITY_INTERNAL_TOKEN" || $FORCE -eq 1 ]] && IDENTITY_INTERNAL_TOKEN=$(rand_hex)
 
-DEVSERVER_GATE_SECRET=$(get_existing "$SECRETS_DIR/identity.env" DEVSERVER_GATE_SECRET || true)
-[[ -z "$DEVSERVER_GATE_SECRET" || $FORCE -eq 1 ]] && DEVSERVER_GATE_SECRET=$(rand_hex)
+PROFILE_ADMIN_TOKEN=$(get_existing "$SECRETS_DIR/profile.env" PROFILE_ADMIN_TOKEN || true)
+IDENTITY_ADMIN_TOKEN=$(get_existing "$SECRETS_DIR/identity.env" IDENTITY_ADMIN_TOKEN || true)
+DEVSERVER_OPERATOR_ADMIN_TOKEN=$(get_existing "$SECRETS_DIR/devserver-control.env" DEVSERVER_OPERATOR_ADMIN_TOKENS || true)
+DEVSERVER_OPERATOR_ADMIN_TOKEN=${DEVSERVER_OPERATOR_ADMIN_TOKEN%%;*}
+DEVSERVER_IDENTITY_ADMIN_TOKEN=$(get_existing "$SECRETS_DIR/identity.env" DEVSERVER_IDENTITY_ADMIN_TOKEN || true)
+DEVSERVER_PROFILE_ADMIN_TOKEN=$(get_existing "$SECRETS_DIR/profile.env" DEVSERVER_PROFILE_ADMIN_TOKEN || true)
 
-DEVSERVER_ADMIN_TOKEN=$(get_existing "$SECRETS_DIR/devserver-control.env" DEVSERVER_ADMIN_TOKEN || true)
-[[ -z "$DEVSERVER_ADMIN_TOKEN" || $FORCE -eq 1 ]] && DEVSERVER_ADMIN_TOKEN=$(rand_hex)
+admin_tokens=()
+for token_name in PROFILE_ADMIN_TOKEN IDENTITY_ADMIN_TOKEN \
+    DEVSERVER_OPERATOR_ADMIN_TOKEN DEVSERVER_IDENTITY_ADMIN_TOKEN \
+    DEVSERVER_PROFILE_ADMIN_TOKEN; do
+    token=${!token_name}
+    duplicate=false
+    for existing_token in "${admin_tokens[@]:-}"; do
+        [[ "$token" != "$existing_token" ]] || duplicate=true
+    done
+    if [[ -z "$token" || $duplicate == true || $FORCE -eq 1 ]]; then
+        token=$(rand_hex)
+        while [[ " ${admin_tokens[*]:-} " == *" $token "* ]]; do token=$(rand_hex); done
+        printf -v "$token_name" '%s' "$token"
+    fi
+    admin_tokens+=("${!token_name}")
+done
 
-DEVSERVER_PROXY_TOKEN=$(get_existing "$SECRETS_DIR/devserver-control.env" DEVSERVER_PROXY_TOKEN || true)
-[[ -z "$DEVSERVER_PROXY_TOKEN" || $FORCE -eq 1 ]] && DEVSERVER_PROXY_TOKEN=$(rand_hex)
+DEVSERVER_ADMISSION_SIGNING_KEY=$(get_existing "$SECRETS_DIR/identity.env" DEVSERVER_ADMISSION_SIGNING_KEY || true)
+DEVSERVER_ADMISSION_VERIFYING_KEY=$(get_existing "$SECRETS_DIR/devserver-control.env" DEVSERVER_ADMISSION_VERIFYING_KEYS || true)
+DEVSERVER_ADMISSION_VERIFYING_KEY=${DEVSERVER_ADMISSION_VERIFYING_KEY%%;*}
+if [[ -z "$DEVSERVER_ADMISSION_SIGNING_KEY" || -z "$DEVSERVER_ADMISSION_VERIFYING_KEY" || $FORCE -eq 1 ]]; then
+    mapfile -t admission_keys < <("$KEYPAIR_HELPER")
+    [[ ${#admission_keys[@]} -eq 2 ]] || { echo "admission key generation failed" >&2; exit 1; }
+    DEVSERVER_ADMISSION_SIGNING_KEY=${admission_keys[0]}
+    DEVSERVER_ADMISSION_VERIFYING_KEY=${admission_keys[1]}
+fi
+
+DEVSERVER_ENTRY_SIGNING_KEY=$(get_existing "$SECRETS_DIR/identity.env" DEVSERVER_ENTRY_SIGNING_KEY || true)
+DEVSERVER_ENTRY_VERIFYING_KEYS=$(get_existing "$SECRETS_DIR/devserver-proxy.p1.env" DEVSERVER_ENTRY_VERIFYING_KEYS || true)
+DEVSERVER_ENTRY_VERIFYING_KEYS=${DEVSERVER_ENTRY_VERIFYING_KEYS%%;*}
+if [[ -z "$DEVSERVER_ENTRY_SIGNING_KEY" || -z "$DEVSERVER_ENTRY_VERIFYING_KEYS" || $FORCE -eq 1 ]]; then
+    mapfile -t entry_keys < <("$KEYPAIR_HELPER")
+    [[ ${#entry_keys[@]} -eq 2 ]] || { echo "entry key generation failed" >&2; exit 1; }
+    DEVSERVER_ENTRY_SIGNING_KEY=${entry_keys[0]}
+    DEVSERVER_ENTRY_VERIFYING_KEYS=${entry_keys[1]}
+fi
+
+DEVSERVER_PROXY_TOKENS=()
+DEVSERVER_PROXY_CREDENTIALS=""
+for n in 1 2 3; do
+    token=$(get_existing "$SECRETS_DIR/devserver-proxy.p$n.env" DEVSERVER_PROXY_TOKEN || true)
+    [[ -z "$token" || $FORCE -eq 1 ]] && token=$(rand_hex)
+    for existing_token in "${DEVSERVER_PROXY_TOKENS[@]:-}"; do
+        [[ "$token" != "$existing_token" ]] || token=$(rand_hex)
+    done
+    DEVSERVER_PROXY_TOKENS+=("$token")
+    [[ -n "$DEVSERVER_PROXY_CREDENTIALS" ]] && DEVSERVER_PROXY_CREDENTIALS+=";"
+    DEVSERVER_PROXY_CREDENTIALS+="p$n=$token"
+done
 
 write_env() {
     local path=$1 content=$2
@@ -93,10 +159,11 @@ write_env() {
 write_env "$SECRETS_DIR/profile.env" "# generated by packaging/gateway/scripts/dev/setup.sh
 BIND_ADDR=127.0.0.1:17001
 DATABASE_URL=$DATABASE_URL
+CHAN_GATEWAY_MIGRATIONS=external
 PROFILE_AUTH_TOKEN=$PROFILE_AUTH_TOKEN
 PROFILE_ADMIN_TOKEN=$PROFILE_ADMIN_TOKEN
 DEVSERVER_ADMIN_URL=http://127.0.0.1:17003
-DEVSERVER_ADMIN_TOKEN=$DEVSERVER_ADMIN_TOKEN
+DEVSERVER_PROFILE_ADMIN_TOKEN=$DEVSERVER_PROFILE_ADMIN_TOKEN
 RUST_LOG=${RUST_LOG:-info,profile=debug}"
 
 PROVIDER_ENV="GITHUB_CLIENT_ID=$GITHUB_CLIENT_ID
@@ -115,18 +182,23 @@ GITLAB_CLIENT_SECRET=${GITLAB_CLIENT_SECRET:?set GITLAB_CLIENT_SECRET alongside 
 fi
 
 write_env "$SECRETS_DIR/identity.env" "# generated by packaging/gateway/scripts/dev/setup.sh
-BIND_ADDR=127.0.0.1:17000
-BASE_URL=http://id.localtest.me:17000
-DEVSERVER_PROXY_ORIGIN=http://devserver.localtest.me:17002
-DEVSERVER_TUNNEL_ORIGIN=http://devserver.localtest.me:17100
+BIND_ADDR=127.0.0.1:16900
+INTERNAL_BIND_ADDR=127.0.0.1:17004
+BASE_URL=https://id.localtest.me:17000
+DEVSERVER_PROXY_ORIGIN=https://devserver.localtest.me:17002
+DEVSERVER_TUNNEL_ORIGIN=https://devserver.localtest.me:17100
 DATABASE_URL=$DATABASE_URL
-COOKIE_SECURE=false
+CHAN_GATEWAY_MIGRATIONS=external
+COOKIE_SECURE=true
 PROFILE_SERVICE_URL=http://127.0.0.1:17001
 PROFILE_AUTH_TOKEN=$PROFILE_AUTH_TOKEN
 IDENTITY_INTERNAL_TOKEN=$IDENTITY_INTERNAL_TOKEN
 DEVSERVER_ADMIN_URL=http://127.0.0.1:17003
-DEVSERVER_ADMIN_TOKEN=$DEVSERVER_ADMIN_TOKEN
-DEVSERVER_GATE_SECRET=$DEVSERVER_GATE_SECRET
+DEVSERVER_IDENTITY_ADMIN_TOKEN=$DEVSERVER_IDENTITY_ADMIN_TOKEN
+DEVSERVER_ADMISSION_SIGNING_KEY=$DEVSERVER_ADMISSION_SIGNING_KEY
+DEVSERVER_ADMISSION_VERIFYING_KEYS=$DEVSERVER_ADMISSION_VERIFYING_KEY
+DEVSERVER_ENTRY_SIGNING_KEY=$DEVSERVER_ENTRY_SIGNING_KEY
+IDENTITY_ADMIN_TOKEN=$IDENTITY_ADMIN_TOKEN
 $PROVIDER_ENV
 RUST_LOG=${RUST_LOG:-info,identity=debug}"
 
@@ -137,9 +209,13 @@ RUST_LOG=${RUST_LOG:-info,identity=debug}"
 write_env "$SECRETS_DIR/devserver-control.env" "# generated by packaging/gateway/scripts/dev/setup.sh
 BIND_ADDR=127.0.0.1:17003
 PROXY_BIND_ADDR=127.0.0.1:17101
-DEVSERVER_ADMIN_TOKEN=$DEVSERVER_ADMIN_TOKEN
-DEVSERVER_PROXY_TOKEN=$DEVSERVER_PROXY_TOKEN
-DEVSERVER_PROXY_BASE_URL_TEMPLATE=http://{proxy_id}.devserver.localtest.me:17002
+DEVSERVER_OPERATOR_ADMIN_TOKENS=$DEVSERVER_OPERATOR_ADMIN_TOKEN
+DEVSERVER_IDENTITY_ADMIN_TOKENS=$DEVSERVER_IDENTITY_ADMIN_TOKEN
+DEVSERVER_PROFILE_ADMIN_TOKENS=$DEVSERVER_PROFILE_ADMIN_TOKEN
+DEVSERVER_PROXY_CREDENTIALS=$DEVSERVER_PROXY_CREDENTIALS
+DEVSERVER_ADMISSION_VERIFYING_KEYS=$DEVSERVER_ADMISSION_VERIFYING_KEY
+DEVSERVER_PROXY_BASE_URL_TEMPLATE=https://{proxy_id}.devserver.localtest.me:17002
+MAX_DEVSERVERS_PER_USER=100
 RUST_LOG=${RUST_LOG:-info,devserver_control=debug}"
 
 # One env file per proxy node so run.sh can boot a fleet of 1 to 3.
@@ -150,52 +226,34 @@ RUST_LOG=${RUST_LOG:-info,devserver_control=debug}"
 rm -f "$SECRETS_DIR/devserver-proxy.env"
 for n in 1 2 3; do
     write_env "$SECRETS_DIR/devserver-proxy.p$n.env" "# generated by packaging/gateway/scripts/dev/setup.sh
-BIND_ADDR=127.0.0.$n:17002
-TUNNEL_BIND_ADDR=127.0.0.$n:17100
-DEVSERVER_TUNNEL_ORIGIN=http://devserver.localtest.me:17100
-DEVSERVER_PROXY_BASE_URL=http://p$n.devserver.localtest.me:17002
+BIND_ADDR=127.0.0.$n:16902
+TUNNEL_BIND_ADDR=127.0.0.$n:16910
+DEVSERVER_TUNNEL_ORIGIN=https://devserver.localtest.me:17100
+DEVSERVER_PROXY_BASE_URL=https://p$n.devserver.localtest.me:17002
 DEVSERVER_CONTROL_URL=http://127.0.0.1:17101
-DEVSERVER_PROXY_TOKEN=$DEVSERVER_PROXY_TOKEN
+DEVSERVER_PROXY_TOKEN=${DEVSERVER_PROXY_TOKENS[$((n - 1))]}
 DEVSERVER_PROXY_ID=p$n
-DASHBOARD_URL=http://id.localtest.me:17000/workspaces
-IDENTITY_URL=http://127.0.0.1:17000
+DASHBOARD_URL=https://id.localtest.me:17000/workspaces
+IDENTITY_URL=http://127.0.0.1:17004
 IDENTITY_INTERNAL_TOKEN=$IDENTITY_INTERNAL_TOKEN
-DEVSERVER_GATE_SECRET=$DEVSERVER_GATE_SECRET
-FORWARDED_PROTO=http
+DEVSERVER_ENTRY_VERIFYING_KEYS=$DEVSERVER_ENTRY_VERIFYING_KEYS
+IDENTITY_PUBLIC_ORIGIN=https://id.localtest.me:17000
+FORWARDED_PROTO=https
 RUST_LOG=${RUST_LOG:-info,devserver_proxy=debug}"
 done
 
 echo "wrote secrets to $SECRETS_DIR/"
 
-# Apply migrations by starting profile-service briefly. It runs the
-# sqlx migrate on boot and then blocks on the listener; we wait for
-# /healthz then SIGINT it. Doing this here gives setup.sh a clear
-# success/failure signal; run.sh later starts profile + identity +
-# devserver-proxy together and skips the wait.
-echo "applying migrations via profile-service..."
+# The same identity binary shipped to production owns both the shared sqlx
+# migrations and its tower-sessions schema. Migration-only mode needs no OAuth,
+# listener, or sibling-service configuration and exits as soon as DDL succeeds.
+echo "applying migrations via identity-service..."
 (
     cd "$ROOT"
-    cargo build --quiet --bin profile-service
+    cargo build --quiet --bin identity-service
     env DATABASE_URL="$DATABASE_URL" \
-        PROFILE_AUTH_TOKEN="$PROFILE_AUTH_TOKEN" \
-        PROFILE_ADMIN_TOKEN="$PROFILE_ADMIN_TOKEN" \
-        BIND_ADDR=127.0.0.1:17099 \
-        ./target/debug/profile-service >/tmp/chan-dev-migrate.log 2>&1 &
-    pid=$!
-    ok=0
-    for _ in $(seq 1 60); do
-        if curl -sf http://127.0.0.1:17099/healthz >/dev/null 2>&1; then
-            ok=1
-            break
-        fi
-        sleep 0.5
-    done
-    kill -INT "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
-    if (( ok == 0 )); then
-        echo "error: profile-service did not become healthy; see /tmp/chan-dev-migrate.log" >&2
-        exit 1
-    fi
+        CHAN_GATEWAY_MIGRATIONS=only \
+        ./target/debug/identity-service
 )
 
 echo

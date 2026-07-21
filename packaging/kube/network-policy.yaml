@@ -1,0 +1,245 @@
+# These policies constrain reachability but do not encrypt traffic. The cluster
+# pod network must provide authenticated encryption for every non-loopback hop.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: chan-gateway-default-deny
+  labels:
+    app.kubernetes.io/part-of: chan-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: chan-gateway
+  policyTypes: [Ingress, Egress]
+---
+# Public ingress must arrive through a pod and namespace carrying the edge
+# label. Operator access uses the same two-sided label contract below.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: chan-gateway-identity
+  labels:
+    app.kubernetes.io/part-of: chan-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: identity
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { networking.chan.app/edge: "true" }
+          podSelector:
+            matchLabels: { networking.chan.app/edge: "true" }
+      ports:
+        - { protocol: TCP, port: 7000 }
+    - from:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: devserver-proxy }
+        - namespaceSelector:
+            matchLabels: { networking.chan.app/operator: "true" }
+          podSelector:
+            matchLabels: { networking.chan.app/operator: "true" }
+      ports:
+        - { protocol: TCP, port: 7004 }
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: profile }
+      ports:
+        - { protocol: TCP, port: 7001 }
+    - to:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: devserver-control }
+      ports:
+        - { protocol: TCP, port: 7003 }
+    - to:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: postgres }
+      ports:
+        - { protocol: TCP, port: 5432 }
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # OAuth discovery and token endpoints use public HTTPS. Private and
+    # link-local destinations stay blocked; use an egress gateway for FQDN
+    # allowlisting when the cluster CNI supports it.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 224.0.0.0/4
+      ports:
+        - { protocol: TCP, port: 443 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: chan-gateway-profile
+  labels:
+    app.kubernetes.io/part-of: chan-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: profile
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: identity }
+        - namespaceSelector:
+            matchLabels: { networking.chan.app/operator: "true" }
+          podSelector:
+            matchLabels: { networking.chan.app/operator: "true" }
+      ports:
+        - { protocol: TCP, port: 7001 }
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: postgres }
+      ports:
+        - { protocol: TCP, port: 5432 }
+    - to:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: devserver-control }
+      ports:
+        - { protocol: TCP, port: 7003 }
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: chan-gateway-devserver-control
+  labels:
+    app.kubernetes.io/part-of: chan-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: devserver-control
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: identity }
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: profile }
+        - namespaceSelector:
+            matchLabels: { networking.chan.app/operator: "true" }
+          podSelector:
+            matchLabels: { networking.chan.app/operator: "true" }
+      ports:
+        - { protocol: TCP, port: 7003 }
+    - from:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: devserver-proxy }
+      ports:
+        - { protocol: TCP, port: 7101 }
+  egress: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: chan-gateway-devserver-proxy
+  labels:
+    app.kubernetes.io/part-of: chan-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: devserver-proxy
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { networking.chan.app/edge: "true" }
+          podSelector:
+            matchLabels: { networking.chan.app/edge: "true" }
+      ports:
+        - { protocol: TCP, port: 7002 }
+        - { protocol: TCP, port: 7100 }
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: identity }
+      ports:
+        - { protocol: TCP, port: 7004 }
+    - to:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: devserver-control }
+      ports:
+        - { protocol: TCP, port: 7101 }
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: chan-gateway-postgres
+  labels:
+    app.kubernetes.io/part-of: chan-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: profile }
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: identity }
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: database-migrate }
+      ports:
+        - { protocol: TCP, port: 5432 }
+  egress: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: chan-gateway-database-migrate
+  labels:
+    app.kubernetes.io/part-of: chan-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: database-migrate
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: postgres }
+      ports:
+        - { protocol: TCP, port: 5432 }
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }

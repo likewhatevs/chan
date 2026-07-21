@@ -6,8 +6,9 @@ use devserver_proxy::{
     config::Config,
     control::{self, ControlRuntime},
     http,
-    identity_validator::{CapturingValidator, IdentityValidator},
+    identity_validator::IdentityValidator,
     registry::Registry,
+    session_store::SessionStore,
     throttle_validator::ThrottlingValidator,
 };
 use tokio::sync::watch;
@@ -43,19 +44,19 @@ async fn run() -> anyhow::Result<()> {
     );
 
     let registry = Registry::new();
+    let sessions = SessionStore::new(cfg.session_max_active, cfg.session_lifetime);
 
     // Validator chain (outermost first):
-    //   CapturingValidator   records (username, user_id) on success
-    //                        so the proxy gate can resolve owner_id
-    //                        without a profile round trip.
     //   ThrottlingValidator  per-token-fingerprint rate limit before
     //                        any round trip to identity-service.
     //   IdentityValidator    upstream PAT lookup.
-    let identity =
-        IdentityValidator::new(cfg.identity_url.clone(), cfg.identity_auth_token.clone())?;
+    let identity = IdentityValidator::new(
+        cfg.identity_url.clone(),
+        cfg.identity_auth_token.clone(),
+        cfg.proxy_id.clone(),
+    )?;
     let throttled = ThrottlingValidator::new(identity);
-    let validator: Arc<dyn Validator> =
-        Arc::new(CapturingValidator::new(throttled, registry.clone()));
+    let validator: Arc<dyn Validator> = Arc::new(throttled);
 
     let public_listener = tokio::net::TcpListener::bind(cfg.bind_addr).await?;
     let tunnel_listener = tokio::net::TcpListener::bind(cfg.tunnel_bind_addr).await?;
@@ -65,9 +66,14 @@ async fn run() -> anyhow::Result<()> {
         admission,
         readiness,
         task: mut control_task,
-    } = control::spawn_control_supervisor(cfg.clone(), registry.clone(), shutdown_rx.clone());
+    } = control::spawn_control_supervisor(
+        cfg.clone(),
+        registry.clone(),
+        sessions.clone(),
+        shutdown_rx.clone(),
+    );
 
-    let app = http::router(cfg.clone(), registry.clone(), readiness);
+    let app = http::router(cfg.clone(), registry.clone(), readiness, sessions);
     let mut public_task = tokio::spawn({
         let shutdown = shutdown_rx.clone();
         async move {

@@ -1,17 +1,16 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
 use chan_tunnel_proto::H2Duplex;
 use devserver_control_proto::{
-    read_frame, write_frame, CanonicalOrigin, ClientFrame, FrameError, ProxyId,
-    ProxyOriginTemplate, ServerFrame, TunnelRow, CONNECT_PATH, CONTENT_TYPE, MAX_SNAPSHOT_ROWS,
-    PROTOCOL_VERSION,
+    read_frame, write_frame, AdmissionLease, AdmissionLeaseBinding, AdmissionLeaseVerifier,
+    CanonicalOrigin, ClientFrame, FrameError, ProxyId, ProxyOriginTemplate, ServerFrame, TunnelRow,
+    CONNECT_PATH, CONTENT_TYPE, MAX_SNAPSHOT_BYTES, MAX_SNAPSHOT_ROWS, PROTOCOL_VERSION,
 };
 use h2::server::SendResponse;
 use http::{header, Method, Request, Response, StatusCode};
-use subtle::ConstantTimeEq;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, watch, Semaphore};
@@ -19,17 +18,46 @@ use tokio::task::JoinSet;
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use crate::{ActorError, ControllerHandle, MutationStatus, ProxyControlSession};
+use crate::{
+    config::ProxyCredentials, ActorError, ControllerHandle, MutationStatus, ProxyControlSession,
+};
 
 const H2_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const FIRST_STREAM_TIMEOUT: Duration = Duration::from_secs(10);
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_EXTRA_STREAMS: usize = 16;
-const MAX_INFLIGHT_CONNECTIONS: usize = 1024;
-const CLIENT_FRAME_QUEUE_CAPACITY: usize = 1024;
+const MAX_INFLIGHT_CONNECTIONS: usize = 128;
+// A full 2,048-row snapshot is 18 frames at the protocol chunk maximum.
+// Thirty-two frames/second leaves headroom for concurrent deltas while a
+// 64-frame reader queue absorbs one additional window without allowing one
+// session to build a large private backlog ahead of the shared actor.
+const MAX_CLIENT_FRAMES_PER_WINDOW: usize = 32;
+const CLIENT_FRAME_RATE_WINDOW: Duration = Duration::from_secs(1);
+const CLIENT_FRAME_QUEUE_CAPACITY: usize = 64;
+const PROXY_ID_HEADER: &str = "x-chan-proxy-id";
 
 struct AbortOnDropTask(Option<tokio::task::JoinHandle<()>>);
+
+#[derive(Default)]
+struct ClientFrameRateLimiter {
+    accepted: VecDeque<Instant>,
+}
+
+impl ClientFrameRateLimiter {
+    fn accept(&mut self, now: Instant) -> bool {
+        while self.accepted.front().is_some_and(|accepted| {
+            now.saturating_duration_since(*accepted) >= CLIENT_FRAME_RATE_WINDOW
+        }) {
+            self.accepted.pop_front();
+        }
+        if self.accepted.len() >= MAX_CLIENT_FRAMES_PER_WINDOW {
+            return false;
+        }
+        self.accepted.push_back(now);
+        true
+    }
+}
 
 impl AbortOnDropTask {
     fn new(task: tokio::task::JoinHandle<()>) -> Self {
@@ -55,11 +83,12 @@ impl Drop for AbortOnDropTask {
 pub async fn serve_control_listener(
     listener: TcpListener,
     controller: ControllerHandle,
-    proxy_token: String,
+    proxy_credentials: ProxyCredentials,
+    admission_lease_verifier: AdmissionLeaseVerifier,
     origin_template: ProxyOriginTemplate,
     mut shutdown: watch::Receiver<bool>,
 ) -> io::Result<()> {
-    let proxy_token: Arc<[u8]> = Arc::from(proxy_token.into_bytes());
+    let proxy_credentials = Arc::new(proxy_credentials);
     let inflight = Arc::new(Semaphore::new(MAX_INFLIGHT_CONNECTIONS));
     let mut connections = JoinSet::new();
     loop {
@@ -83,14 +112,16 @@ pub async fn serve_control_listener(
                     continue;
                 };
                 let controller = controller.clone();
-                let proxy_token = proxy_token.clone();
+                let proxy_credentials = proxy_credentials.clone();
+                let admission_lease_verifier = admission_lease_verifier.clone();
                 let origin_template = origin_template.clone();
                 connections.spawn(async move {
                     let _permit = permit;
                     if let Err(error) = handle_connection(
                         stream,
                         controller,
-                        proxy_token,
+                        proxy_credentials,
+                        admission_lease_verifier,
                         origin_template,
                     ).await {
                         tracing::warn!(%peer, error = ?error, "proxy control connection closed");
@@ -106,7 +137,8 @@ pub async fn serve_control_listener(
 async fn handle_connection<T>(
     stream: T,
     controller: ControllerHandle,
-    proxy_token: Arc<[u8]>,
+    proxy_credentials: Arc<ProxyCredentials>,
+    admission_lease_verifier: AdmissionLeaseVerifier,
     origin_template: ProxyOriginTemplate,
 ) -> Result<(), SessionError>
 where
@@ -123,15 +155,18 @@ where
         None => return Ok(()),
     };
 
-    if let Err(status) = validate_request(&request, proxy_token.as_ref()) {
-        send_http_response(&mut respond, status, true)?;
-        connection.graceful_shutdown();
-        let _ = tokio::time::timeout(Duration::from_secs(1), async {
-            while connection.accept().await.is_some() {}
-        })
-        .await;
-        return Ok(());
-    }
+    let authenticated_proxy_id = match validate_request(&request, &proxy_credentials) {
+        Ok(proxy_id) => proxy_id,
+        Err(status) => {
+            send_http_response(&mut respond, status, true)?;
+            connection.graceful_shutdown();
+            let _ = tokio::time::timeout(Duration::from_secs(1), async {
+                while connection.accept().await.is_some() {}
+            })
+            .await;
+            return Ok(());
+        }
+    };
     let (_parts, recv) = request.into_parts();
     let send = send_http_response(&mut respond, StatusCode::OK, false)?
         .expect("non-terminal response has a body stream");
@@ -140,6 +175,8 @@ where
         H2Duplex::new(send, recv),
         controller,
         origin_template,
+        authenticated_proxy_id,
+        admission_lease_verifier,
     ));
     let mut rejected = 0usize;
     let result = loop {
@@ -167,7 +204,10 @@ where
     result
 }
 
-fn validate_request<B>(request: &Request<B>, proxy_token: &[u8]) -> Result<(), StatusCode> {
+fn validate_request<B>(
+    request: &Request<B>,
+    proxy_credentials: &ProxyCredentials,
+) -> Result<ProxyId, StatusCode> {
     if request.method() != Method::POST {
         return Err(StatusCode::METHOD_NOT_ALLOWED);
     }
@@ -179,7 +219,13 @@ fn validate_request<B>(request: &Request<B>, proxy_token: &[u8]) -> Result<(), S
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "));
-    if !provided.is_some_and(|token| bool::from(token.as_bytes().ct_eq(proxy_token))) {
+    let proxy_id = request
+        .headers()
+        .get(PROXY_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| ProxyId::parse(value).ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    if !provided.is_some_and(|token| proxy_credentials.authenticate(&proxy_id, token.as_bytes())) {
         return Err(StatusCode::UNAUTHORIZED);
     }
     let content_type = request
@@ -189,7 +235,7 @@ fn validate_request<B>(request: &Request<B>, proxy_token: &[u8]) -> Result<(), S
     if content_type != Some(CONTENT_TYPE) {
         return Err(StatusCode::UNSUPPORTED_MEDIA_TYPE);
     }
-    Ok(())
+    Ok(proxy_id)
 }
 
 fn send_http_response(
@@ -210,6 +256,8 @@ async fn run_session<S>(
     stream: S,
     controller: ControllerHandle,
     origin_template: ProxyOriginTemplate,
+    authenticated_proxy_id: ProxyId,
+    admission_lease_verifier: AdmissionLeaseVerifier,
 ) -> Result<(), SessionError>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -231,6 +279,16 @@ where
             "first control frame was not ClientHello".into(),
         ));
     };
+    if proxy_id != authenticated_proxy_id {
+        send_shutdown(
+            &mut writer,
+            "ClientHello proxy id does not match its credential",
+        )
+        .await?;
+        return Err(SessionError::Protocol(
+            "ClientHello proxy id does not match its credential".into(),
+        ));
+    }
     if protocol_version != PROTOCOL_VERSION {
         send_shutdown(&mut writer, "unsupported control protocol version").await?;
         return Err(SessionError::Protocol(
@@ -248,9 +306,17 @@ where
         return Err(SessionError::Protocol(message.to_string()));
     }
 
-    let mut session = controller
+    let mut session = match controller
         .begin_session(proxy_id.clone(), proxy_base_url, package_version, boot_id)
-        .await?;
+        .await
+    {
+        Ok(session) => session,
+        Err(ActorError::State(crate::StateError::DuplicateProxyId)) => {
+            send_shutdown(&mut writer, "proxy id already has a live session").await?;
+            return Err(SessionError::Protocol("duplicate proxy id".into()));
+        }
+        Err(error) => return Err(error.into()),
+    };
     write_frame(
         &mut writer,
         &ServerFrame::ServerHello {
@@ -258,13 +324,21 @@ where
             package_version: env!("CARGO_PKG_VERSION").into(),
             heartbeat_seconds: crate::HEARTBEAT_INTERVAL.as_secs(),
             dead_seconds: crate::SESSION_DEAD_AFTER.as_secs(),
-            grace_seconds: 30,
+            grace_seconds: devserver_control_proto::PROXY_CONTROL_LOSS_GRACE_SECONDS,
         },
     )
     .await?;
 
     let incarnation = session.incarnation;
-    let result = run_established(reader, &mut writer, &controller, &proxy_id, &mut session).await;
+    let result = run_established(
+        reader,
+        &mut writer,
+        &controller,
+        &proxy_id,
+        &admission_lease_verifier,
+        &mut session,
+    )
+    .await;
     if let Err(error) = controller.disconnect(proxy_id, incarnation).await {
         if !matches!(error, ActorError::State(crate::StateError::StaleSession)) {
             tracing::warn!(error = ?error, "failed to remove closed proxy control session");
@@ -293,6 +367,7 @@ async fn run_established<R, W>(
     writer: &mut W,
     controller: &ControllerHandle,
     proxy_id: &ProxyId,
+    admission_lease_verifier: &AdmissionLeaseVerifier,
     session: &mut ProxyControlSession,
 ) -> Result<(), SessionError>
 where
@@ -321,6 +396,7 @@ where
     }));
 
     let mut phase = Phase::awaiting_snapshot();
+    let mut frame_rate = ClientFrameRateLimiter::default();
     let mut overflow_open = true;
     let result = async {
         loop {
@@ -359,6 +435,10 @@ where
                 incoming = incoming_rx.recv() => {
                     let incoming = incoming
                         .ok_or_else(|| SessionError::Protocol("client frame reader stopped".into()))??;
+                    if !frame_rate.accept(Instant::now()) {
+                        send_shutdown(writer, "client frame rate limit exceeded").await?;
+                        return Err(SessionError::Protocol("client frame rate limit exceeded".into()));
+                    }
                     if let Err(error) = incoming.validate() {
                         send_shutdown(writer, "invalid control frame").await?;
                         return Err(error.into());
@@ -369,6 +449,7 @@ where
                         writer,
                         controller,
                         proxy_id,
+                        admission_lease_verifier,
                         session.incarnation,
                     ).await?;
                 }
@@ -387,6 +468,7 @@ async fn handle_client_frame<W>(
     writer: &mut W,
     controller: &ControllerHandle,
     proxy_id: &ProxyId,
+    admission_lease_verifier: &AdmissionLeaseVerifier,
     incarnation: crate::SessionIncarnation,
 ) -> Result<(), SessionError>
 where
@@ -412,6 +494,7 @@ where
                     base_generation,
                     rows: Vec::new(),
                     registration_ids: HashSet::new(),
+                    bytes: 0,
                 };
             }
             ClientFrame::ClientHello { .. } => {
@@ -427,6 +510,7 @@ where
             base_generation,
             rows,
             registration_ids,
+            bytes,
         } => match frame {
             ClientFrame::SnapshotChunk { rows: chunk } => {
                 controller
@@ -435,6 +519,23 @@ where
                 if !snapshot_rows_fit(rows.len(), chunk.len()) {
                     send_shutdown(writer, "snapshot row limit exceeded").await?;
                     return Err(SessionError::SnapshotTooLarge);
+                }
+                let chunk_bytes = serde_json::to_vec(&chunk).map_err(FrameError::Json)?.len();
+                if !snapshot_bytes_fit(*bytes, chunk_bytes) {
+                    send_shutdown(writer, "snapshot byte limit exceeded").await?;
+                    return Err(SessionError::SnapshotTooLarge);
+                }
+                for row in &chunk {
+                    let claims = verify_lease(
+                        admission_lease_verifier,
+                        &row.admission_lease,
+                        row.binding_for(proxy_id.clone()),
+                    )?;
+                    if row.admission_lease_expires_at.timestamp() != claims.expires_at {
+                        return Err(SessionError::Protocol(
+                            "admission lease expiry mismatch".into(),
+                        ));
+                    }
                 }
                 let mut chunk_ids = HashSet::with_capacity(chunk.len());
                 if chunk.iter().any(|row| {
@@ -446,6 +547,7 @@ where
                     return Ok(());
                 }
                 registration_ids.extend(chunk_ids);
+                *bytes += chunk_bytes;
                 rows.extend(chunk);
             }
             ClientFrame::SnapshotEnd {
@@ -469,6 +571,16 @@ where
         },
         Phase::Active => match frame {
             ClientFrame::TunnelUp { generation, row } => {
+                let claims = verify_lease(
+                    admission_lease_verifier,
+                    &row.admission_lease,
+                    row.binding_for(proxy_id.clone()),
+                )?;
+                if row.admission_lease_expires_at.timestamp() != claims.expires_at {
+                    return Err(SessionError::Protocol(
+                        "admission lease expiry mismatch".into(),
+                    ));
+                }
                 let status = controller
                     .tunnel_up(proxy_id.clone(), incarnation, generation, row)
                     .await?;
@@ -490,17 +602,66 @@ where
             ClientFrame::AdmissionRequest {
                 request_id,
                 registration_id,
+                owner_user_id,
                 user,
                 devserver_id,
+                admission_lease,
             } => {
+                let claims = verify_lease(
+                    admission_lease_verifier,
+                    &admission_lease,
+                    AdmissionLeaseBinding {
+                        owner_user_id,
+                        user: user.clone(),
+                        devserver_id: devserver_id.clone(),
+                        registration_id,
+                        proxy_id: proxy_id.clone(),
+                    },
+                )?;
                 controller
-                    .request_admission(
+                    .request_admission_authorized(
                         proxy_id.clone(),
                         incarnation,
                         request_id,
                         registration_id,
+                        owner_user_id,
                         user,
                         devserver_id,
+                        admission_lease,
+                        chrono::DateTime::from_timestamp(claims.expires_at, 0).ok_or_else(
+                            || SessionError::Protocol("lease expiry is out of range".into()),
+                        )?,
+                    )
+                    .await?;
+            }
+            ClientFrame::LeaseRefresh {
+                registration_id,
+                admission_lease,
+            } => {
+                let claims = admission_lease_verifier
+                    .verify(&admission_lease, chrono::Utc::now())
+                    .map_err(|error| {
+                        SessionError::Protocol(format!("invalid lease refresh: {error}"))
+                    })?;
+                if claims.binding.proxy_id != *proxy_id
+                    || claims.binding.registration_id != registration_id
+                {
+                    return Err(SessionError::Protocol(
+                        "lease refresh binding mismatch".into(),
+                    ));
+                }
+                controller
+                    .refresh_lease(
+                        proxy_id.clone(),
+                        incarnation,
+                        registration_id,
+                        claims.binding.owner_user_id,
+                        claims.binding.user,
+                        claims.binding.devserver_id,
+                        admission_lease,
+                        chrono::DateTime::from_timestamp(claims.expires_at, 0).ok_or_else(
+                            || SessionError::Protocol("lease expiry is out of range".into()),
+                        )?,
                     )
                     .await?;
             }
@@ -527,6 +688,14 @@ where
                         missing,
                         failed,
                     )
+                    .await?;
+            }
+            ClientFrame::SessionRevocationResult {
+                command_id,
+                revoked,
+            } => {
+                controller
+                    .session_revocation_result(proxy_id.clone(), incarnation, command_id, revoked)
                     .await?;
             }
             ClientFrame::Pong { nonce } => {
@@ -556,6 +725,28 @@ fn snapshot_rows_fit(current: usize, incoming: usize) -> bool {
         .is_some_and(|total| total <= MAX_SNAPSHOT_ROWS)
 }
 
+fn snapshot_bytes_fit(current: usize, incoming: usize) -> bool {
+    current
+        .checked_add(incoming)
+        .is_some_and(|total| total <= MAX_SNAPSHOT_BYTES)
+}
+
+fn verify_lease(
+    verifier: &AdmissionLeaseVerifier,
+    lease: &AdmissionLease,
+    expected: AdmissionLeaseBinding,
+) -> Result<devserver_control_proto::AdmissionLeaseClaims, SessionError> {
+    let claims = verifier
+        .verify(lease, chrono::Utc::now())
+        .map_err(|error| SessionError::Protocol(format!("invalid admission lease: {error}")))?;
+    if claims.binding != expected {
+        return Err(SessionError::Protocol(
+            "admission lease binding mismatch".into(),
+        ));
+    }
+    Ok(claims)
+}
+
 async fn illegal_frame<W>(writer: &mut W, reason: &'static str) -> Result<(), SessionError>
 where
     W: AsyncWrite + Unpin,
@@ -572,6 +763,7 @@ where
         writer,
         &ServerFrame::Shutdown {
             reason: reason.into(),
+            retryable: true,
         },
     )
     .await?;
@@ -607,6 +799,7 @@ enum Phase {
         base_generation: u64,
         rows: Vec<TunnelRow>,
         registration_ids: HashSet<Uuid>,
+        bytes: usize,
     },
     Active,
 }
@@ -645,8 +838,47 @@ enum SessionError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use devserver_control_proto::TunnelRow;
+    use devserver_control_proto::{AdmissionLeaseSigner, TunnelRow};
     use uuid::Uuid;
+
+    const TEST_PROXY_TOKEN: &str = "0123456789abcdef0123456789abcdef";
+    const TEST_SIGNING_KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+    fn admission_keys() -> (AdmissionLeaseSigner, AdmissionLeaseVerifier) {
+        let signer = AdmissionLeaseSigner::from_base64(TEST_SIGNING_KEY).unwrap();
+        let verifier = AdmissionLeaseVerifier::from_base64(&signer.verifying_key_base64()).unwrap();
+        (signer, verifier)
+    }
+
+    fn signed_row(user: &str, devserver_id: &str, registration_id: Uuid) -> TunnelRow {
+        let owner_user_id = Uuid::new_v4();
+        let (signer, _) = admission_keys();
+        let now = chrono::Utc::now();
+        let admission_lease = signer
+            .sign(
+                AdmissionLeaseBinding {
+                    owner_user_id,
+                    user: user.into(),
+                    devserver_id: devserver_id.into(),
+                    registration_id,
+                    proxy_id: ProxyId::parse("p1").unwrap(),
+                },
+                now,
+                120,
+            )
+            .unwrap();
+        TunnelRow {
+            registration_id,
+            owner_user_id,
+            user: user.into(),
+            devserver_id: devserver_id.into(),
+            admission_lease,
+            admission_lease_expires_at: chrono::DateTime::from_timestamp(now.timestamp() + 120, 0)
+                .unwrap(),
+            peer_addr: None,
+            connected_at: now,
+        }
+    }
 
     struct Opened {
         status: StatusCode,
@@ -670,10 +902,12 @@ mod tests {
         content_type: Option<&str>,
     ) -> Opened {
         let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+        let (_, verifier) = admission_keys();
         let server = tokio::spawn(handle_connection(
             server_io,
             controller,
-            Arc::from(b"secret".as_slice()),
+            Arc::new(ProxyCredentials::parse(&format!("p1={TEST_PROXY_TOKEN}")).unwrap()),
+            verifier,
             ProxyOriginTemplate::parse("https://{proxy_id}.proxy.example.test").unwrap(),
         ));
         let (mut client, connection) = h2::client::handshake(client_io).await.unwrap();
@@ -682,6 +916,7 @@ mod tests {
         if let Some(token) = token {
             request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
         }
+        request = request.header(PROXY_ID_HEADER, "p1");
         if let Some(content_type) = content_type {
             request = request.header(header::CONTENT_TYPE, content_type);
         }
@@ -704,29 +939,80 @@ mod tests {
             controller,
             Method::POST,
             CONNECT_PATH,
-            Some("secret"),
+            Some(TEST_PROXY_TOKEN),
             Some(CONTENT_TYPE),
         )
         .await
     }
 
+    async fn connected_as(
+        controller: ControllerHandle,
+        proxy_id: &str,
+        token: &str,
+        credentials: &str,
+    ) -> Opened {
+        let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+        let (_, verifier) = admission_keys();
+        let server = tokio::spawn(handle_connection(
+            server_io,
+            controller,
+            Arc::new(ProxyCredentials::parse(credentials).unwrap()),
+            verifier,
+            ProxyOriginTemplate::parse("https://{proxy_id}.proxy.example.test").unwrap(),
+        ));
+        let (mut client, connection) = h2::client::handshake(client_io).await.unwrap();
+        let driver = tokio::spawn(connection);
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(CONNECT_PATH)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header(PROXY_ID_HEADER, proxy_id)
+            .header(header::CONTENT_TYPE, CONTENT_TYPE)
+            .body(())
+            .unwrap();
+        let (response, send) = client.send_request(request, false).unwrap();
+        let response = response.await.unwrap();
+        let status = response.status();
+        let stream = (status == StatusCode::OK).then(|| H2Duplex::new(send, response.into_body()));
+        Opened {
+            status,
+            stream,
+            server,
+            driver,
+        }
+    }
+
     fn hello(protocol_version: u16, package_version: &str, origin: &str) -> ClientFrame {
+        hello_as("p1", protocol_version, package_version, origin)
+    }
+
+    fn hello_as(
+        proxy_id: &str,
+        protocol_version: u16,
+        package_version: &str,
+        origin: &str,
+    ) -> ClientFrame {
         ClientFrame::ClientHello {
             protocol_version,
             package_version: package_version.into(),
-            proxy_id: ProxyId::parse("p1").unwrap(),
+            proxy_id: ProxyId::parse(proxy_id).unwrap(),
             proxy_base_url: CanonicalOrigin::parse(origin).unwrap(),
             boot_id: Uuid::new_v4(),
         }
     }
 
     async fn handshake(stream: &mut H2Duplex) {
+        handshake_as(stream, "p1").await;
+    }
+
+    async fn handshake_as(stream: &mut H2Duplex, proxy_id: &str) {
         write_frame(
             stream,
-            &hello(
+            &hello_as(
+                proxy_id,
                 PROTOCOL_VERSION,
                 env!("CARGO_PKG_VERSION"),
-                "https://p1.proxy.example.test",
+                &format!("https://{proxy_id}.proxy.example.test"),
             ),
         )
         .await
@@ -749,7 +1035,7 @@ mod tests {
             (
                 Method::GET,
                 CONNECT_PATH,
-                Some("secret"),
+                Some(TEST_PROXY_TOKEN),
                 Some(CONTENT_TYPE),
                 StatusCode::METHOD_NOT_ALLOWED,
             ),
@@ -777,7 +1063,7 @@ mod tests {
             (
                 Method::POST,
                 CONNECT_PATH,
-                Some("secret"),
+                Some(TEST_PROXY_TOKEN),
                 Some("application/json"),
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
             ),
@@ -845,13 +1131,7 @@ mod tests {
             stream,
             &ClientFrame::TunnelUp {
                 generation: 2,
-                row: TunnelRow {
-                    registration_id: Uuid::new_v4(),
-                    user: "alice".into(),
-                    devserver_id: "one".into(),
-                    peer_addr: None,
-                    connected_at: chrono::Utc::now(),
-                },
+                row: signed_row("alice", "one", Uuid::new_v4()),
             },
         )
         .await
@@ -885,13 +1165,11 @@ mod tests {
             .unwrap();
 
         let chunk = ClientFrame::SnapshotChunk {
-            rows: vec![TunnelRow {
-                registration_id: Uuid::new_v4(),
-                user: "alice".repeat(256),
-                devserver_id: "one".repeat(256),
-                peer_addr: None,
-                connected_at: chrono::Utc::now(),
-            }],
+            rows: vec![signed_row(
+                &"alice".repeat(8),
+                &"one".repeat(16),
+                Uuid::new_v4(),
+            )],
         };
         let payload = serde_json::to_vec(&chunk).unwrap();
         let split = payload.len() / 2;
@@ -933,13 +1211,16 @@ mod tests {
         let mut opened = connected(crate::spawn_controller(100)).await;
         let stream = opened.stream.as_mut().unwrap();
         handshake(stream).await;
+        let admission_row = signed_row("alice", "one", Uuid::new_v4());
         write_frame(
             stream,
             &ClientFrame::AdmissionRequest {
                 request_id: Uuid::new_v4(),
-                registration_id: Uuid::new_v4(),
+                registration_id: admission_row.registration_id,
+                owner_user_id: admission_row.owner_user_id,
                 user: "alice".into(),
                 devserver_id: "one".into(),
+                admission_lease: admission_row.admission_lease,
             },
         )
         .await
@@ -950,13 +1231,7 @@ mod tests {
                 expected_generation: 0
             }
         ));
-        let duplicate = TunnelRow {
-            registration_id: Uuid::new_v4(),
-            user: "alice".into(),
-            devserver_id: "one".into(),
-            peer_addr: None,
-            connected_at: chrono::Utc::now(),
-        };
+        let duplicate = signed_row("alice", "one", Uuid::new_v4());
         write_frame(stream, &ClientFrame::SnapshotStart { base_generation: 0 })
             .await
             .unwrap();
@@ -1023,10 +1298,83 @@ mod tests {
         );
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn flooded_control_session_is_closed_while_peer_and_ticker_stay_responsive() {
+        const P2_TOKEN: &str = "fedcba9876543210fedcba9876543210";
+        let controller = crate::spawn_controller(100);
+        let credentials = format!("p1={TEST_PROXY_TOKEN};p2={P2_TOKEN}");
+        let mut flooded =
+            connected_as(controller.clone(), "p1", TEST_PROXY_TOKEN, &credentials).await;
+        let mut peer = connected_as(controller, "p2", P2_TOKEN, &credentials).await;
+        let flooded_stream = flooded.stream.as_mut().unwrap();
+        let peer_stream = peer.stream.as_mut().unwrap();
+        handshake_as(flooded_stream, "p1").await;
+        handshake_as(peer_stream, "p2").await;
+
+        write_frame(
+            peer_stream,
+            &ClientFrame::SnapshotStart { base_generation: 0 },
+        )
+        .await
+        .unwrap();
+        write_frame(
+            peer_stream,
+            &ClientFrame::SnapshotEnd { base_generation: 0 },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            read_frame::<_, ServerFrame>(peer_stream).await.unwrap(),
+            ServerFrame::SnapshotAccepted { base_generation: 0 }
+        ));
+
+        write_frame(
+            flooded_stream,
+            &ClientFrame::SnapshotStart { base_generation: 0 },
+        )
+        .await
+        .unwrap();
+        for _ in 0..MAX_CLIENT_FRAMES_PER_WINDOW {
+            write_frame(
+                flooded_stream,
+                &ClientFrame::SnapshotChunk { rows: Vec::new() },
+            )
+            .await
+            .unwrap();
+        }
+        let shutdown = read_frame::<_, ServerFrame>(flooded_stream).await.unwrap();
+        assert!(
+            matches!(shutdown, ServerFrame::Shutdown { reason, .. } if reason.contains("rate limit"))
+        );
+
+        tokio::time::advance(crate::HEARTBEAT_INTERVAL).await;
+        let ping = read_frame::<_, ServerFrame>(peer_stream).await.unwrap();
+        let ServerFrame::Ping { nonce } = ping else {
+            panic!("responsive peer did not receive ticker ping: {ping:?}");
+        };
+        write_frame(peer_stream, &ClientFrame::Pong { nonce })
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn client_frame_rate_limit_releases_capacity_after_the_window() {
+        let now = Instant::now();
+        let mut limit = ClientFrameRateLimiter::default();
+        for _ in 0..MAX_CLIENT_FRAMES_PER_WINDOW {
+            assert!(limit.accept(now));
+        }
+        assert!(!limit.accept(now));
+        assert!(limit.accept(now + CLIENT_FRAME_RATE_WINDOW));
+    }
+
     #[test]
     fn cumulative_snapshot_limit_is_checked_without_overflow() {
         assert!(snapshot_rows_fit(MAX_SNAPSHOT_ROWS - 1, 1));
         assert!(!snapshot_rows_fit(MAX_SNAPSHOT_ROWS, 1));
         assert!(!snapshot_rows_fit(usize::MAX, 1));
+        assert!(snapshot_bytes_fit(MAX_SNAPSHOT_BYTES - 1, 1));
+        assert!(!snapshot_bytes_fit(MAX_SNAPSHOT_BYTES, 1));
+        assert!(!snapshot_bytes_fit(usize::MAX, 1));
     }
 }

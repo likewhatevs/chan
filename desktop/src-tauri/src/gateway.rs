@@ -59,14 +59,14 @@ const ROSTER_HTTP_TIMEOUT_SECS: u64 = 5;
 pub const LAUNCHER_NOTICE: &str = "launcher-notice";
 
 /// One devserver row from the gateway's roster, plus the derived
-/// `shared` flag (`owner != username`).
+/// `shared` flag (immutable owner id differs from the account id).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RosterDevserver {
+    pub owner_user_id: uuid::Uuid,
     pub owner: String,
     pub devserver_id: String,
     pub label: String,
     pub online: bool,
-    pub role: String,
     pub shared: bool,
     /// The controller-derived exact origin of the proxy node serving this
     /// devserver; `None` while offline. The desktop reads it ONLY to detect
@@ -79,19 +79,19 @@ pub struct RosterDevserver {
 /// The roster endpoint's 200 body.
 #[derive(Debug, Deserialize)]
 struct RosterResponse {
+    user_id: uuid::Uuid,
     username: String,
     devservers: Vec<RosterRow>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RosterRow {
+    owner_user_id: uuid::Uuid,
     owner: String,
     devserver_id: String,
     #[serde(default)]
     label: String,
     online: bool,
-    #[serde(default)]
-    role: String,
     /// Null while the devserver is offline, the exact node origin while
     /// online. A lifecycle signal only: it never authorizes the origin.
     proxy_origin: Option<String>,
@@ -292,7 +292,7 @@ pub struct RosterDiff {
     pub added: Vec<(String, String)>,
     pub removed: Vec<(String, String)>,
     pub flipped_online: Vec<(String, String)>,
-    /// Rows whose label or role changed (a devserver rename must reach
+    /// Rows whose label changed (a devserver rename must reach
     /// the launcher without waiting for a membership or online change).
     pub updated: Vec<(String, String)>,
     /// Rows online on both sides whose proxy_origin names a DIFFERENT
@@ -313,7 +313,7 @@ impl RosterDiff {
 }
 
 /// Pure roster diff: which rows appeared, disappeared, flipped their
-/// online bit, changed label/role, or moved proxy nodes. The fresh
+/// online bit, changed label, or moved proxy nodes. The fresh
 /// snapshot replaces the cache either way; the diff only decides whether
 /// the launcher gets a push and which lifecycle actions run.
 pub fn diff_rosters(old: &[RosterDevserver], new: &[RosterDevserver]) -> RosterDiff {
@@ -338,7 +338,9 @@ pub fn diff_rosters(old: &[RosterDevserver], new: &[RosterDevserver]) -> RosterD
                 diff.moved.push(k.clone())
             }
             Some(was)
-                if was.label != row.label || was.role != row.role || was.shared != row.shared =>
+                if was.owner_user_id != row.owner_user_id
+                    || was.label != row.label
+                    || was.shared != row.shared =>
             {
                 diff.updated.push(k.clone())
             }
@@ -406,7 +408,7 @@ async fn apply_roster_policy_diff(state: &Arc<AppState>, gateway_id: &str, diff:
         let _policy_guard = policy_lock.lock().await;
         state.bump_native_policy_generation(&id);
         if let Err(e) =
-            config::set_native_trust(&state.store, gateway_id, owner, devserver_id, false)
+            config::prune_native_trust_by_label(&state.store, gateway_id, owner, devserver_id)
         {
             tracing::warn!(gateway = %gateway_id, devserver = %id, error = %e, "pruning removed devserver native trust failed");
         }
@@ -448,7 +450,7 @@ async fn apply_roster_policy_diff(state: &Arc<AppState>, gateway_id: &str, diff:
         let policy_lock = state.native_policy_lock(&id);
         let _policy_guard = policy_lock.lock().await;
         if row.shared {
-            match config::native_trust(&state.store, gateway_id, owner, devserver_id) {
+            match config::native_trust(&state.store, gateway_id, row.owner_user_id, devserver_id) {
                 Ok(true) => {}
                 Ok(false) => {
                     state.bump_native_policy_generation(&id);
@@ -460,9 +462,14 @@ async fn apply_roster_policy_diff(state: &Arc<AppState>, gateway_id: &str, diff:
                     tracing::warn!(gateway = %gateway_id, devserver = %id, error = %e, "checking changed devserver native trust failed")
                 }
             }
-        } else if let Err(e) =
-            config::set_native_trust(&state.store, gateway_id, owner, devserver_id, false)
-        {
+        } else if let Err(e) = config::set_native_trust(
+            &state.store,
+            gateway_id,
+            row.owner_user_id,
+            owner,
+            devserver_id,
+            false,
+        ) {
             tracing::warn!(gateway = %gateway_id, devserver = %id, error = %e, "pruning owned devserver native trust failed");
         }
     }
@@ -504,17 +511,18 @@ pub async fn fetch_roster(roster_url: &str, pat_secret: &str, etag: Option<&str>
                 .map(|s| s.to_string());
             match resp.json::<RosterResponse>().await {
                 Ok(body) => {
+                    let user_id = body.user_id;
                     let username = body.username;
                     let rows = body
                         .devservers
                         .into_iter()
                         .map(|r| RosterDevserver {
-                            shared: r.owner != username,
+                            shared: r.owner_user_id != user_id,
+                            owner_user_id: r.owner_user_id,
                             owner: r.owner,
                             devserver_id: r.devserver_id,
                             label: r.label,
                             online: r.online,
-                            role: r.role,
                             proxy_origin: r.proxy_origin,
                         })
                         .collect();
@@ -1198,13 +1206,21 @@ pub fn autoconnect_enabled_gateways<R: tauri::Runtime>(
 mod tests {
     use super::*;
 
+    fn owner_id(owner: &str) -> uuid::Uuid {
+        if owner == "alice" {
+            uuid::Uuid::from_u128(1)
+        } else {
+            uuid::Uuid::from_u128(2)
+        }
+    }
+
     fn row(owner: &str, id: &str, online: bool) -> RosterDevserver {
         RosterDevserver {
+            owner_user_id: owner_id(owner),
             owner: owner.to_string(),
             devserver_id: id.to_string(),
             label: String::new(),
             online,
-            role: "owner".to_string(),
             shared: false,
             proxy_origin: None,
         }
@@ -1269,8 +1285,8 @@ mod tests {
     }
 
     #[test]
-    fn diff_reports_label_and_role_updates_and_apply_signals_them() {
-        // A devserver rename (or role change) must reach the launcher
+    fn diff_reports_label_updates_and_apply_signals_them() {
+        // A devserver rename must reach the launcher
         // without waiting for a membership or online change.
         let old = vec![row("alice", "a", true)];
         let mut renamed = row("alice", "a", true);
@@ -1297,7 +1313,6 @@ mod tests {
     fn diff_reports_owned_to_shared_policy_flip() {
         let old = vec![row("alice", "a", true)];
         let mut shared = row("alice", "a", true);
-        shared.role = "editor".to_string();
         shared.shared = true;
 
         let diff = diff_rosters(&old, &[shared]);
@@ -1355,6 +1370,7 @@ mod tests {
         // Shared AND trusted: a move must preserve the persisted
         // owner/devserver trust binding while the connection goes away.
         let state = policy_state(vec![config::NativeDevserverTrust {
+            owner_user_id: Some(owner_id(owner)),
             owner: owner.into(),
             devserver_id: devserver_id.clone(),
         }]);
@@ -1420,7 +1436,8 @@ mod tests {
             "a connected row re-enters the normal connect flow"
         );
         assert!(
-            config::native_trust(&state.store, "gw-feedface", owner, &devserver_id).unwrap(),
+            config::native_trust(&state.store, "gw-feedface", owner_id(owner), &devserver_id,)
+                .unwrap(),
             "a move is not a revocation: the trust binding survives"
         );
         // The new roster origin never reached the capability mint: the
@@ -1464,6 +1481,7 @@ mod tests {
         let owner = "bob";
         let devserver_id = "d".repeat(64);
         let state = policy_state(vec![config::NativeDevserverTrust {
+            owner_user_id: Some(owner_id(owner)),
             owner: owner.into(),
             devserver_id: devserver_id.clone(),
         }]);
@@ -1484,7 +1502,10 @@ mod tests {
         apply_roster_policy_diff(&state, "gw-feedface", &diff).await;
 
         let id = synthesized_row_id("gw-feedface", owner, &devserver_id);
-        assert!(!config::native_trust(&state.store, "gw-feedface", owner, &devserver_id).unwrap());
+        assert!(
+            !config::native_trust(&state.store, "gw-feedface", owner_id(owner), &devserver_id,)
+                .unwrap()
+        );
         assert_eq!(state.native_policy_generation(&id), 1);
         assert_eq!(*torn_down.lock().unwrap(), vec![id]);
     }
@@ -1495,7 +1516,6 @@ mod tests {
         let devserver_id = "d".repeat(64);
         let state = policy_state(Vec::new());
         let mut shared = row(owner, &devserver_id, true);
-        shared.role = "editor".into();
         shared.shared = true;
         state.gateway_manager.seed_test_runtime(
             "gw-feedface",
@@ -1688,9 +1708,9 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_parses_a_fresh_roster_and_derives_shared() {
-        let body = r#"{"username":"alice","devservers":[
-            {"owner":"alice","devserver_id":"a1","label":"laptop","online":true,"role":"owner","proxy_origin":"https://alice--a1.p1.usr.chan.app"},
-            {"owner":"bob","devserver_id":"b1","label":"","online":false,"role":"viewer","proxy_origin":null}]}"#;
+        let body = r#"{"user_id":"11111111-1111-1111-1111-111111111111","username":"alice","devservers":[
+            {"owner_user_id":"11111111-1111-1111-1111-111111111111","owner":"alice","devserver_id":"a1","label":"laptop","online":true,"proxy_origin":"https://alice--a1.p1.usr.chan.app"},
+            {"owner_user_id":"22222222-2222-2222-2222-222222222222","owner":"bob","devserver_id":"b1","label":"","online":false,"proxy_origin":null}]}"#;
         let (url, server) = spawn_roster_stub(resp(200, Some("\"e1\""), body)).await;
         match fetch_roster(&url, "pat-secret", None).await {
             RosterFetch::Fresh {
@@ -1721,8 +1741,8 @@ mod tests {
     #[tokio::test]
     async fn roster_parsing_mints_no_origin_authority() {
         const ROSTER_ORIGIN: &str = "https://carol--c9.p9.usr.chan.app";
-        let body = r#"{"username":"carol","devservers":[
-            {"owner":"carol","devserver_id":"c9","label":"","online":true,"role":"owner","proxy_origin":"https://carol--c9.p9.usr.chan.app"}]}"#;
+        let body = r#"{"user_id":"33333333-3333-3333-3333-333333333333","username":"carol","devservers":[
+            {"owner_user_id":"33333333-3333-3333-3333-333333333333","owner":"carol","devserver_id":"c9","label":"","online":true,"proxy_origin":"https://carol--c9.p9.usr.chan.app"}]}"#;
         let (url, server) = spawn_roster_stub(resp(200, None, body)).await;
         match fetch_roster(&url, "s", None).await {
             RosterFetch::Fresh { rows, .. } => {
@@ -1736,7 +1756,7 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_maps_304_401_and_502_to_their_outcomes() {
-        let body = r#"{"username":"alice","devservers":[]}"#;
+        let body = r#"{"user_id":"11111111-1111-1111-1111-111111111111","username":"alice","devservers":[]}"#;
         let (url, server) = spawn_roster_stub(resp(200, Some("\"e2\""), body)).await;
         assert!(matches!(
             fetch_roster(&url, "s", Some("\"e2\"")).await,
@@ -1794,13 +1814,14 @@ mod tests {
                 "/desktop/v1/devservers",
                 get(|| async {
                     axum::Json(serde_json::json!({
+                        "user_id": "11111111-1111-1111-1111-111111111111",
                         "username": "alice",
                         "devservers": [{
+                            "owner_user_id": "11111111-1111-1111-1111-111111111111",
                             "owner": "alice",
                             "devserver_id": "a1",
                             "label": "laptop",
                             "online": true,
-                            "role": "owner",
                             "proxy_origin": "https://alice--a1.p1.devserver.chan.app"
                         }]
                     }))

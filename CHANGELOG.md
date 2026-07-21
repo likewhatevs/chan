@@ -8,20 +8,71 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- **Distributed proxy control plane.** A fifth gateway service, `devserver-control`, is a singleton, database-free controller that owns the dynamic proxy directory, the aggregate tunnel view, fleet admission, and command routing. Every `devserver-proxy` node holds one authenticated h2 control session to it (`POST /v1/proxies/connect`), publishes its registry snapshot plus deltas, and asks the controller for an admission decision before any tunnel sees `HelloAck::Ok`; there is no local-admission fallback. Duplicate ownership and the fleet-wide per-user capacity cap are decided synchronously at admission, kills route by registration UUID to the owning proxy only, and SSE watches publish fleet changes. The service packages as `chan-gateway-devserver-control` (deb, systemd unit, `/etc/chan-gateway/devserver-control.env`) and as the `fiorix/chan-gateway-devserver-control` OCI image, with the admin/health tree on 7003 and the h2c proxy-control listener on 7101.
-- **Node-specific tenant origins.** Every proxy node runs with a stable id (`DEVSERVER_PROXY_ID`) and an exact public base origin (`DEVSERVER_PROXY_BASE_URL`) validated controller-side against `DEVSERVER_PROXY_BASE_URL_TEMPLATE`. Identity mints entry URLs on the owning node's origin, for example `{owner}--{disc}.p1.usr.chan.app`, and Chan Desktop validates exactly two child labels below the discovery-advertised proxy apex. A registration that reconnects through a different node moves its entry origin with it.
-- **Failure semantics with bounded blast radius.** A controller outage stops new admission immediately while existing HTTP, WebSocket, and yamux traffic survives a 30-second reconnect grace; on grace expiry the affected proxy evicts its tunnels and fails closed. After a controller restart, reads, writes, and admissions hold 503 until a 30-second convergence window completes and duplicate rows reconcile deterministically, so an outage cannot leave indefinite untracked or conflicting tunnels. Controller HA is out of scope; see `gateway/docs/adr/0002-control-plane-owns-proxy-fleet-state.md`.
+- **Distributed proxy control plane.** The new database-free
+  `devserver-control` service owns the dynamic proxy directory, aggregate
+  tunnel view, synchronous fleet admission, command routing, and revocation
+  fan-out. Every provisioned proxy holds one authenticated h2 control session,
+  publishes signed registry state, and waits for controller admission before
+  `HelloAck::Ok`; there is no local fallback. The service ships as a deb,
+  systemd unit, OCI image, and Kubernetes workload, with separate admin/health
+  and proxy-control listeners.
+- **Cryptographic admission and browser authority.** Identity-signed Ed25519
+  admission leases bind immutable owner, devserver, registration, and proxy
+  identity. Browser entry credentials are 30-second, single-use, body-only,
+  Ed25519 assertions bound to the exact node and clean path. Proxies exchange
+  them for bounded opaque sessions that are checked per request, expire within
+  one hour, and can cancel active HTTP and WebSocket bridges on revocation.
+- **Durable denial propagation.** Grant deletion, account block/delete, and PAT
+  revocation write their state, audit row, and a generation-fenced revocation
+  job in one profile transaction. A bounded worker confirms two post-commit
+  fleet cuts around the complete entry-credential quiet window and survives
+  profile or controller restarts.
+- **Node-specific tenant origins and Desktop sessions.** Every proxy has a
+  provisioned stable id and exact public base origin. Identity revalidates the
+  signed controller row before minting an entry, and Chan Desktop validates the
+  immutable owner/devserver label, installs exact-origin authority, reuses one
+  opaque session across windows, refreshes it single-flight before expiry, and
+  sends exact WebSocket Origin.
+- **Bounded failure semantics.** Control loss stops admission immediately,
+  retains existing authority for at most the normal 30-second grace or hard
+  45-second convergence deadline, and then atomically suspends session issuance
+  and drains tunnels and bridges. The controller retains disconnected authority
+  markers for 60 seconds, so a second disconnect cannot create a false revoke
+  acknowledgement window. Controller HA remains out of scope.
 
 ### Changed
 
 - **The aggregate `/admin/v1/*` tree moves from devserver-proxy to devserver-control.** identity, profile, and `chan-gateway-admin` now read one coherent fleet view from the controller (`DEVSERVER_ADMIN_URL` / `CHAN_ADMIN_WORKSPACE_URL` default to port 7003), so a management read is either the whole fleet or an explicit upstream failure, never one healthy proxy's partial snapshot. The proxy keeps only its public, tunnel, and health listeners.
 - **Public origins are explicit configuration.** `BASE_URL`, `DEVSERVER_PROXY_ORIGIN`, `DEVSERVER_TUNNEL_ORIGIN`, `DEVSERVER_PROXY_BASE_URL`, and `DEVSERVER_PROXY_BASE_URL_TEMPLATE` replace runtime hostname derivation from `CHAN_DOMAIN` / `PUBLIC_SCHEME` and fixed `gw` / `usr` / `devserver` labels; a self-hosted deployment names any origins with the same structural relationship.
+- **Devserver grants are binary and shell-equivalent.** Viewer/editor roles are
+  removed. Owner and grantee requests carry a fresh per-tunnel assertion bound
+  to immutable caller, owner, devserver, and audience; chan-server rejects a
+  missing or mismatched assertion before route execution.
+- **Browser boundaries are explicit.** Entry exchange uses fixed body-only
+  `POST /_chan/entry`; all non-safe methods, including extension methods,
+  require the double-submit CSRF value; WebSockets require the exact canonical
+  Origin; and credentialed responses are non-cacheable, non-sniffable,
+  non-frameable, and no-referrer. Query parameters are never proxy credentials.
 
 ### Operators
 
-- **New required configuration.** devserver-control requires `DEVSERVER_ADMIN_TOKEN`, `DEVSERVER_PROXY_TOKEN`, and `DEVSERVER_PROXY_BASE_URL_TEMPLATE`. Each devserver-proxy node requires `DEVSERVER_CONTROL_URL`, `DEVSERVER_PROXY_TOKEN`, `DEVSERVER_PROXY_ID`, and `DEVSERVER_PROXY_BASE_URL`, and refuses to start without them. `DEVSERVER_PROXY_TOKEN` is a dedicated bearer, distinct from `DEVSERVER_ADMIN_TOKEN`; proxy nodes hold no database, OAuth, or operator-admin credential. `configure.sh` and the bundled env templates emit the new layout.
+- **New scoped configuration.** devserver-control requires per-proxy
+  `DEVSERVER_PROXY_CREDENTIALS`, separate operator/identity/profile admin
+  rotation rings, admission verifying keys, and the proxy-base template. Each
+  proxy holds only its own `DEVSERVER_PROXY_TOKEN`, entry public-key ring, and
+  required internal client credentials. Identity alone holds the entry signing
+  key. Shared fleet and admin bearer guidance is removed.
 - **Version lockstep is enforced.** All gateway services and proxies must run the exact same package version; the control handshake rejects a mismatch. The five `chan-gateway-*` debs and the four gateway OCI images publish at one immutable tag.
-- **Run the control listeners on a private network.** The 7003 admin tree and the 7101 proxy-control listener are internal surfaces; front only identity and the proxy data path with the public TLS terminator.
+- **Internal transport must be protected.** Cleartext internal URLs and
+  listeners are accepted only on parsed loopback addresses or when the
+  deployment explicitly declares an authenticated encrypted overlay.
+  Kubernetes examples include split Secrets and default-deny NetworkPolicies;
+  systemd services use separate identities and readable env files. Ordinary
+  CNI isolation or NetworkPolicy alone is not claimed as encryption.
+- **Database migration ownership is separate.** A one-shot migration owner runs
+  schema changes. Runtime profile and identity roles receive only their
+  required table privileges; identity has no direct access to the durable
+  control-revocation outbox.
 
 ## [v0.73.0] - 2026-07-20
 

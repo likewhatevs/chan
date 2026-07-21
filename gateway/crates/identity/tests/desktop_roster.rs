@@ -105,6 +105,7 @@ impl TestApp {
         let api_tokens = ApiTokenService::new(pool.clone());
         let cfg = Arc::new(Config {
             bind_addr: "127.0.0.1:0".parse().unwrap(),
+            internal_bind_addr: "127.0.0.1:0".parse().unwrap(),
             base_url: "http://localhost:7000/".parse().unwrap(),
             devserver_proxy_origin: "https://usr.chan.app".parse().unwrap(),
             devserver_tunnel_origin: "https://tunnel.example.test".parse().unwrap(),
@@ -118,11 +119,25 @@ impl TestApp {
             identity_admin_token: ADMIN_TOKEN.to_string(),
             // Same mock server backs the proxy-admin client; its
             // /admin/v1/* paths don't collide with profile's /v1/*.
-            workspace_admin: Some(
-                DevserverControlClient::new(profile.uri().parse().unwrap(), "test-admin".into())
-                    .unwrap(),
-            ),
-            workspace_gate_secret: "test-workspace-gate-secret-32-bytes-aa".to_string(),
+            workspace_admin: DevserverControlClient::new(
+                profile.uri().parse().unwrap(),
+                "test-admin".into(),
+            )
+            .unwrap(),
+            admission_lease_verifier: {
+                let signer = devserver_control_proto::AdmissionLeaseSigner::from_base64(
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                )
+                .unwrap();
+                devserver_control_proto::AdmissionLeaseVerifier::from_base64(
+                    &signer.verifying_key_base64(),
+                )
+                .unwrap()
+            },
+            entry_signer: gateway_common::devserver_gate::EntrySigner::from_base64(
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            )
+            .unwrap(),
             providers: vec![Arc::new(provider)],
         });
         let router = http::router(cfg, store, api_tokens.clone(), TokenThrottle::new());
@@ -208,48 +223,90 @@ async fn mock_incoming(app: &TestApp, uid: Uuid, rows: Value) {
         .await;
 }
 
-/// Mock the cluster-wide `GET /admin/v1/tunnels` snapshot.
-async fn mock_all_tunnels(app: &TestApp, pairs: &[(&str, &str)]) {
-    let rows: Vec<(&str, &str, &str, &str)> = pairs
+/// Mock the identity-scoped per-owner tunnel reads.
+async fn mock_all_tunnels(app: &TestApp, pairs: &[(Uuid, &str, &str)]) {
+    let rows: Vec<(Uuid, &str, &str, &str, &str)> = pairs
         .iter()
-        .map(|(user, id)| (*user, *id, "p1", "https://p1.usr.chan.app"))
+        .map(|(owner_user_id, user, id)| {
+            (*owner_user_id, *user, *id, "p1", "https://p1.usr.chan.app")
+        })
         .collect();
     mock_all_tunnels_on(app, &rows).await;
 }
 
-/// Same, with each row pinned to its own proxy node.
-async fn mock_all_tunnels_on(app: &TestApp, rows: &[(&str, &str, &str, &str)]) {
-    let now = chrono::Utc::now().to_rfc3339();
-    let rows: Vec<Value> = rows
-        .iter()
-        .map(|(user, id, proxy_id, proxy_base_url)| {
-            json!({
-                "user": user,
-                "devserver_id": id,
-                "peer_addr": null,
-                "connected_at": now,
-                "proxy_id": proxy_id,
-                "proxy_base_url": proxy_base_url,
-            })
-        })
-        .collect();
-    Mock::given(method("GET"))
-        .and(path("/admin/v1/tunnels"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(rows))
-        .mount(&app.profile)
-        .await;
+fn signed_tunnel_row(
+    owner_user_id: Uuid,
+    user: &str,
+    devserver_id: &str,
+    proxy_id: &str,
+    proxy_base_url: &str,
+) -> Value {
+    let now = chrono::Utc::now();
+    let registration_id = Uuid::new_v4();
+    let signer = devserver_control_proto::AdmissionLeaseSigner::from_base64(
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    )
+    .unwrap();
+    let lease = signer
+        .sign(
+            devserver_control_proto::AdmissionLeaseBinding {
+                owner_user_id,
+                user: user.into(),
+                devserver_id: devserver_id.into(),
+                registration_id,
+                proxy_id: devserver_control_proto::ProxyId::parse(proxy_id).unwrap(),
+            },
+            now,
+            120,
+        )
+        .unwrap();
+    json!({
+        "registration_id": registration_id,
+        "owner_user_id": owner_user_id,
+        "user": user,
+        "devserver_id": devserver_id,
+        "peer_addr": null,
+        "connected_at": now.to_rfc3339(),
+        "proxy_id": proxy_id,
+        "proxy_base_url": proxy_base_url,
+        "admission_lease": lease,
+        "admission_lease_expires_at": (now + chrono::Duration::seconds(120)).to_rfc3339(),
+    })
 }
 
-fn incoming_share_json(owner: &str, devserver_id: &str, label: &str, role: &str) -> Value {
+/// Same, with each row pinned to its own proxy node.
+async fn mock_all_tunnels_on(app: &TestApp, rows: &[(Uuid, &str, &str, &str, &str)]) {
+    let mut by_owner = std::collections::BTreeMap::<Uuid, Vec<Value>>::new();
+    for (owner_user_id, user, id, proxy_id, proxy_base_url) in rows {
+        by_owner
+            .entry(*owner_user_id)
+            .or_default()
+            .push(signed_tunnel_row(
+                *owner_user_id,
+                user,
+                id,
+                proxy_id,
+                proxy_base_url,
+            ));
+    }
+    for (owner_user_id, rows) in by_owner {
+        Mock::given(method("GET"))
+            .and(path(format!("/admin/v1/owners/{owner_user_id}/tunnels")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(rows))
+            .mount(&app.profile)
+            .await;
+    }
+}
+
+fn incoming_share_json(owner_user_id: Uuid, owner: &str, devserver_id: &str, label: &str) -> Value {
     json!({
         "grant_id": Uuid::new_v4(),
-        "owner_user_id": Uuid::new_v4(),
+        "owner_user_id": owner_user_id,
         "owner_username": owner,
         "owner_display_name": null,
         "owner_avatar_url": null,
         "devserver_id": devserver_id,
         "label": label,
-        "role": role,
         "accepted_at": chrono::Utc::now().to_rfc3339(),
     })
 }
@@ -306,29 +363,31 @@ async fn roster_merges_owned_shared_and_live_unrostered() {
     let c = "c".repeat(64); // shared by bob, online
     let e = "e".repeat(64); // live tunnel, no registry row -> union
     let f = "f".repeat(64); // unrelated user's tunnel -> filtered out
+    let bob_uid = Uuid::new_v4();
+    let mallory_uid = Uuid::new_v4();
 
     mock_owned(
         &app,
         uid,
         json!([
-            {"devserver_id": a, "label": "laptop", "grant_count": 0},
-            {"devserver_id": b, "label": "", "grant_count": 0},
+            {"owner_user_id": uid, "devserver_id": a, "label": "laptop", "grant_count": 0},
+            {"owner_user_id": uid, "devserver_id": b, "label": "", "grant_count": 0},
         ]),
     )
     .await;
     mock_incoming(
         &app,
         uid,
-        json!([incoming_share_json("bob-handle", &c, "bob-box", "editor")]),
+        json!([incoming_share_json(bob_uid, "bob-handle", &c, "bob-box")]),
     )
     .await;
     mock_all_tunnels(
         &app,
         &[
-            (&username, &a),
-            (&username, &e),
-            ("bob-handle", &c),
-            ("mallory", &f),
+            (uid, &username, &a),
+            (uid, &username, &e),
+            (bob_uid, "bob-handle", &c),
+            (mallory_uid, "mallory", &f),
         ],
     )
     .await;
@@ -337,16 +396,18 @@ async fn roster_merges_owned_shared_and_live_unrostered() {
     assert_eq!(reply.status, StatusCode::OK);
     let body = reply.json();
     assert_eq!(body["username"], username);
+    assert_eq!(body["user_id"], uid.to_string());
 
     let rows = body["devservers"].as_array().expect("devservers array");
     let summary: Vec<(String, String, bool, String)> = rows
         .iter()
         .map(|r| {
+            assert!(r.get("role").is_none(), "binary grants have no role: {r}");
             (
                 r["owner"].as_str().unwrap().to_string(),
                 r["label"].as_str().unwrap().to_string(),
                 r["online"].as_bool().unwrap(),
-                r["role"].as_str().unwrap().to_string(),
+                r["owner_user_id"].as_str().unwrap().to_string(),
             )
         })
         .collect();
@@ -356,10 +417,15 @@ async fn roster_merges_owned_shared_and_live_unrostered() {
     assert_eq!(
         summary,
         vec![
-            (username.clone(), "b".repeat(12), false, "owner".into()),
-            (username.clone(), "e".repeat(12), true, "owner".into()),
-            (username.clone(), "laptop".into(), true, "owner".into()),
-            ("bob-handle".into(), "bob-box".into(), true, "editor".into()),
+            (username.clone(), "b".repeat(12), false, uid.to_string()),
+            (username.clone(), "e".repeat(12), true, uid.to_string()),
+            (username.clone(), "laptop".into(), true, uid.to_string()),
+            (
+                "bob-handle".into(),
+                "bob-box".into(),
+                true,
+                bob_uid.to_string(),
+            ),
         ],
         "{body}"
     );
@@ -391,24 +457,25 @@ async fn roster_two_owners_on_different_nodes_get_their_own_origins() {
 
     let a = "a".repeat(64); // owned by the caller, live on p1
     let c = "c".repeat(64); // shared by bob, live on p2
+    let bob_uid = Uuid::new_v4();
 
     mock_owned(
         &app,
         uid,
-        json!([{"devserver_id": a, "label": "laptop", "grant_count": 0}]),
+        json!([{"owner_user_id": uid, "devserver_id": a, "label": "laptop", "grant_count": 0}]),
     )
     .await;
     mock_incoming(
         &app,
         uid,
-        json!([incoming_share_json("bob-handle", &c, "bob-box", "editor")]),
+        json!([incoming_share_json(bob_uid, "bob-handle", &c, "bob-box")]),
     )
     .await;
     mock_all_tunnels_on(
         &app,
         &[
-            (&username, &a, "p1", "https://p1.usr.chan.app"),
-            ("bob-handle", &c, "p2", "https://p2.usr.chan.app"),
+            (uid, &username, &a, "p1", "https://p1.usr.chan.app"),
+            (bob_uid, "bob-handle", &c, "p2", "https://p2.usr.chan.app"),
         ],
     )
     .await;
@@ -452,13 +519,42 @@ async fn roster_live_row_with_invalid_node_base_is_502() {
     mock_owned(
         &app,
         uid,
-        json!([{"devserver_id": a, "label": "laptop", "grant_count": 0}]),
+        json!([{"owner_user_id": uid, "devserver_id": a, "label": "laptop", "grant_count": 0}]),
     )
     .await;
     mock_incoming(&app, uid, json!([])).await;
     mock_all_tunnels_on(
         &app,
-        &[(&username, &a, "p1", "https://p1.evil.example.net")],
+        &[(uid, &username, &a, "p1", "https://p1.evil.example.net")],
+    )
+    .await;
+
+    let reply = get_roster(&app, &pat, None).await;
+    assert_eq!(reply.status, StatusCode::BAD_GATEWAY);
+    assert_eq!(reply.json(), json!({"error": "upstream error"}));
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn roster_signed_proxy_id_cannot_be_mixed_with_another_node_base() {
+    let app = TestApp::new().await;
+    let uid = app.insert_user().await;
+    let username = placeholder_username(uid);
+    let (_, pat) = app.admin_mint(uid, &["desktop.account"]).await;
+
+    let a = "a".repeat(64);
+    mock_owned(
+        &app,
+        uid,
+        json!([{"owner_user_id": uid, "devserver_id": a, "label": "laptop", "grant_count": 0}]),
+    )
+    .await;
+    mock_incoming(&app, uid, json!([])).await;
+    // The row's signature authorizes p1. A p2 base is syntactically inside the
+    // configured namespace, but it is not the node named in the signed claim.
+    mock_all_tunnels_on(
+        &app,
+        &[(uid, &username, &a, "p1", "https://p2.usr.chan.app")],
     )
     .await;
 
@@ -503,23 +599,31 @@ async fn roster_etag_yields_304_until_the_roster_changes() {
     mock_owned(
         &app,
         uid,
-        json!([{"devserver_id": a, "label": "laptop", "grant_count": 0}]),
+        json!([{"owner_user_id": uid, "devserver_id": a, "label": "laptop", "grant_count": 0}]),
     )
     .await;
     mock_incoming(&app, uid, json!([])).await;
     // Two snapshots with the tunnel live (the 200 + the 304 probe),
     // then the mock exhausts and the offline snapshot takes over.
-    let now = chrono::Utc::now().to_rfc3339();
     Mock::given(method("GET"))
-        .and(path("/admin/v1/tunnels"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-            {"user": username, "devserver_id": a, "peer_addr": null, "connected_at": now,
-             "proxy_id": "p1", "proxy_base_url": "https://p1.usr.chan.app"},
-        ])))
+        .and(path(format!("/admin/v1/owners/{uid}/tunnels")))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!([signed_tunnel_row(
+                uid,
+                &username,
+                &a,
+                "p1",
+                "https://p1.usr.chan.app"
+            ),])),
+        )
         .up_to_n_times(2)
         .mount(&app.profile)
         .await;
-    mock_all_tunnels(&app, &[]).await;
+    Mock::given(method("GET"))
+        .and(path(format!("/admin/v1/owners/{uid}/tunnels")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .mount(&app.profile)
+        .await;
 
     let first = get_roster(&app, &pat, None).await;
     assert_eq!(first.status, StatusCode::OK);
@@ -574,12 +678,12 @@ async fn roster_proxy_failure_is_502_never_degraded_all_offline() {
     mock_owned(
         &app,
         uid,
-        json!([{"devserver_id": a, "label": "laptop", "grant_count": 0}]),
+        json!([{"owner_user_id": uid, "devserver_id": a, "label": "laptop", "grant_count": 0}]),
     )
     .await;
     mock_incoming(&app, uid, json!([])).await;
     Mock::given(method("GET"))
-        .and(path("/admin/v1/tunnels"))
+        .and(path(format!("/admin/v1/owners/{uid}/tunnels")))
         .respond_with(ResponseTemplate::new(500))
         .mount(&app.profile)
         .await;
@@ -602,7 +706,7 @@ async fn roster_read_bumps_last_used_without_audit_row() {
 
     mock_owned(&app, uid, json!([])).await;
     mock_incoming(&app, uid, json!([])).await;
-    mock_all_tunnels(&app, &[(&username, &"a".repeat(64))]).await;
+    mock_all_tunnels(&app, &[(uid, &username, &"a".repeat(64))]).await;
 
     let reply = get_roster(&app, &pat, None).await;
     assert_eq!(reply.status, StatusCode::OK);

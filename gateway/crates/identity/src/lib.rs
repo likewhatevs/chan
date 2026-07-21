@@ -10,6 +10,7 @@ pub mod api_tokens;
 pub mod config;
 pub mod desktop_authorize;
 pub mod desktop_roster;
+pub mod devserver_authority;
 pub mod devserver_control_client;
 pub mod error;
 pub mod http;

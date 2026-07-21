@@ -3,9 +3,14 @@ set -e
 
 case "$1" in
   configure)
-    install -d -m 0750 -o root -g root /etc/chan-gateway
+    install -d -m 0751 -o root -g root /etc/chan-gateway
+    if [ -f /etc/chan-gateway/domain.env ]; then
+      chown root:root /etc/chan-gateway/domain.env
+      chmod 0644 /etc/chan-gateway/domain.env
+    fi
     if [ -f /etc/chan-gateway/admin.env ]; then
-      chmod 0640 /etc/chan-gateway/admin.env
+      chown root:root /etc/chan-gateway/admin.env
+      chmod 0600 /etc/chan-gateway/admin.env
     fi
     ;;
 esac

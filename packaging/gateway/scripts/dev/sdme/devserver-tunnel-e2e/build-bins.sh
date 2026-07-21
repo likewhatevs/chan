@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build the two release binaries the e2e needs -- devserver-proxy-service and
-# chan -- inside an sdme container that carries the rust+node toolchain
+# Build the three release binaries the e2e needs -- devserver-control-service,
+# devserver-proxy-service, and chan -- inside an sdme container that carries the rust+node toolchain
 # (gateway-build rootfs), then copy them to the host. The binaries run in the
 # zone containers, which are Ubuntu, so building them in an Ubuntu container
 # keeps the glibc match (the host has no rust toolchain anyway).
@@ -9,7 +9,7 @@
 # survives between runs. One-time cold build is ~10 min; warm rebuilds are fast.
 #
 #   sudo is sdme-only (NOPASSWD /usr/local/bin/sdme); everything runs as
-#   `sudo -n sdme`. Output: $REPO/target/devserver-e2e/bin/{devserver-proxy-service,chan}
+#   `sudo -n sdme`. Output: $REPO/target/devserver-e2e/bin/{devserver-control-service,devserver-proxy-service,chan}
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -44,7 +44,7 @@ $SDME cp "${SEED}/chan-src.tar" "${CONTAINER}:/root/chan.tar"
 $SDME exec "$CONTAINER" /bin/sh -c \
   'rm -rf /root/chan && mkdir -p /root/chan && tar -xf /root/chan.tar -C /root/chan'
 
-echo "==> [5/6] build web bundles + both binaries"
+echo "==> [5/6] build web bundles + all three binaries"
 # - devserver-proxy is a GATEWAY-workspace crate -> build from gateway/.
 # - chan is the ROOT workspace; --no-default-features drops the ML/embeddings
 #   deps (the devserver serves workspaces without them). make web bakes both
@@ -55,13 +55,17 @@ $SDME exec "$CONTAINER" /bin/sh -c '
   . /root/.cargo/env
   cd /root/chan
   make web
-  ( cd gateway && cargo build --release -p devserver-proxy --bin devserver-proxy-service )
+  ( cd gateway && cargo build --release \
+      -p devserver-control --bin devserver-control-service \
+      -p devserver-proxy --bin devserver-proxy-service )
   cargo build --release -p chan --no-default-features
-  ls -la gateway/target/release/devserver-proxy-service target/release/chan
+  ls -la gateway/target/release/devserver-control-service \
+    gateway/target/release/devserver-proxy-service target/release/chan
 '
 
 echo "==> [6/6] copy binaries to ${OUT_DIR}"
 $SDME cp "${CONTAINER}:/root/chan/gateway/target/release/devserver-proxy-service" "${OUT_DIR}/"
+$SDME cp "${CONTAINER}:/root/chan/gateway/target/release/devserver-control-service" "${OUT_DIR}/"
 $SDME cp "${CONTAINER}:/root/chan/target/release/chan" "${OUT_DIR}/"
 ls -lh "$OUT_DIR"
 echo "==> done -- now run ./run.sh"

@@ -1,9 +1,8 @@
-# Postgres backing store for profile and identity (both run sqlx migrations on
-# boot and hold state here). devserver-proxy is stateless and does not use it.
+# Postgres backing store for profile and identity. Dedicated prepare, migration,
+# and privilege-reconcile Jobs own the rollout sequence.
 #
-# Single replica with a PersistentVolumeClaim. profile/identity retry their boot
-# connection via restartPolicy until Postgres is ready, so no explicit ordering
-# is needed. postgres:16 matches the version CI tests against.
+# Single replica with a PersistentVolumeClaim. postgres:16 matches the version
+# CI tests against.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -36,6 +35,7 @@ spec:
         app.kubernetes.io/name: postgres
         app.kubernetes.io/part-of: chan-gateway
     spec:
+      automountServiceAccountToken: false
       containers:
         - name: postgres
           image: postgres:16
@@ -45,7 +45,7 @@ spec:
             - name: POSTGRES_DB
               valueFrom: { configMapKeyRef: { name: chan-gateway-config, key: POSTGRES_DB } }
             - name: POSTGRES_PASSWORD
-              valueFrom: { secretKeyRef: { name: chan-gateway-secrets, key: POSTGRES_PASSWORD } }
+              valueFrom: { secretKeyRef: { name: chan-gateway-postgres, key: POSTGRES_PASSWORD } }
             # Keep PGDATA in a subdir so the volume's lost+found does not collide
             # with initdb's empty-dir requirement.
             - name: PGDATA
@@ -57,12 +57,12 @@ spec:
               mountPath: /var/lib/postgresql/data
           readinessProbe:
             exec:
-              command: ["pg_isready", "-U", "chan", "-d", "chan_gateway"]
+              command: ["pg_isready", "-U", "chan_gateway_migrate", "-d", "chan_gateway"]
             initialDelaySeconds: 3
             periodSeconds: 5
           livenessProbe:
             exec:
-              command: ["pg_isready", "-U", "chan"]
+              command: ["pg_isready", "-U", "chan_gateway_migrate"]
             initialDelaySeconds: 10
             periodSeconds: 10
       volumes:

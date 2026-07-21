@@ -26,16 +26,57 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::registry::Registry;
+use devserver_control_proto::ProxyId;
 
 #[derive(Clone)]
 pub struct IdentityValidator {
     client: Client,
     endpoint: Url,
     auth_header: String,
+    proxy_id: ProxyId,
+}
+
+/// Compatibility wrapper for call sites that previously populated a
+/// mutable username cache. Owner authority now comes exclusively from the
+/// signed registration stored on `TunnelHandle`, so this wrapper delegates
+/// without recording identity state.
+pub struct CapturingValidator<V: Validator> {
+    inner: V,
+    _registry: Registry,
+}
+
+impl<V: Validator> CapturingValidator<V> {
+    pub fn new(inner: V, registry: Registry) -> Self {
+        Self {
+            inner,
+            _registry: registry,
+        }
+    }
+}
+
+#[async_trait]
+impl<V: Validator> Validator for CapturingValidator<V> {
+    async fn validate(&self, token: &str) -> Result<Validated, ServerError> {
+        self.inner.validate(token).await
+    }
+
+    async fn validate_registration(
+        &self,
+        token: &str,
+        registration_id: Uuid,
+    ) -> Result<Validated, ServerError> {
+        self.inner
+            .validate_registration(token, registration_id)
+            .await
+    }
+
+    async fn announce_devserver_name(&self, token: &str, name: &str) {
+        self.inner.announce_devserver_name(token, name).await;
+    }
 }
 
 impl IdentityValidator {
-    pub fn new(identity_url: Url, auth_token: String) -> anyhow::Result<Self> {
+    pub fn new(identity_url: Url, auth_token: String, proxy_id: ProxyId) -> anyhow::Result<Self> {
         let endpoint = identity_url.join("/internal/v1/tokens/validate")?;
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(5))
@@ -45,6 +86,7 @@ impl IdentityValidator {
             client,
             endpoint,
             auth_header: format!("Bearer {auth_token}"),
+            proxy_id,
         })
     }
 }
@@ -58,6 +100,10 @@ struct ValidateRequest<'a> {
     /// validate so that wire stays byte-identical to pre-name clients.
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    proxy_id: Option<&'a ProxyId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    registration_id: Option<Uuid>,
 }
 
 #[derive(Deserialize)]
@@ -71,16 +117,31 @@ struct ValidateResponse {
     devserver_id: String,
     #[serde(default)]
     scopes: Vec<String>,
+    admission_lease: String,
+    admission_lease_expires_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[async_trait]
 impl Validator for IdentityValidator {
     async fn validate(&self, token: &str) -> Result<Validated, ServerError> {
+        self.validate_registration(token, Uuid::new_v4()).await
+    }
+
+    async fn validate_registration(
+        &self,
+        token: &str,
+        registration_id: Uuid,
+    ) -> Result<Validated, ServerError> {
         let resp = self
             .client
             .post(self.endpoint.clone())
             .header(reqwest::header::AUTHORIZATION, &self.auth_header)
-            .json(&ValidateRequest { token, name: None })
+            .json(&ValidateRequest {
+                token,
+                name: None,
+                proxy_id: Some(&self.proxy_id),
+                registration_id: Some(registration_id),
+            })
             .send()
             .await
             .map_err(|e| ServerError::Identity(format!("request: {e}")))?;
@@ -99,6 +160,8 @@ impl Validator for IdentityValidator {
                     gateway_assertion_key: Some(
                         chan_tunnel_proto::gateway_assertion::derive_assertion_key(token),
                     ),
+                    admission_lease: Some(body.admission_lease),
+                    admission_lease_expires_at: Some(body.admission_lease_expires_at),
                 })
             }
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(ServerError::InvalidToken),
@@ -131,6 +194,8 @@ impl Validator for IdentityValidator {
                 .json(&ValidateRequest {
                     token,
                     name: Some(name),
+                    proxy_id: None,
+                    registration_id: None,
                 })
                 .send()
                 .await;
@@ -144,38 +209,6 @@ impl Validator for IdentityValidator {
             }
         }
         tracing::warn!(name, error = %last, "devserver name announce failed");
-    }
-}
-
-/// Wraps a Validator and records the (username, user_id) mapping
-/// in the shared `Registry` on every successful validate. The
-/// reverse-proxy auth gate reads back the cached user_id as metadata
-/// for admin tooling; without this cache devserver-proxy would have to
-/// round-trip to profile-service on every reverse-proxy request.
-pub struct CapturingValidator<V: Validator> {
-    inner: V,
-    registry: Registry,
-}
-
-impl<V: Validator> CapturingValidator<V> {
-    pub fn new(inner: V, registry: Registry) -> Self {
-        Self { inner, registry }
-    }
-}
-
-#[async_trait]
-impl<V: Validator> Validator for CapturingValidator<V> {
-    async fn validate(&self, token: &str) -> Result<Validated, ServerError> {
-        let validated = self.inner.validate(token).await?;
-        self.registry
-            .record_user(&validated.username, validated.user_id);
-        Ok(validated)
-    }
-
-    // Nothing to capture from a name announce; pass it through so the
-    // default no-op cannot swallow it on the wrapped chain.
-    async fn announce_devserver_name(&self, token: &str, name: &str) {
-        self.inner.announce_devserver_name(token, name).await;
     }
 }
 
@@ -194,6 +227,8 @@ mod tests {
             "username": "alice",
             "devserver_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             "scopes": ["tunnel"]
+            ,"admission_lease": "lease"
+            ,"admission_lease_expires_at": "2030-01-01T00:00:00Z"
         }"#;
         let parsed: ValidateResponse = serde_json::from_str(json).unwrap();
         assert_eq!(
@@ -201,6 +236,7 @@ mod tests {
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         );
         assert_eq!(parsed.username, "alice");
+        assert_eq!(parsed.admission_lease, "lease");
     }
 
     #[test]

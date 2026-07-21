@@ -4,7 +4,7 @@ Public-facing OAuth2 sign-in service for id.chan.app. Runs the GitHub / Google /
 
 ## Role in the system
 
-First public touch-point of chan-gateway. After a successful OAuth flow the browser holds the `id_session` cookie, which is host-only on id.chan.app and is NOT shared with the devserver proxy. To open a workspace, identity mints a short-lived devserver-gate entry token and 303s the browser to `{user}.devserver.<domain>/{workspace}/?t=<jwt>`; the proxy verifies it and mints its own host-scoped cookie. That split is the load-bearing piece of cross-tenant isolation: no `.chan.app`-scoped cookie exists.
+First public touch-point of chan-gateway. After a successful OAuth flow the browser holds the `id_session` cookie, which is host-only on id.chan.app and is NOT shared with the devserver proxy. To open a workspace, identity mints a short-lived devserver-gate entry credential and returns a no-store handoff page that POSTs it in the body to the exact proxy origin. The proxy verifies and consumes it, then mints its own opaque host-scoped cookie and redirects to the signed clean path. That split is the load-bearing piece of cross-tenant isolation: no `.chan.app`-scoped cookie exists and no entry secret enters browser history or referrers.
 
 Identity-service owns:
 
@@ -41,7 +41,7 @@ export DEVSERVER_TUNNEL_ORIGIN=http://usr.localtest.me:7002
 export PROFILE_SERVICE_URL=http://127.0.0.1:7001
 export PROFILE_AUTH_TOKEN=dev-service-token
 export IDENTITY_INTERNAL_TOKEN=dev-internal-token
-export DEVSERVER_GATE_SECRET=dev-workspace-gate-secret
+export DEVSERVER_ENTRY_SIGNING_KEY=<base64-ed25519-private-key>
 export GITHUB_CLIENT_ID=...
 export GITHUB_CLIENT_SECRET=...
 cargo run -p identity
@@ -65,7 +65,10 @@ Required:
 | `PROFILE_SERVICE_URL`     | profile-service HTTP base URL               |
 | `PROFILE_AUTH_TOKEN`      | bearer for profile-service calls            |
 | `IDENTITY_INTERNAL_TOKEN` | bearer devserver-proxy presents on validate |
-| `DEVSERVER_GATE_SECRET`   | HS256 secret; equals devserver-proxy's      |
+| `DEVSERVER_ADMIN_URL`     | protected devserver-control admin base     |
+| `DEVSERVER_IDENTITY_ADMIN_TOKEN` | identity-scoped controller bearer |
+| `DEVSERVER_ADMISSION_VERIFYING_KEYS` | controller admission public-key ring |
+| `DEVSERVER_ENTRY_SIGNING_KEY` | Ed25519 private key for short-lived entry credentials |
 | At least one provider's `*_CLIENT_ID` + `*_CLIENT_SECRET` pair        |
 
 Provider credentials (each pair optional; leave both unset to disable):
@@ -80,8 +83,7 @@ Optional knobs:
 |----------------------------|---------------------------|-----------------------|
 | `BIND_ADDR`                | `127.0.0.1:7000`          | listen address        |
 | `COOKIE_SECURE`            | `false`                   | HTTPS-only cookie     |
-| `DEVSERVER_ADMIN_URL`      | unset                     | devserver-control admin base |
-| `DEVSERVER_ADMIN_TOKEN`    | unset                     | enables tunnel evict on revoke / delete |
+| `IDENTITY_ADMIN_TOKEN`     | unset                     | enables identity's operator PAT surface |
 | `RUSTRICT_ALLOWLIST`       | unset                     | comma-separated usernames exempt from the profanity filter |
 | `IDENTITY_OAUTH_ENDPOINTS_BASE` | unset (stock github.com) | GitHub OAuth/API endpoint origin override for local e2e stubs; never set in production |
 

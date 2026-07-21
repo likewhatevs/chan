@@ -61,6 +61,8 @@ impl Validator for StubValidator {
                 devserver_id: devserver_id.clone(),
                 scopes: self.scopes.clone(),
                 gateway_assertion_key: None,
+                admission_lease: None,
+                admission_lease_expires_at: None,
             }),
             None => Err(ServerError::InvalidToken),
         }
@@ -323,7 +325,7 @@ async fn controller_capacity_denial_is_a_stable_pre_registration_refusal() {
 struct GatedAdmission {
     entered: tokio::sync::Notify,
     release: tokio::sync::Notify,
-    registration_id: Uuid,
+    registration_id: std::sync::Mutex<Option<Uuid>>,
 }
 
 #[async_trait]
@@ -333,11 +335,22 @@ impl RegistrationAdmission for GatedAdmission {
         _hello: &chan_tunnel_proto::Hello,
         _validated: &Validated,
     ) -> Result<RegistrationPermit, ServerError> {
+        self.admit_registration(_hello, _validated, Uuid::new_v4())
+            .await
+    }
+
+    async fn admit_registration(
+        &self,
+        _hello: &chan_tunnel_proto::Hello,
+        _validated: &Validated,
+        registration_id: Uuid,
+    ) -> Result<RegistrationPermit, ServerError> {
         self.entered.notify_one();
         self.release.notified().await;
+        *self.registration_id.lock().unwrap() = Some(registration_id);
         Ok(RegistrationPermit {
             request_id: Uuid::new_v4(),
-            registration_id: self.registration_id,
+            registration_id,
             admission_epoch: 0,
         })
     }
@@ -346,11 +359,10 @@ impl RegistrationAdmission for GatedAdmission {
 #[tokio::test]
 async fn admission_completes_before_hello_ack_ok() {
     let validator = StubValidator::new("alice", vec![TUNNEL_SCOPE.into()], &[("good", "ds-1")]);
-    let registration_id = Uuid::new_v4();
     let admission = Arc::new(GatedAdmission {
         entered: tokio::sync::Notify::new(),
         release: tokio::sync::Notify::new(),
-        registration_id,
+        registration_id: std::sync::Mutex::new(None),
     });
     let h = spawn_controller_admitted_listener(validator, admission.clone()).await;
 
@@ -375,8 +387,13 @@ async fn admission_completes_before_hello_ack_ok() {
         .expect("dial task panicked")
         .expect("dial should succeed once admission resolves");
     assert!(wait_registered(&h.registry, "alice", "ds-1").await);
-    // The registration carries the permit's UUID so controller kill
-    // commands can target it precisely.
+    // Admission observes and returns the listener-generated UUID, so
+    // controller commands and the registry address the same registration.
+    let registration_id = admission
+        .registration_id
+        .lock()
+        .unwrap()
+        .expect("admission captured registration id");
     assert_eq!(
         h.registry
             .get("alice", "ds-1")

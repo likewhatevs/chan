@@ -57,6 +57,7 @@ pub async fn dial_with_tls(
     cfg: &ClientConfig,
     tls: Option<&Arc<RustlsClientConfig>>,
 ) -> Result<(Registration, YamuxConnection<Compat<H2Duplex>>), ClientError> {
+    validate_tunnel_url(cfg)?;
     let host = cfg
         .tunnel_url
         .host_str()
@@ -66,11 +67,6 @@ pub async fn dial_with_tls(
         ClientError::InvalidUrl(format!("cannot infer port from {}", cfg.tunnel_url))
     })?;
     let scheme = cfg.tunnel_url.scheme();
-    if scheme != "https" && scheme != "http" {
-        return Err(ClientError::InvalidUrl(
-            "tunnel URL scheme must be https:// or http://".into(),
-        ));
-    }
     // Normalize: callers commonly pass just a `host:port` base
     // (e.g. an embed UI rendering `http://127.0.0.1:PORT`). The
     // server only accepts POSTs at `chan_tunnel_proto::TUNNEL_PATH`,
@@ -81,6 +77,16 @@ pub async fn dial_with_tls(
     let tunnel_url = normalize_tunnel_url(&cfg.tunnel_url);
 
     let tcp = open_tcp(&host, port, cfg.proxy.as_ref()).await?;
+    if scheme == "http"
+        && !tcp
+            .peer_addr()
+            .map(|peer| peer.ip().is_loopback())
+            .unwrap_or(false)
+    {
+        return Err(ClientError::InvalidUrl(
+            "cleartext tunnel connection did not terminate on a loopback peer".into(),
+        ));
+    }
     tcp.set_nodelay(true).ok();
 
     // Workspace h2 frames in the background; the connection future has
@@ -171,6 +177,35 @@ fn normalize_tunnel_url(url: &Url) -> Url {
     out
 }
 
+fn is_loopback_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
+}
+
+pub(crate) fn validate_tunnel_url(cfg: &ClientConfig) -> Result<(), ClientError> {
+    if !cfg.tunnel_url.username().is_empty() || cfg.tunnel_url.password().is_some() {
+        return Err(ClientError::InvalidUrl(
+            "tunnel URL userinfo is forbidden; use the separate tunnel token".into(),
+        ));
+    }
+    let host = cfg
+        .tunnel_url
+        .host_str()
+        .ok_or_else(|| ClientError::InvalidUrl("missing host".into()))?;
+    match cfg.tunnel_url.scheme() {
+        "https" => Ok(()),
+        "http" if is_loopback_host(host) => Ok(()),
+        "http" => Err(ClientError::InvalidUrl(
+            "non-loopback tunnel URLs must use https://".into(),
+        )),
+        _ => Err(ClientError::InvalidUrl(
+            "tunnel URL scheme must be https:// or http://".into(),
+        )),
+    }
+}
+
 /// sent as a Basic auth header. The CONNECT exchange is bounded by
 /// the parent `dial_timeout` (each leg here is non-blocking apart
 /// from one short read for the response status line + headers).
@@ -190,8 +225,22 @@ async fn open_tcp(host: &str, port: u16, proxy: Option<&Url>) -> Result<TcpStrea
     let proxy_port = proxy
         .port_or_known_default()
         .ok_or_else(|| ClientError::InvalidUrl("cannot infer proxy port".into()))?;
+    let credentialed = !proxy.username().is_empty();
+    let verified_loopback_literal = proxy_host
+        .parse::<std::net::IpAddr>()
+        .is_ok_and(|address| address.is_loopback());
+    if credentialed && !verified_loopback_literal {
+        return Err(ClientError::InvalidUrl(
+            "credentials require an explicit loopback IP for a cleartext HTTP proxy".into(),
+        ));
+    }
 
     let mut tcp = TcpStream::connect((proxy_host, proxy_port)).await?;
+    if credentialed && !tcp.peer_addr()?.ip().is_loopback() {
+        return Err(ClientError::InvalidUrl(
+            "credentials are refused because the cleartext HTTP proxy peer is not loopback".into(),
+        ));
+    }
     let target = format!("{host}:{port}");
     let mut req =
         format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\nProxy-Connection: keep-alive\r\n");
@@ -337,6 +386,33 @@ mod tests {
         assert_eq!(normalized.query(), Some("retry=1"));
     }
 
+    #[test]
+    fn loopback_recognition_never_uses_a_dns_prefix() {
+        assert!(is_loopback_host("127.0.0.1"));
+        assert!(is_loopback_host("::1"));
+        assert!(is_loopback_host("localhost"));
+        assert!(!is_loopback_host("127.example.com"));
+        assert!(!is_loopback_host("10.0.0.2"));
+    }
+
+    #[test]
+    fn tunnel_url_rejects_userinfo_because_auth_uses_the_pat() {
+        for raw in [
+            "https://alice:secret@workspace.chan.app/v1/tunnel",
+            "https://alice@workspace.chan.app/v1/tunnel",
+            "https://:secret@workspace.chan.app/v1/tunnel",
+        ] {
+            let cfg = ClientConfig {
+                tunnel_url: Url::parse(raw).unwrap(),
+                ..ClientConfig::default()
+            };
+            assert!(matches!(
+                validate_tunnel_url(&cfg),
+                Err(ClientError::InvalidUrl(message)) if message.contains("userinfo")
+            ));
+        }
+    }
+
     async fn run_proxy(listener: TcpListener, response: &'static [u8]) -> Vec<u8> {
         let (mut sock, _) = listener.accept().await.unwrap();
         // Read up to CRLF CRLF so we capture exactly the CONNECT
@@ -475,5 +551,27 @@ mod tests {
             ClientError::InvalidUrl(msg) => assert!(msg.contains("https")),
             other => panic!("expected InvalidUrl, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn rejects_credentials_on_non_loopback_cleartext_proxy_before_connect() {
+        let proxy_url = Url::parse("http://alice:secret@proxy.example.test:3128").unwrap();
+        let error = open_tcp("upstream.example", 443, Some(&proxy_url))
+            .await
+            .expect_err("remote cleartext proxy credentials must be refused");
+        assert!(
+            matches!(error, ClientError::InvalidUrl(message) if message.contains("credentials"))
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_credentials_for_localhost_before_dns_or_connect() {
+        let proxy_url = Url::parse("http://alice:secret@localhost:3128").unwrap();
+        let error = open_tcp("upstream.example", 443, Some(&proxy_url))
+            .await
+            .expect_err("a hostname is not verified loopback authority");
+        assert!(
+            matches!(error, ClientError::InvalidUrl(message) if message.contains("loopback IP"))
+        );
     }
 }

@@ -50,7 +50,8 @@ RUN make gateway-build GATEWAY_CARGO_FLAGS="--release"
 # ---- runtime base --------------------------------------------------------
 # Shared by all four service targets: matched glibc (bookworm), a CA bundle
 # (identity reaches the OAuth providers over HTTPS), and a non-root service user
-# mirroring the systemd unit's User=chan-gateway.
+# The image boundary isolates this per-container non-root identity; systemd
+# packages use a distinct Unix identity for each service.
 FROM debian:bookworm-slim AS runtime-base
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -60,13 +61,14 @@ RUN apt-get update && \
 USER chan-gateway
 WORKDIR /home/chan-gateway
 
-# ---- identity (id.<domain>, :7000) ---------------------------------------
+# ---- identity (public :7000, internal proxy/operator :7004) ---------------
 FROM runtime-base AS identity
 COPY --from=builder /src/gateway/target/release/identity-service \
      /usr/local/bin/chan-gateway-identity
 # Reachable across pods; the .env default is 127.0.0.1:7000.
 ENV BIND_ADDR=0.0.0.0:7000
-EXPOSE 7000
+ENV INTERNAL_BIND_ADDR=0.0.0.0:7004
+EXPOSE 7000 7004
 ENTRYPOINT ["chan-gateway-identity"]
 
 # ---- profile (internal API, :7001) ---------------------------------------

@@ -18,6 +18,9 @@
 
 use base64::Engine;
 use chrono::{DateTime, Utc};
+use devserver_control_proto::{
+    AdmissionLease, AdmissionLeaseBinding, AdmissionLeaseSigner, ProxyId,
+};
 use rand::rngs::OsRng;
 use rand::RngCore;
 use serde::Serialize;
@@ -76,12 +79,21 @@ pub struct ApiToken {
 }
 
 /// One-shot response: the only time the plaintext token is exposed.
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct CreatedToken {
     #[serde(flatten)]
     pub token: ApiToken,
     /// `chan_pat_...` -- shown to the user once, never persisted.
     pub secret: String,
+}
+
+impl std::fmt::Debug for CreatedToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CreatedToken")
+            .field("token", &self.token)
+            .field("secret", &"[REDACTED]")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -112,6 +124,12 @@ pub struct ValidatedToken {
     /// never leaves this service. Distinct encoding from the stored
     /// `token_hash` (base64url) but the same underlying digest.
     pub devserver_id: String,
+    /// Identity-signed, short-lived controller authority for one exact
+    /// registration. Present only on admission validation calls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub admission_lease: Option<AdmissionLease>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub admission_lease_expires_at: Option<DateTime<Utc>>,
 }
 
 /// Default scope set for a freshly-issued token. `tunnel` lets the
@@ -154,11 +172,22 @@ pub struct NewToken<'a> {
 #[derive(Clone)]
 pub struct ApiTokenService {
     pool: PgPool,
+    admission_signer: Option<AdmissionLeaseSigner>,
 }
 
 impl ApiTokenService {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            admission_signer: None,
+        }
+    }
+
+    pub fn with_admission_signer(pool: PgPool, admission_signer: AdmissionLeaseSigner) -> Self {
+        Self {
+            pool,
+            admission_signer: Some(admission_signer),
+        }
     }
 
     /// Single PAT-mint entry point for both the SPA and the
@@ -241,6 +270,17 @@ impl ApiTokenService {
         Ok(true)
     }
 
+    /// Ownership probe used to distinguish an idempotent revoke retry from a
+    /// guessed or cross-account token id after the local denial is in place.
+    pub async fn owns(&self, user_id: Uuid, token_id: Uuid) -> Result<bool> {
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_tokens WHERE id = $1 AND user_id = $2)")
+            .bind(token_id)
+            .bind(user_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(map_db)
+    }
+
     pub async fn audit(
         &self,
         user_id: Uuid,
@@ -283,6 +323,39 @@ impl ApiTokenService {
         let v = self.validate_no_audit(token).await?;
         self.write_audit(v.token_id, ACTION_USED, meta).await?;
         Ok(v)
+    }
+
+    /// Validate a PAT and mint controller authority for one exact proxy
+    /// registration. The proxy cannot refresh this lease without the live
+    /// tunnel client presenting the PAT again.
+    pub async fn validate_for_admission(
+        &self,
+        token: &str,
+        proxy_id: ProxyId,
+        registration_id: Uuid,
+        meta: &RequestMeta,
+    ) -> Result<ValidatedToken> {
+        let mut validated = self.validate(token, meta).await?;
+        let signer = self.admission_signer.as_ref().ok_or_else(|| {
+            Error::Anyhow(anyhow::anyhow!("admission lease signer is not configured"))
+        })?;
+        let now = Utc::now();
+        let admission_lease = signer
+            .sign(
+                AdmissionLeaseBinding {
+                    owner_user_id: validated.user_id,
+                    user: validated.username.clone(),
+                    devserver_id: validated.devserver_id.clone(),
+                    registration_id,
+                    proxy_id,
+                },
+                now,
+                120,
+            )
+            .map_err(|error| Error::Anyhow(anyhow::anyhow!(error)))?;
+        validated.admission_lease = Some(admission_lease);
+        validated.admission_lease_expires_at = Some(now + chrono::Duration::seconds(120));
+        Ok(validated)
     }
 
     /// [`validate`] minus the `used` audit row: the same single
@@ -328,6 +401,8 @@ impl ApiTokenService {
             expires_at: row.3,
             scopes: row.4,
             devserver_id,
+            admission_lease: None,
+            admission_lease_expires_at: None,
         })
     }
 
@@ -471,8 +546,30 @@ mod tests {
             expires_at: None,
             scopes: vec!["tunnel".into()],
             devserver_id: "a".repeat(64),
+            admission_lease: None,
+            admission_lease_expires_at: None,
         };
         let j = serde_json::to_value(&v).unwrap();
         assert_eq!(j["devserver_id"], "a".repeat(64));
+    }
+
+    #[test]
+    fn created_token_debug_redacts_plaintext_secret() {
+        let created = CreatedToken {
+            token: ApiToken {
+                id: Uuid::nil(),
+                user_id: Uuid::nil(),
+                label: "test".into(),
+                expires_at: None,
+                created_at: Utc::now(),
+                revoked_at: None,
+                last_used_at: None,
+                scopes: vec!["tunnel".into()],
+            },
+            secret: "sentinel-plaintext-pat".into(),
+        };
+        let debug = format!("{created:?}");
+        assert!(!debug.contains("sentinel-plaintext-pat"));
+        assert!(debug.contains("[REDACTED]"));
     }
 }

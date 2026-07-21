@@ -16,7 +16,7 @@ A user running `chan devserver` on a box wants their library reachable on a publ
 This crate owns:
 
 - The TLS + h2 dial path (rustls with native roots, ALPN h2).
-- The h2c branch for local dev / in-cluster stacks (loopback warning for non-loopback http:// hosts).
+- The h2c branch for local dev, restricted to literal loopback or `localhost`; non-loopback tunnel origins must use HTTPS.
 - An optional outbound HTTP proxy leg: HTTP/1.1 CONNECT (with Basic auth from the proxy URL's userinfo) before TLS/h2.
 - The Hello / HelloAck round-trip over the resulting duplex, including structured server refusals.
 - yamux client mode over the post-handshake byte stream.
@@ -70,7 +70,7 @@ Connection lifecycle:
 
 ### Per-substream serving
 
-For each inbound yamux substream (`poll_next_inbound`):
+Before polling an inbound yamux substream, the loop acquires a concurrency permit. This ordering is security-relevant: yamux cannot hand the client an arbitrary backlog of already-accepted streams while every handler slot is busy. A 32-stream, one-permit flood regression pins the bound. For each accepted substream:
 
 1. Wrap the futures-io stream into tokio via `compat()`, then into hyper's IO via `TokioIo::new`.
 2. Run `hyper::server::conn::http1::Builder::serve_connection(io, service).with_upgrades()`. The `with_upgrades()` is required so WebSocket 101 responses keep the substream alive.
@@ -78,7 +78,11 @@ For each inbound yamux substream (`poll_next_inbound`):
 
 Each substream is one logical HTTP request from the public side. Stacking h2 here would be mux-on-mux; h1 over yamux is the right shape.
 
-`serve_substreams` caps concurrent handler tasks at `DEFAULT_MAX_CONCURRENT_SUBSTREAMS` (128) via a semaphore. `run` uses `ClientConfig::max_concurrent_substreams` (clamped to >= 1), and direct callers can use `serve_substreams_with_limit`. When the cap is full, the client stops polling new inbound yamux substreams until a handler exits, so floods backpressure at the mux instead of spawning unbounded h1 tasks.
+`serve_substreams` caps concurrent handler tasks at `DEFAULT_MAX_CONCURRENT_SUBSTREAMS` (128) via a semaphore. `run` uses `ClientConfig::max_concurrent_substreams` (clamped to >= 1), and direct callers can use `serve_substreams_with_limit`. When the cap is full, the client holds no inbound permit and does not poll yamux for another stream, so floods backpressure at the mux instead of becoming either unbounded accepted streams or unbounded h1 tasks.
+
+### Admission-lease refresh
+
+After registration, the client retains the PAT and periodically opens one outbound yamux control stream containing `LeaseRefreshRequest`. The server revalidates that PAT for the existing registration and replies `Refreshed` or `Refused`; refresh retries use bounded jittered backoff. This is the only client-opened stream. It keeps admission authority shorter-lived than the data connection without placing the PAT in controller state or logs. The request's `Debug` implementation is redacted.
 
 ### Reconnect loop and backoff
 
@@ -118,12 +122,12 @@ Client-specific notes:
   - `403 FORBIDDEN`: token missing tunnel scope. Mapped to `ClientError::Handshake("forbidden (token missing tunnel scope)")`.
   - anything else: `ClientError::Handshake("unexpected status ...")`.
 - After the response headers arrive, `H2Duplex::new(send, recv)` becomes the duplex; `handshake` writes the `Hello` and reads the `HelloAck`. A `HelloAck::Refused` becomes `ClientError::RemoteRefusal { code, message }`; the codes are the `chan_tunnel_proto::error_code` strings, so callers can match known refusals and fall back to the message for unknown codes. A non-V1 ack protocol is a `Handshake` error.
-- yamux client mode (`Mode::Client`) over the duplex. Substreams are inbound; the client never opens outbound ones.
+- yamux client mode (`Mode::Client`) over the duplex. Data substreams are inbound; the only outbound stream is the admission-lease refresh protocol.
 
 ## 6. Trust boundaries / validation
 
 - **Server certificate**: rustls with `rustls-native-certs` for the trust store, ALPN forced to `h2`. `run` builds the TLS config once and reuses it across reconnects (the macOS keychain walk is expensive); `dial_with_tls` lets other callers do the same.
-- **URL scheme gate**: only `https://` and `http://` are accepted. `http://` against a non-loopback host logs a warning (bearer token in cleartext); we don't refuse outright because legitimate cases exist (private VPN, Tailscale, in-cluster service, a loopback listener behind `ssh -R`).
+- **URL scheme gate**: only `https://` and `http://` are accepted, and cleartext is restricted to loopback. A private DNS name is not treated as proof of a protected route. Tunnel URL userinfo is forbidden because authentication is the separate PAT; accepting both would create an ambiguous credential channel and could forward userinfo through URI construction. Userinfo remains supported only on the separately configured loopback HTTP CONNECT proxy URL.
 - **Workspace name** (`is_valid_workspace_name` from chan-tunnel-proto): checked before sending `Hello`. The server checks again, but catching it locally avoids a round-trip and surfaces a config error to the user.
 - **Token**: empty token is rejected by `run` before the first dial. The token itself is opaque to this crate; the server's `Validator` decides whether it's valid.
 - **Proxy credentials**: taken from the proxy URL's userinfo and sent only as the Basic CONNECT header. CONNECT failure messages carry the numeric status but never echo proxy-supplied response text, so a hostile proxy cannot reflect credentials into logs.

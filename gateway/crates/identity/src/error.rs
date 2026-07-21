@@ -49,6 +49,9 @@ pub enum Error {
     #[error("upstream error: {0}")]
     Upstream(String),
 
+    #[error("service unavailable: {0}")]
+    Unavailable(&'static str),
+
     #[error(transparent)]
     Anyhow(#[from] anyhow::Error),
 
@@ -120,6 +123,7 @@ impl IntoResponse for Error {
                 tracing::warn!(detail = %detail, "upstream error");
                 (StatusCode::BAD_GATEWAY, error_body("upstream unreachable"))
             }
+            Error::Unavailable(message) => (StatusCode::SERVICE_UNAVAILABLE, error_body(message)),
             Error::Anyhow(e) => {
                 tracing::error!(error = ?e, "internal error");
                 (

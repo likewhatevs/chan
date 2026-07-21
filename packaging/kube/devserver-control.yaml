@@ -23,6 +23,7 @@ spec:
         app.kubernetes.io/name: devserver-control
         app.kubernetes.io/part-of: chan-gateway
     spec:
+      automountServiceAccountToken: false
       containers:
         - name: devserver-control
           # set <version> to the release tag you are deploying (see README.md).
@@ -31,7 +32,17 @@ spec:
           # URLs/tokens from ConfigMap/Secret.
           envFrom:
             - configMapRef: { name: chan-gateway-config }
-            - secretRef: { name: chan-gateway-secrets }
+          env:
+            - name: DEVSERVER_OPERATOR_ADMIN_TOKENS
+              valueFrom: { secretKeyRef: { name: chan-gateway-devserver-control, key: DEVSERVER_OPERATOR_ADMIN_TOKENS } }
+            - name: DEVSERVER_IDENTITY_ADMIN_TOKENS
+              valueFrom: { secretKeyRef: { name: chan-gateway-devserver-control, key: DEVSERVER_IDENTITY_ADMIN_TOKENS } }
+            - name: DEVSERVER_PROFILE_ADMIN_TOKENS
+              valueFrom: { secretKeyRef: { name: chan-gateway-devserver-control, key: DEVSERVER_PROFILE_ADMIN_TOKENS } }
+            - name: DEVSERVER_PROXY_CREDENTIALS
+              valueFrom: { secretKeyRef: { name: chan-gateway-devserver-control, key: DEVSERVER_PROXY_CREDENTIALS } }
+            - name: DEVSERVER_ADMISSION_VERIFYING_KEYS
+              valueFrom: { secretKeyRef: { name: chan-gateway-devserver-control, key: DEVSERVER_ADMISSION_VERIFYING_KEYS } }
           ports:
             - { name: http, containerPort: 7003 }
             - { name: control, containerPort: 7101 }

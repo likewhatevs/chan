@@ -26,6 +26,9 @@ sequenceDiagram
     C->>C: serve via axum router over hyper h1
     C-->>S: h1 response over substream
     S-->>V: public HTTP response
+    C->>S: periodic yamux control stream: LeaseRefreshRequest (PAT)
+    S->>S: revalidate exact registration authority
+    S-->>C: LeaseRefreshResponse
 ```
 
 The control + data path: one control handshake per tunnel, then a yamux substream per public request.
@@ -38,7 +41,7 @@ A chan user wants their local workspace reachable on a public URL without openin
 
 This crate owns:
 
-- Control frames (`Hello`, `HelloAck`) and their JSON serde shape, including the structured refusal codes in `error_code`.
+- Control frames (`Hello`, `HelloAck`) and the one-shot yamux lease-refresh request/response, including structured refusal codes and redacted PAT debug behavior.
 - Length-prefixed framing (`[u32 BE len][json bytes]`) used only for the two control messages.
 - Workspace-name and username validators applied identically by client and server (defense-in-depth gate against URL-unsafe identifiers), plus `sanitize_workspace_name`.
 - `H2Duplex`: an `AsyncRead + AsyncWrite + Unpin` over an h2 `(SendStream<Bytes>, RecvStream)` pair, feeding the post-handshake byte stream into yamux on both ends.
@@ -58,7 +61,7 @@ The end-to-end control and data path is the sequence diagram above (Cross-crate 
 Framing for the two control messages is identical in both directions: a
 big-endian `u32` length prefix followed by that many JSON bytes.
 
-After `HelloAck` is fully read on the client and fully written on the server, the byte stream belongs to yamux. The codec in this crate is not used again on that connection.
+After `HelloAck` is fully read on the client and fully written on the server, the outer byte stream belongs to yamux. The same bounded frame helper is later reused inside a dedicated one-shot yamux stream for `LeaseRefreshRequest` / `LeaseRefreshResponse`; it is never interleaved with public h1 substreams.
 
 ## 3. Components / responsibilities
 
@@ -68,7 +71,7 @@ The split between the sync codec (`BytesMut`-based `encode_frame` / `decode_fram
 
 This crate owns the stable tunnel path, the control-frame size cap, the Hello / HelloAck schemas, the refusal-code vocabulary, the shared identifier validators, the frame codec, and the h2 duplex adapter. Client and server crates may orchestrate I/O differently, but they must use these shared contracts for the bytes and validation rules.
 
-Control frames are owned serde values with plain strings and enums, no borrowed lifetimes. `Hello` carries protocol, client version for logs, workspace, and an optional display name; `HelloAck` is either success with the assigned prefix/user/workspace or refusal with a stable code plus safe message. Refusal codes are additive and machine-matchable.
+Control frames are owned serde values with plain strings and enums, no borrowed lifetimes. `Hello` carries protocol, client version for logs, workspace, and an optional display name; `HelloAck` is either success with the assigned prefix/user/workspace or refusal with a stable code plus safe message. `LeaseRefreshRequest` carries the PAT only for the duration of exact-registration revalidation and redacts it from `Debug`; its response is `Refreshed` or a safe refusal. Refusal codes are additive and machine-matchable.
 
 The codec split remains deliberate: the sync codec is reusable from any I/O loop, while the tokio helpers are convenience for the current callers. Errors flatten cleanly so client and server can convert them into their own umbrella enums without re-exporting h2 or serde internals.
 

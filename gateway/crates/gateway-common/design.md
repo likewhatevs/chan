@@ -2,134 +2,119 @@
 
 ## Problem
 
-identity-service, devserver-proxy and profile-service need the same plumbing in several places:
+The gateway services need one implementation of the contracts they share:
 
-- a `ProfileClient` calling profile-service over HTTP;
-- a `DevserverControlClient` calling devserver-control admin (used by identity on revoke / delete / dashboard reads and by profile on admin block and the registry sweeper);
-- the JWT shape used by the devserver-gate handoff between identity (mint) and devserver-proxy (verify + mint sessions);
-- the public-hostname derivation both public services must agree on;
-- username validation rules that profile, identity and devserver-proxy all enforce;
-- the token-bucket primitive both validate throttles wrap.
+- typed clients for profile-service and devserver-control;
+- Ed25519 entry credentials for the identity-to-proxy browser handoff;
+- controller admission-lease verification at identity boundaries;
+- protected internal-transport validation;
+- username validation, throttling, static-file serving, and shutdown plumbing.
 
-Per-crate copies would risk drift and make cross-cutting choices (timeouts, error mapping, MIME guessing, signing claims, throttle limits) live in multiple places.
+Keeping these contracts here prevents security-sensitive wire shapes, timeouts,
+and validation rules from drifting between services.
 
 ## Architecture
 
-Library crate of small, mostly independent modules. The data-layer types carry no axum / `IntoResponse` coupling: axum is a dependency only because `static_files::serve` returns `axum::response::Response`, and `profile_client`, `devserver_control_client` and `devserver_gate` know nothing of axum.
+`gateway-common` is an internal library. Its HTTP clients and credential types
+do not depend on axum response semantics; consumers map errors at their own API
+boundaries.
 
 ```mermaid
 flowchart LR
-  subgraph svc["consumer services"]
-    identity["identity-service"]
-    devproxy["devserver-proxy"]
-    profile["profile-service"]
-    admin["admin CLI"]
-  end
-  subgraph common["gateway-common modules"]
-    pc["profile_client"]
-    dcc["devserver_control_client"]
-    dg["devserver_gate"]
-    sf["static_files"]
-    dom["domain"]
-    val["validators"]
-    tb["token_bucket"]
-  end
-  identity --> pc
-  identity --> sf
-  identity --> dcc
-  identity -->|"mint entry JWT"| dg
-  identity --> dom
-  identity --> val
-  identity --> tb
-  devproxy -->|"verify + mint session"| dg
-  devproxy --> dom
-  devproxy --> val
-  devproxy --> tb
-  profile --> dcc
-  profile --> val
-  admin -.->|"own reqwest client, no gateway-common"| profile
+  identity[identity-service] --> profile[profile_client]
+  identity --> control[devserver_control_client]
+  identity -->|sign entry credential| gate[devserver_gate]
+  proxy[devserver-proxy] -->|verify entry credential| gate
+  proxy --> internal[internal_transport]
+  identity --> internal
+  profile_service[profile-service] --> control
+  identity --> static[static_files]
+  identity --> validators[validators and token_bucket]
+  proxy --> validators
 ```
-*Which services share which modules; the admin CLI deliberately keeps its own reqwest client rather than depend on gateway-common.*
 
-Module names and signatures are self-explanatory; the parts that are not are the contracts each module carries:
+The important module contracts are:
 
-- `profile_client`: one reqwest client with a 10-second per-request timeout, the bearer token held inside (the `Debug` impl elides it). Idempotent GETs on the dashboard / OAuth-callback read path retry once after 100 ms on connect error, timeout, or 5xx (`send_idempotent`); writes never retry. `User` is the superset of every field profile-service returns, so consumers ignore the fields they do not need.
-- `devserver_control_client`: one reqwest client for devserver-control's aggregate admin tree with a 5-second timeout, the bearer held inside and elided in `Debug`. `TunnelView` carries the owning node's `proxy_id` and `proxy_base_url` alongside the registration key; `ProxyView` mirrors the controller's fleet rows for `list_proxies`.
-- `devserver_gate`: `Claims` is the entry / session JWT envelope (`iss`, `sub`, `role`, `drv`, `aud`, `typ`, `iat`, `exp`, plus optional `name` / `email` identity claims that decode to `None` on tokens minted without them). HS256 is hard-required -- no `alg: none` path exists and no asymmetric algorithm is enabled -- and `decode` verifies `aud` / `drv` / `typ`. devserver-proxy stores the session shape in a host-only `Path=/` cookie because a grant covers the whole devserver. `CallerIdentity` is the mint-time identity bundle; see the module doc for its staleness bound.
-- `domain`: `Domains` derives every public hostname (`base`, `id_host`, `devserver_apex`, `devserver_wildcard_suffix`) from one base (`CHAN_DOMAIN`, default `localtest.me`). identity and devserver-proxy derive from the same env, so the hosts cannot drift. The devserver-gate `aud` is the canonical inbound host: lowercase, no default port, non-default port preserved.
-- `token_bucket`: per-fingerprint bucket over a bounded, LRU-evicting map. A new fingerprint starts at one token, not a full burst, so rotating fingerprints can't bank capacity; `fingerprint` is a SipHash-64 of the candidate token. `DEFAULT_REFILL_PER_SEC` / `DEFAULT_CAPACITY` / `DEFAULT_MAP_CAP` (4 rps, 16 burst, 4096 entries) are single-sourced so the two validate throttles cannot drift.
-- `validators`: `valid_username` requires 3-32 chars, `[a-z0-9-]`, no boundary hyphens, no `--` (reserved as the `{user}--{disc}` separator in devserver wildcard hosts); `MAX_USERNAME_EDITS` is the lifetime rename cap (4).
-- `static_files`: `serve<R: RustEmbed>` is the SPA fallback handler -- it tries the requested path, falls back to `index.html` for paths without an extension, serves the consumer's banner as 503 (so a missing bundle surfaces to monitoring) if no `index.html` is embedded, else 404. Why it is generic and why the banner stays per-consumer: Key decisions.
-- `shutdown`: `shutdown_signal()` completes on the first of SIGTERM (Unix) or Ctrl-C; every service binary gates its graceful shutdown on it.
+- `profile_client`: a typed reqwest client with a 10-second request timeout.
+  Its bearer is redacted from `Debug`. Idempotent reads retry once after 100 ms
+  on connection failure, timeout, or 5xx; writes do not retry.
+- `devserver_control_client`: a typed client with a 5-second request timeout and
+  a 2-second connect timeout. Each service constructs it with its own
+  scope-specific controller bearer. Tunnel rows include their signed admission
+  lease and owning proxy identity.
+- `devserver_gate`: identity signs a 30-second Ed25519 credential. Claims bind
+  the immutable caller, owner, devserver, exact audience, target proxy, signed
+  clean path, purpose/version, and random single-use `jti`. The target proxy
+  verifies through a one- or two-key public-key ring and consumes the `jti`
+  before creating an opaque proxy-local browser session.
+- `internal_transport`: rejects public cleartext internal service URLs and
+  listeners. Loopback cleartext remains valid for a single-host deployment;
+  non-loopback deployments must use a protected overlay or HTTPS.
+- `token_bucket`: a bounded per-fingerprint bucket shared by both PAT-validation
+  throttles. New fingerprints begin with one token rather than a full burst.
+- `validators`: the canonical username shape and lifetime rename cap.
+- `static_files`: the generic embedded-SPA fallback used by identity-service.
+- `shutdown`: the common SIGTERM/Ctrl-C graceful-shutdown future.
 
 ## Key decisions
 
-### No axum coupling in the data-layer types
+### Asymmetric, single-use browser handoff
 
-`ProfileError`, `DevserverControlError`, `DevserverGateError` and `Claims` are plain thiserror / serde types. Each consumer maps the error onto its local request-handler error via a `From` impl. Keeps gateway-common free of HTTP-framing decisions and lets each consumer decide whether a given variant is a distinct status or folds into another.
+Identity alone holds `DEVSERVER_ENTRY_SIGNING_KEY`. Proxy nodes receive only
+`DEVSERVER_ENTRY_VERIFYING_KEYS`, with a maximum two-key rotation overlap. A
+credential is accepted only at the fixed body-only `POST /_chan/entry` endpoint
+from the exact configured identity Origin. It is never a standing browser
+session and never appears in the URL.
 
-### `User` is the superset
+The target proxy stores only an opaque random cookie in the browser. Session
+authorization state stays proxy-local, has a one-hour absolute maximum, and can
+be cancelled immediately by an exact or subject fleet revocation.
 
-`User` carries every field profile-service returns: `username_edits`, `avatar_url`, `blocked_at`, `block_reason`, `display_name`, `email`. Consumers ignore the fields they do not need. Splitting into per-consumer sub-structs would force parallel maintenance for negligible benefit.
+### Admission leases are verified at the consumer boundary
 
-### Shared devserver_gate
+Controller tunnel rows are not trusted as unsigned routing data. Identity
+verifies the Ed25519 admission lease and its immutable owner, devserver,
+registration, proxy, and expiry bindings before a row can authorize an entry or
+appear in the Desktop roster.
 
-Both identity and devserver-proxy depend on the same JWT envelope and the same HS256 verification config (hard-required alg, no fallback). One module here is the canonical place for both; the secret is shared between the two services via env var (`DEVSERVER_GATE_SECRET`).
+### Scoped controller clients
 
-The audience value is host-based and canonicalized by the callers before encoding or verification. Production binds to the lowercase host without a default port; local/dev non-default ports remain part of `aud`.
+The operator CLI, identity-service, and profile-service use different
+controller bearer rings. Possession of one service credential does not grant
+another service's admin surface.
 
-### Static asset serving stays generic
+### Internal transport fails closed
 
-Each consumer owns its own embedded asset set; the shared crate cannot derive once and share the embedded bytes. The static handler stays generic so each service can supply its own bundle while sharing the SPA fallback behavior.
-
-Only identity-service ships an SPA, so it is the module's only consumer; the module stays generic in case a future service grows a UI.
-
-### Banners stay per-consumer
-
-Each consumer's "frontend not built" banner names the right build target. Parameterising the banner template would obscure that, so each consumer ships its own static banner.
+An internal bearer authenticates the caller but does not make plaintext traffic
+private. Startup validation therefore permits cleartext only on loopback and
+requires HTTPS or an explicitly protected network for non-loopback service
+traffic.
 
 ## Invariants
 
-- `gateway_common` does not pull axum or any HTTP-routing framework into its data-layer surface. axum is a dependency only because `static_files::serve` returns `axum::response::Response`; nothing in `profile_client`, `devserver_control_client` or `devserver_gate` knows axum exists.
-- Bearer tokens passed to `ProfileClient::new` or `DevserverControlClient::new` live inside the client; the `Debug` impl deliberately elides the token.
-- `devserver_gate` enforces `alg: HS256` on every decode. No "alg: none" is ever accepted; no asymmetric algorithm is enabled.
-- HTTP calls run through one reqwest client per type with a fixed timeout (10s for profile, 5s for devserver-control). New methods reuse the existing builder.
+- Entry credentials use Ed25519 only; there is no HMAC or algorithm fallback.
+- Entry credentials have an exact 30-second lifetime and at most five seconds
+  of clock skew.
+- The signed purpose, version, issuer, type, proxy, owner, devserver, audience,
+  and clean path are all verified before exchange.
+- Entry verifier rings contain one or two distinct canonical public keys.
+- Bearers held by typed clients are omitted from `Debug` output.
+- Internal cleartext HTTP cannot be configured on an unprotected non-loopback
+  boundary.
 
 ## Error model
 
-`ProfileError`:
+`ProfileError` distinguishes not found, bad request, conflict, other upstream
+status, and transport failures. `DevserverControlError` distinguishes upstream
+status and transport failures. `DevserverGateError` collapses malformed wire or
+signature failures into `Decode`, while retaining explicit expiry, binding,
+owner, proxy, and context mismatches for local handling and tests. Public proxy
+responses still collapse authorization failures to 404.
 
-| Variant       | Construction                               |
-|---------------|--------------------------------------------|
-| `NotFound`    | upstream returned 404                      |
-| `BadRequest`  | upstream returned 400 (body in payload)    |
-| `Conflict`    | upstream returned 409 (body in payload)    |
-| `Upstream`    | any other non-success status               |
-| `Reqwest`     | `From<reqwest::Error>` for transport       |
+## Deliberate limits
 
-`DevserverControlError`:
-
-| Variant       | Construction                               |
-|---------------|--------------------------------------------|
-| `Upstream`    | non-success status with body               |
-| `Reqwest`     | `From<reqwest::Error>`                     |
-
-`DevserverGateError`:
-
-| Variant          | Construction                                     |
-|------------------|--------------------------------------------------|
-| `Decode`         | malformed token, unsupported alg, or HMAC verify failed |
-| `Expired`        | `exp` in the past                                |
-| `WrongAudience`  | `aud` claim does not match                       |
-| `WrongWorkspace` | `drv` claim does not match                       |
-| `WrongType`      | `typ` did not match expected value               |
-
-Consumers map these into their local axum errors.
-
-## What is not wired
-
-- Caching of profile responses (every call hits the upstream)
-- Connection pooling beyond reqwest defaults
-- Retries beyond the single idempotent-GET retry in `send_idempotent` (callers decide whether a write failure is fatal or fire-and-forget)
-- Asymmetric JWT (HS256 is the only algorithm enabled)
-- An axum middleware that rewrites client errors into responses directly (consumers do the mapping in their own `IntoResponse`)
+- Profile responses are not cached.
+- Client pooling uses reqwest defaults.
+- Writes are not automatically retried by the shared clients; durable mutation
+  retry belongs to profile's revocation outbox.
+- Consumers own their response mapping and operational retry policy.

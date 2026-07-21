@@ -5,8 +5,8 @@
 //! caller's own devservers (registry rows unioned with live-but-
 //! unrostered tunnels), the devservers shared with them (claimed
 //! grants only; the profile endpoint returns nothing else), and a
-//! real per-row `online` flag derived from ONE cluster-wide tunnel
-//! snapshot filtered in-memory. Auth is a PAT bearer carrying the
+//! real per-row `online` flag derived from bounded, identity-scoped
+//! per-owner tunnel reads. Auth is a PAT bearer carrying the
 //! `desktop.account` scope, validated via
 //! [`crate::api_tokens::ApiTokenService::validate_no_audit`] so the
 //! poll loop does not write an audit row per tick (the `last_used_at`
@@ -30,7 +30,7 @@
 //!     200 instead is forbidden: every row would read offline and the
 //!     desktop would tear down every window on this gateway.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use axum::body::Body;
 use axum::extract::State;
@@ -47,16 +47,18 @@ use crate::error::{Error, Result};
 use crate::http::{bearer_token, AppState, DESKTOP_ACCOUNT_SCOPE};
 use crate::profile_client::{IncomingShare, OwnedDevserverSummary};
 
-/// One devserver the caller can reach. `role` is `owner` on own rows
-/// and the grant role (`editor` / `viewer`) on shared ones; the
-/// desktop derives "shared" from `owner != username`.
+const MAX_ROSTER_OWNERS: usize = 64;
+const OWNER_READ_CONCURRENCY: usize = 8;
+
+/// One devserver the caller can reach. Access is binary and shell-equivalent;
+/// the desktop derives "shared" from `owner != username`.
 #[derive(Debug, Serialize)]
 struct RosterDevserver {
+    owner_user_id: uuid::Uuid,
     owner: String,
     devserver_id: String,
     label: String,
     online: bool,
-    role: String,
     /// Exact tenant origin of the node holding the registration while
     /// online (`{owner}--{disc}.{proxy}.<apex>`), `null` while
     /// offline. The desktop compares it against its pinned entry
@@ -68,6 +70,7 @@ struct RosterDevserver {
 
 #[derive(Debug, Serialize)]
 struct RosterResponse {
+    user_id: uuid::Uuid,
     username: String,
     devservers: Vec<RosterDevserver>,
 }
@@ -107,23 +110,67 @@ pub async fn roster(State(state): State<AppState>, headers: HeaderMap) -> Result
         Ok(rows) => rows,
         Err(e) => return Ok(upstream_502("incoming list", &validated.username, &e)),
     };
-    // The admin snapshot is where `online` gets its truth. A
-    // deployment without the client cannot answer honestly, and a
-    // degraded all-offline 200 is forbidden (module doc), so absence
-    // reads exactly like an unreachable controller.
-    let Some(admin) = state.cfg.workspace_admin.as_ref() else {
+    // Identity's controller bearer is deliberately owner-read-only. Fetch the
+    // caller plus distinct share owners in bounded batches; never broaden the
+    // token to profile's fleet-wide snapshot scope.
+    let mut owners: Vec<uuid::Uuid> = shared.iter().map(|share| share.owner_user_id).collect();
+    owners.push(validated.user_id);
+    owners.sort_unstable();
+    owners.dedup();
+    if owners.len() > MAX_ROSTER_OWNERS {
         return Ok(upstream_502(
             "tunnel snapshot",
             &validated.username,
-            &"devserver-control admin client not configured",
+            &"too many distinct roster owners",
         ));
-    };
-    let tunnels = match admin.list_all_tunnels().await {
-        Ok(rows) => rows,
-        Err(e) => return Ok(upstream_502("tunnel snapshot", &validated.username, &e)),
-    };
+    }
+    let mut tunnels = Vec::new();
+    for chunk in owners.chunks(OWNER_READ_CONCURRENCY) {
+        let mut reads = tokio::task::JoinSet::new();
+        for owner_id in chunk.iter().copied() {
+            let client = state.cfg.workspace_admin.clone();
+            reads.spawn(async move { (owner_id, client.list_owner_tunnels(owner_id).await) });
+        }
+        while let Some(read) = reads.join_next().await {
+            let (owner_id, rows) = match read {
+                Ok((owner_id, Ok(rows))) => (owner_id, rows),
+                Ok((_, Err(error))) => {
+                    return Ok(upstream_502("tunnel snapshot", &validated.username, &error));
+                }
+                Err(error) => {
+                    return Ok(upstream_502("tunnel snapshot", &validated.username, &error));
+                }
+            };
+            if rows.iter().any(|row| row.owner_user_id != owner_id) {
+                return Ok(upstream_502(
+                    "tunnel snapshot",
+                    &validated.username,
+                    &"controller returned a row for the wrong owner",
+                ));
+            }
+            tunnels.extend(rows);
+        }
+    }
+    for tunnel in &tunnels {
+        if let Err(error) =
+            crate::devserver_authority::verify_tunnel(&state.cfg.admission_lease_verifier, tunnel)
+        {
+            return Ok(upstream_502(
+                "tunnel authority",
+                &validated.username,
+                &error,
+            ));
+        }
+    }
 
-    let body = match build_roster(&state.cfg, &validated.username, owned, shared, tunnels) {
+    let body = match build_roster(
+        &state.cfg,
+        validated.user_id,
+        &validated.username,
+        owned,
+        shared,
+        tunnels,
+    ) {
         Ok(body) => body,
         // A live row whose node base fails the namespace check is the
         // same failure class as an unreachable controller: the roster
@@ -174,58 +221,70 @@ fn upstream_502(what: &str, user: &str, err: &dyn std::fmt::Debug) -> Response {
 /// a live tunnel whose controller-reported node base fails the
 /// namespace check is an error, never an origin guessed from the
 /// shared apex.
+#[derive(Debug, thiserror::Error)]
+enum RosterBuildError {
+    #[error(transparent)]
+    InvalidNodeBase(#[from] InvalidNodeBase),
+    #[error("profile returned a devserver for the wrong owner")]
+    WrongOwner,
+}
+
 fn build_roster(
     cfg: &Config,
+    user_id: uuid::Uuid,
     username: &str,
     owned: Vec<OwnedDevserverSummary>,
     shared: Vec<IncomingShare>,
     tunnels: Vec<TunnelView>,
-) -> std::result::Result<RosterResponse, InvalidNodeBase> {
-    // ONE cluster-wide snapshot feeds every `online` flag and
-    // `proxy_origin`; filter it in-memory to the only owners that
-    // matter (the caller plus the share owners) so an unrelated
-    // user's tunnel can never leak in. Foreign rows are dropped
-    // before validation: only rows the roster would render can fail
-    // the build.
-    let share_owners: HashSet<&str> = shared.iter().map(|s| s.owner_username.as_str()).collect();
-    let mut live: HashMap<(String, String), String> = HashMap::new();
+) -> std::result::Result<RosterResponse, RosterBuildError> {
+    // Bounded per-owner reads feed every `online` flag and proxy origin.
+    let mut expected_owners: HashMap<uuid::Uuid, &str> = shared
+        .iter()
+        .map(|share| (share.owner_user_id, share.owner_username.as_str()))
+        .collect();
+    expected_owners.insert(user_id, username);
+    let mut live: HashMap<(uuid::Uuid, String), String> = HashMap::new();
     for t in tunnels {
-        if t.user == username || share_owners.contains(t.user.as_str()) {
+        if let Some(expected_username) = expected_owners.get(&t.owner_user_id) {
+            if t.user != *expected_username {
+                return Err(RosterBuildError::WrongOwner);
+            }
             let origin = cfg
-                .tenant_origin_for(&t.user, &t.devserver_id, &t.proxy_base_url)?
+                .tenant_origin_for(&t.user, &t.devserver_id, &t.proxy_id, &t.proxy_base_url)?
                 .origin;
-            live.insert((t.user, t.devserver_id), origin);
+            live.insert((t.owner_user_id, t.devserver_id), origin);
         }
     }
 
     let mut own_rows: Vec<RosterDevserver> = owned
         .into_iter()
         .map(|o| {
-            let proxy_origin = live
-                .get(&(username.to_string(), o.devserver_id.clone()))
-                .cloned();
-            RosterDevserver {
+            if o.owner_user_id != user_id {
+                return Err(RosterBuildError::WrongOwner);
+            }
+            let proxy_origin = live.get(&(user_id, o.devserver_id.clone())).cloned();
+            Ok(RosterDevserver {
+                owner_user_id: o.owner_user_id,
                 owner: username.to_string(),
                 label: display_label(&o.label, &o.devserver_id),
                 online: proxy_origin.is_some(),
                 proxy_origin,
                 devserver_id: o.devserver_id,
-                role: "owner".to_string(),
-            }
+            })
         })
-        .collect();
+        .collect::<std::result::Result<Vec<_>, RosterBuildError>>()?;
     // A live tunnel with no registry row (dialed in before the row
     // existed, or the row was swept) still belongs to the caller:
     // append it so nothing the user can reach is hidden.
-    for ((user, devserver_id), origin) in &live {
-        if user == username && !own_rows.iter().any(|r| &r.devserver_id == devserver_id) {
+    for ((owner_user_id, devserver_id), origin) in &live {
+        if *owner_user_id == user_id && !own_rows.iter().any(|r| &r.devserver_id == devserver_id) {
             own_rows.push(RosterDevserver {
+                owner_user_id: user_id,
                 owner: username.to_string(),
                 devserver_id: devserver_id.clone(),
                 label: disc_label(devserver_id),
                 online: true,
                 proxy_origin: Some(origin.clone()),
-                role: "owner".to_string(),
             });
         }
     }
@@ -234,15 +293,15 @@ fn build_roster(
         .into_iter()
         .map(|s| {
             let proxy_origin = live
-                .get(&(s.owner_username.clone(), s.devserver_id.clone()))
+                .get(&(s.owner_user_id, s.devserver_id.clone()))
                 .cloned();
             RosterDevserver {
+                owner_user_id: s.owner_user_id,
                 online: proxy_origin.is_some(),
                 proxy_origin,
                 label: display_label(&s.label, &s.devserver_id),
                 owner: s.owner_username,
                 devserver_id: s.devserver_id,
-                role: s.role,
             }
         })
         .collect();
@@ -260,6 +319,7 @@ fn build_roster(
     own_rows.extend(shared_rows);
 
     Ok(RosterResponse {
+        user_id,
         username: username.to_string(),
         devservers: own_rows,
     })
@@ -292,9 +352,23 @@ mod tests {
     use chrono::Utc;
     use uuid::Uuid;
 
+    fn owner_id() -> Uuid {
+        user_id("alice")
+    }
+
+    fn user_id(username: &str) -> Uuid {
+        match username {
+            "alice" => Uuid::from_u128(1),
+            "bob" => Uuid::from_u128(2),
+            "carol" => Uuid::from_u128(3),
+            _ => Uuid::from_u128(4),
+        }
+    }
+
     fn test_cfg() -> Config {
         Config {
             bind_addr: "127.0.0.1:0".parse().unwrap(),
+            internal_bind_addr: "127.0.0.1:0".parse().unwrap(),
             base_url: "http://localhost:7000".parse().unwrap(),
             devserver_proxy_origin: "https://usr.chan.app".parse().unwrap(),
             devserver_tunnel_origin: "https://tunnel.example.test".parse().unwrap(),
@@ -307,30 +381,47 @@ mod tests {
             .unwrap(),
             internal_auth_token: "x".into(),
             identity_admin_token: String::new(),
-            workspace_admin: None,
-            workspace_gate_secret: "x".into(),
+            workspace_admin: gateway_common::devserver_control_client::DevserverControlClient::new(
+                "http://127.0.0.1:7002".parse().unwrap(),
+                "test-identity-admin-token".into(),
+            )
+            .unwrap(),
+            admission_lease_verifier: {
+                let signer = devserver_control_proto::AdmissionLeaseSigner::from_base64(
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                )
+                .unwrap();
+                devserver_control_proto::AdmissionLeaseVerifier::from_base64(
+                    &signer.verifying_key_base64(),
+                )
+                .unwrap()
+            },
+            entry_signer: gateway_common::devserver_gate::EntrySigner::from_base64(
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            )
+            .unwrap(),
             providers: vec![],
         }
     }
 
     fn owned(id: &str, label: &str) -> OwnedDevserverSummary {
         OwnedDevserverSummary {
+            owner_user_id: owner_id(),
             devserver_id: id.into(),
             label: label.into(),
             grant_count: 0,
         }
     }
 
-    fn share(owner: &str, id: &str, label: &str, role: &str) -> IncomingShare {
+    fn share(owner: &str, id: &str, label: &str) -> IncomingShare {
         IncomingShare {
             grant_id: Uuid::new_v4(),
-            owner_user_id: Uuid::new_v4(),
+            owner_user_id: user_id(owner),
             owner_username: owner.into(),
             owner_display_name: None,
             owner_avatar_url: None,
             devserver_id: id.into(),
             label: label.into(),
-            role: role.into(),
             accepted_at: Utc::now(),
         }
     }
@@ -341,12 +432,16 @@ mod tests {
 
     fn tunnel_on(user: &str, id: &str, proxy_id: &str, proxy_base_url: &str) -> TunnelView {
         serde_json::from_value(serde_json::json!({
+            "registration_id": Uuid::new_v4(),
+            "owner_user_id": user_id(user),
             "user": user,
             "devserver_id": id,
             "peer_addr": null,
             "connected_at": Utc::now().to_rfc3339(),
             "proxy_id": proxy_id,
             "proxy_base_url": proxy_base_url,
+            "admission_lease": "test",
+            "admission_lease_expires_at": (Utc::now() + chrono::Duration::minutes(2)).to_rfc3339(),
         }))
         .expect("tunnel view")
     }
@@ -363,25 +458,23 @@ mod tests {
         let c = "c".repeat(64);
         let r = build_roster(
             &test_cfg(),
+            owner_id(),
             "alice",
             vec![owned(&a, "laptop"), owned(&b, "office")],
-            vec![share("bob", &c, "bob-box", "editor")],
+            vec![share("bob", &c, "bob-box")],
             vec![tunnel("alice", &a), tunnel("bob", &c)],
         )
         .expect("roster");
         assert_eq!(r.username, "alice");
-        let flags: Vec<(&str, bool, &str)> = r
+        assert_eq!(r.user_id, owner_id());
+        let flags: Vec<(&str, bool)> = r
             .devservers
             .iter()
-            .map(|d| (d.label.as_str(), d.online, d.role.as_str()))
+            .map(|d| (d.label.as_str(), d.online))
             .collect();
         assert_eq!(
             flags,
-            vec![
-                ("laptop", true, "owner"),
-                ("office", false, "owner"),
-                ("bob-box", true, "editor"),
-            ]
+            vec![("laptop", true), ("office", false), ("bob-box", true),]
         );
         assert!(r.devservers.iter().take(2).all(|d| d.owner == "alice"));
         assert_eq!(r.devservers[2].owner, "bob");
@@ -396,9 +489,10 @@ mod tests {
         let c = "c".repeat(64);
         let r = build_roster(
             &test_cfg(),
+            owner_id(),
             "alice",
             vec![owned(&a, "laptop"), owned(&b, "office")],
-            vec![share("bob", &c, "bob-box", "editor")],
+            vec![share("bob", &c, "bob-box")],
             vec![
                 tunnel_on("alice", &a, "p1", "https://p1.usr.chan.app"),
                 tunnel_on("bob", &c, "p2", "https://p2.usr.chan.app"),
@@ -427,6 +521,7 @@ mod tests {
         let a = "a".repeat(64);
         let r = build_roster(
             &test_cfg(),
+            owner_id(),
             "alice",
             vec![owned(&a, "laptop")],
             vec![],
@@ -443,6 +538,7 @@ mod tests {
         let f = "f".repeat(64);
         let r = build_roster(
             &test_cfg(),
+            owner_id(),
             "alice",
             vec![],
             vec![],
@@ -458,6 +554,7 @@ mod tests {
         let e = "e".repeat(64);
         let r = build_roster(
             &test_cfg(),
+            owner_id(),
             "alice",
             vec![owned(&a, "laptop")],
             vec![],
@@ -471,7 +568,6 @@ mod tests {
             .expect("live-unrostered row present");
         assert!(extra.online);
         assert_eq!(extra.label, "e".repeat(12));
-        assert_eq!(extra.role, "owner");
         assert_eq!(
             extra.proxy_origin.as_deref(),
             Some(tenant_origin("alice", &e, "p1").as_str())
@@ -485,6 +581,7 @@ mod tests {
         let f = "f".repeat(64);
         let r = build_roster(
             &test_cfg(),
+            owner_id(),
             "alice",
             vec![],
             vec![],
@@ -500,9 +597,10 @@ mod tests {
         let c = "c".repeat(64);
         let r = build_roster(
             &test_cfg(),
+            owner_id(),
             "alice",
             vec![owned(&a, "")],
-            vec![share("bob", &c, "", "viewer")],
+            vec![share("bob", &c, "")],
             vec![],
         )
         .expect("roster");
@@ -514,14 +612,15 @@ mod tests {
     fn sorts_own_then_shared_label_ascending() {
         let r = build_roster(
             &test_cfg(),
+            owner_id(),
             "alice",
             vec![
                 owned(&"a".repeat(64), "zulu"),
                 owned(&"b".repeat(64), "alfa"),
             ],
             vec![
-                share("bob", &"c".repeat(64), "mike", "editor"),
-                share("carol", &"d".repeat(64), "bravo", "viewer"),
+                share("bob", &"c".repeat(64), "mike"),
+                share("carol", &"d".repeat(64), "bravo"),
             ],
             vec![],
         )
@@ -537,6 +636,7 @@ mod tests {
         let a = "a".repeat(64);
         let r = build_roster(
             &test_cfg(),
+            owner_id(),
             "alice",
             vec![owned(&a, "laptop")],
             vec![],
@@ -545,12 +645,14 @@ mod tests {
         .expect("roster");
         let j = serde_json::to_value(&r).unwrap();
         assert_eq!(j["username"], "alice");
+        assert_eq!(j["user_id"], owner_id().to_string());
         let row = &j["devservers"][0];
         assert_eq!(row["owner"], "alice");
+        assert_eq!(row["owner_user_id"], owner_id().to_string());
         assert_eq!(row["devserver_id"], a);
         assert_eq!(row["label"], "laptop");
         assert_eq!(row["online"], true);
-        assert_eq!(row["role"], "owner");
+        assert!(row.get("role").is_none());
         assert_eq!(row["proxy_origin"], tenant_origin("alice", &a, "p1"));
     }
 
@@ -560,6 +662,7 @@ mod tests {
         // must be an explicit null, not a missing key.
         let r = build_roster(
             &test_cfg(),
+            owner_id(),
             "alice",
             vec![owned(&"a".repeat(64), "laptop")],
             vec![],

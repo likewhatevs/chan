@@ -1625,7 +1625,7 @@ fn require_rostered_native_policy(
         .iter()
         .find(|gateway| gateway.id == gateway_id)
         .ok_or_else(|| format!("no gateway {gateway_id}"))?;
-    if row.shared && !gateway.trusts_native(owner, devserver_id) {
+    if row.shared && !gateway.trusts_native(row.owner_user_id, devserver_id) {
         return Err(NATIVE_TRUST_REQUIRED.to_string());
     }
     Ok(row)
@@ -1668,7 +1668,14 @@ async fn grant_devserver_native_trust(
     if !row.shared {
         return Err("owned devservers do not require native trust".to_string());
     }
-    config::set_native_trust(&state.store, &gateway_id, &owner, &devserver_id, true)?;
+    config::set_native_trust(
+        &state.store,
+        &gateway_id,
+        row.owner_user_id,
+        &owner,
+        &devserver_id,
+        true,
+    )?;
     state.bump_native_policy_generation(id);
     signal_devserver_policy_change(app, state);
     Ok(())
@@ -1690,7 +1697,14 @@ async fn revoke_devserver_native_trust(
     if !row.shared {
         return Err("owned devservers do not carry revocable native trust".to_string());
     }
-    config::set_native_trust(&state.store, &gateway_id, &owner, &devserver_id, false)?;
+    config::set_native_trust(
+        &state.store,
+        &gateway_id,
+        row.owner_user_id,
+        &owner,
+        &devserver_id,
+        false,
+    )?;
     state.bump_native_policy_generation(id);
     teardown_devserver_connection(app, state, id);
     signal_devserver_policy_change(app, state);
@@ -2405,7 +2419,11 @@ async fn rostered_conn<R: tauri::Runtime>(
     let gateway = match devserver::gateway_conn(
         &discovery,
         pat.secret,
-        Some((owner.to_string(), devserver_id.to_string())),
+        Some(devserver::GatewayEntryTarget {
+            owner_user_id: row.owner_user_id,
+            owner: owner.to_string(),
+            devserver_id: devserver_id.to_string(),
+        }),
     )
     .await
     {
@@ -3978,6 +3996,7 @@ fn reload_devserver_window_from_feed(
     // entry mint), so the reload is fire-and-forget: the command returns
     // "handled" and the task navigates when the URL lands.
     let app = app.clone();
+    let label = label.to_string();
     let record = record.clone();
     tauri::async_runtime::spawn(async move {
         let url = match devserver::window_navigation_url(&conn, &record).await {
@@ -3991,6 +4010,12 @@ fn reload_devserver_window_from_feed(
                 return;
             }
         };
+        if let Err(e) =
+            devserver::install_gateway_webview_session(&app, &conn, Some(label.as_str()))
+        {
+            tracing::warn!(window = %record.window_id, error = %e, "reload: installing gateway WebView session failed");
+            return;
+        }
         let result = match serve::retarget_watched_remote_window(&app, &url, &record) {
             Ok(true) => Ok(()),
             Ok(false) => serve::open_watched_remote_window(&app, &url, &conn.name, &record),
@@ -8052,11 +8077,11 @@ mod tests {
             gateway_id,
             discovery.clone(),
             vec![gateway::RosterDevserver {
+                owner_user_id: uuid::Uuid::from_u128(2),
                 owner: owner.into(),
                 devserver_id: devserver_id.clone(),
                 label: "shared".into(),
                 online: true,
-                role: "editor".into(),
                 shared: true,
                 proxy_origin: Some("https://bob--d.p1.devserver.example.test".into()),
             }],
@@ -8069,6 +8094,7 @@ mod tests {
         config::set_native_trust(
             &state.store,
             gateway_id,
+            uuid::Uuid::from_u128(3),
             "someone-else",
             &devserver_id,
             true,
@@ -8079,7 +8105,15 @@ mod tests {
             NATIVE_TRUST_REQUIRED,
             "trust for another owner must not widen the grant"
         );
-        config::set_native_trust(&state.store, gateway_id, owner, &devserver_id, true).unwrap();
+        config::set_native_trust(
+            &state.store,
+            gateway_id,
+            uuid::Uuid::from_u128(2),
+            owner,
+            &devserver_id,
+            true,
+        )
+        .unwrap();
         assert!(require_rostered_native_policy(&state, gateway_id, owner, &devserver_id).is_ok());
 
         state
@@ -8147,11 +8181,11 @@ mod tests {
                 roster_url: Some(format!("{origin}/desktop/v1/devservers")),
             },
             vec![gateway::RosterDevserver {
+                owner_user_id: uuid::Uuid::from_u128(1),
                 owner: "alice".into(),
                 devserver_id: ds64.clone(),
                 label: String::new(),
                 online: false,
-                role: "owner".into(),
                 shared: false,
                 proxy_origin: None,
             }],

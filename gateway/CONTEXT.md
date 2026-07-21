@@ -76,13 +76,17 @@ The owner PAT (`chan_pat_*`) that authorizes a devserver to register over the tu
 _Avoid_: tunnel-name, api-key
 
 **devserver_gate**:
-The host-only JWT-cookie access gate on the wildcard host. Gates per devserver: the `drv` claim is the devserver, the cookie is scoped `Path=/`, and there is one access check. Renamed from workspace_gate.
+The host-only opaque browser-session gate on the wildcard host. Sessions are
+proxy-local, scoped to one devserver and `Path=/`, and capped at one hour.
+Renamed from workspace_gate.
 _Avoid_: workspace_gate, auth-cookie
 
 **devserver grant**:
 A profile record that a caller may access an owner's devserver, meaning its whole library. The sharing unit. Replaces the per-workspace grant.
 _Avoid_: workspace-grant, share, ACL
 
-**entry token**:
-The short-lived `?t=` JWT that identity mints after a devserver access check, which devserver-proxy exchanges for the `devserver_gate` session cookie.
+**entry credential**:
+The short-lived, single-use Ed25519 credential that identity mints after a
+devserver access check. The browser submits it in the body of the fixed
+`POST /_chan/entry` exchange; it never belongs in a URL.
 _Avoid_: handoff-token

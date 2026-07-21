@@ -30,12 +30,15 @@ sudo apt install ./chan-gateway-admin_*.deb
 
 | Name                      | Default                  | Notes              |
 |---------------------------|--------------------------|--------------------|
-| `CHAN_ADMIN_TOKEN`        | none                     | Bearer for both    |
-|                           |                          | services. Required.|
+| `CHAN_ADMIN_PROFILE_TOKEN` | none                    | profile-service operator bearer |
+| `CHAN_ADMIN_IDENTITY_TOKEN` | none                   | identity-service operator bearer |
+| `CHAN_ADMIN_OPERATOR_TOKEN` | none                   | devserver-control operator bearer |
 | `CHAN_ADMIN_PROFILE_URL`  | `http://127.0.0.1:7001`  | profile-service    |
-| `CHAN_ADMIN_WORKSPACE_URL`    | `http://127.0.0.1:7003`  | devserver-control      |
+| `CHAN_ADMIN_IDENTITY_URL` | `http://127.0.0.1:7000`  | identity-service   |
+| `CHAN_ADMIN_WORKSPACE_URL` | `http://127.0.0.1:7003` | devserver-control  |
 
-Single-token deployments set `CHAN_ADMIN_TOKEN` to a value that matches both `PROFILE_ADMIN_TOKEN` (profile-service) and `DEVSERVER_ADMIN_TOKEN` (devserver-control). Deployments that rotate the two service tokens independently pass `--token` per invocation, with the value matching the service that invocation talks to.
+Each bearer is scoped to one service. `--token` is retained as a compatibility
+alias for `--operator-token`; it is not sent to profile or identity.
 
 ## Commands
 

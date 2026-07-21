@@ -1,7 +1,7 @@
-# identity-service: public OAuth2 sign-in at id.<domain>, serves the dashboard
-# SPA, mints workspace-gate entry tokens. Postgres-backed sessions (migrates on
-# boot), calls profile over HTTP. Refuses to start with no OAuth provider set
-# (the Secret carries placeholder GitHub creds for boot).
+# identity-service: public OAuth2 sign-in at id.<domain> on :7000 and a
+# internal token-validation/operator API on :7004. The public Service never exposes
+# the internal listener. Postgres-backed sessions are created by the migration
+# Job. Calls profile over HTTP. Refuses to start with no OAuth provider set.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -20,16 +20,60 @@ spec:
         app.kubernetes.io/name: identity
         app.kubernetes.io/part-of: chan-gateway
     spec:
+      automountServiceAccountToken: false
+      initContainers:
+        - name: wait-for-database-migrations
+          image: postgres:16
+          command:
+            - sh
+            - -ec
+            - |
+              case "$EXPECTED_SQLX_MIGRATION" in ''|*[!0-9]*) exit 1 ;; esac
+              case "$DATABASE_ROLE_POLICY_VERSION" in ''|*[!0-9]*) exit 1 ;; esac
+              until [ "$(psql "$DATABASE_URL" --no-password -Atqc "SELECT migration_version = $EXPECTED_SQLX_MIGRATION AND role_policy_version = $DATABASE_ROLE_POLICY_VERSION FROM public.chan_gateway_deployment_state WHERE singleton")" = t ]; do
+                sleep 2
+              done
+          env:
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: chan-gateway-identity, key: DATABASE_URL } }
+            - name: EXPECTED_SQLX_MIGRATION
+              valueFrom: { configMapKeyRef: { name: chan-gateway-config, key: EXPECTED_SQLX_MIGRATION } }
+            - name: DATABASE_ROLE_POLICY_VERSION
+              valueFrom: { configMapKeyRef: { name: chan-gateway-config, key: DATABASE_ROLE_POLICY_VERSION } }
       containers:
         - name: identity
           # set <version> to the release tag you are deploying (see README.md).
           image: fiorix/chan-gateway-identity:<version>
-          # BIND_ADDR=0.0.0.0:7000 baked in; URLs + tokens from ConfigMap/Secret.
+          # Public and internal binds are baked into the image. NetworkPolicy
+          # independently restricts edge -> :7000 and internal consumers -> :7004.
           envFrom:
             - configMapRef: { name: chan-gateway-config }
-            - secretRef: { name: chan-gateway-secrets }
+          env:
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: chan-gateway-identity, key: DATABASE_URL } }
+            - { name: CHAN_GATEWAY_MIGRATIONS, value: external }
+            - { name: INTERNAL_BIND_ADDR, value: "0.0.0.0:7004" }
+            - name: PROFILE_AUTH_TOKEN
+              valueFrom: { secretKeyRef: { name: chan-gateway-identity, key: PROFILE_AUTH_TOKEN } }
+            - name: IDENTITY_INTERNAL_TOKEN
+              valueFrom: { secretKeyRef: { name: chan-gateway-identity, key: IDENTITY_INTERNAL_TOKEN } }
+            - name: DEVSERVER_ADMISSION_SIGNING_KEY
+              valueFrom: { secretKeyRef: { name: chan-gateway-identity, key: DEVSERVER_ADMISSION_SIGNING_KEY } }
+            - name: DEVSERVER_ADMISSION_VERIFYING_KEYS
+              valueFrom: { secretKeyRef: { name: chan-gateway-identity, key: DEVSERVER_ADMISSION_VERIFYING_KEYS } }
+            - name: DEVSERVER_ENTRY_SIGNING_KEY
+              valueFrom: { secretKeyRef: { name: chan-gateway-identity, key: DEVSERVER_ENTRY_SIGNING_KEY } }
+            - name: IDENTITY_ADMIN_TOKEN
+              valueFrom: { secretKeyRef: { name: chan-gateway-identity, key: IDENTITY_ADMIN_TOKEN } }
+            - name: DEVSERVER_IDENTITY_ADMIN_TOKEN
+              valueFrom: { secretKeyRef: { name: chan-gateway-identity, key: DEVSERVER_IDENTITY_ADMIN_TOKEN } }
+            - name: GITHUB_CLIENT_ID
+              valueFrom: { secretKeyRef: { name: chan-gateway-identity, key: GITHUB_CLIENT_ID } }
+            - name: GITHUB_CLIENT_SECRET
+              valueFrom: { secretKeyRef: { name: chan-gateway-identity, key: GITHUB_CLIENT_SECRET } }
           ports:
-            - containerPort: 7000
+            - { name: public, containerPort: 7000 }
+            - { name: internal, containerPort: 7004 }
           readinessProbe:
             httpGet: { path: /healthz, port: 7000 }
             initialDelaySeconds: 3
@@ -46,10 +90,25 @@ metadata:
   labels:
     app.kubernetes.io/part-of: chan-gateway
 spec:
-  # Public surface in front of a TLS terminator that routes id.<domain> here.
+  # Public surface only. Never add the proxy-only internal port here.
   selector:
     app.kubernetes.io/name: identity
   ports:
-    - name: http
+    - name: public
       port: 7000
       targetPort: 7000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chan-gateway-identity-internal
+  labels:
+    app.kubernetes.io/part-of: chan-gateway
+spec:
+  # Cluster-internal discovery for devserver-proxy and operator APIs.
+  selector:
+    app.kubernetes.io/name: identity
+  ports:
+    - name: internal
+      port: 7004
+      targetPort: 7004

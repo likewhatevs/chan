@@ -146,15 +146,21 @@ sequenceDiagram
 
 ### Driver loop
 
-One task per registered tunnel. Owns the yamux `Connection`. Three concerns merged into a single `poll_fn`:
+One task per registered tunnel owns the yamux `Connection`. Its concerns are merged into a single `poll_fn`:
 
 - Shutdown takes priority. The `oneshot::Receiver` resolves either on explicit `()` send or sender drop (the registry drops it on eviction). Either signal exits the loop and `poll_close`s yamux.
 - Drain pending `OpenRequest`s from the public side into a local queue and call `poll_new_outbound`; reply with the new substream over the oneshot in the request.
-- Poll for inbound substreams. The protocol does not use them; any inbound substream is logged and dropped (yamux RSTs it on the next poll).
+- Poll for the one client-opened control shape: admission-lease refresh. At most one refresh is pending; additional inbound streams are dropped. Refresh is handled outside the driver poll so identity validation does not stall public outbound stream allocation.
 
 On exit the driver replies `OpenError::Disconnected` to any open requests still queued, then deregisters itself if it still owns the registry slot.
 
 `poll_fn` rather than `select!` because two of the three branches need `&mut conn` and `select!` over multiple `poll_fn`s holding that borrow conflicts.
+
+### Admission authority and lease refresh
+
+Controller-backed embedding uses `serve_tunnel_listener_with_admission`. Identity validation returns an opaque signed admission lease bound to `(owner_user_id, user, devserver_id, registration_id, proxy_id)`. Before `HelloAck::Ok`, `RegistrationAdmission::admit_registration` asks the control plane to verify the lease and reserve capacity. A synchronous admission epoch is checked immediately before and after registry insertion; losing control invalidates the epoch, so an already-admitted but stalled handshake cannot register after fail-closed eviction.
+
+The lease expires independently of TCP/yamux liveness. Before expiry, the client opens an inbound refresh stream and sends its PAT in `LeaseRefreshRequest`. One absolute 10-second deadline covers reading the frame, identity revalidation, registry update, and response write. The refreshed identity must preserve the existing user id, username, and devserver id, and must return a new lease for the same registration. The PAT is dropped after validation and every related `Debug` surface is redacted. A successful registry update publishes `RegistryEvent::LeaseRefresh`; devserver-proxy forwards only the signed lease to the controller as a generation-contiguous refresh. Failed refreshes can retry, but reaching lease expiry closes and deregisters the tunnel.
 
 ### Registry
 
@@ -209,7 +215,9 @@ Server-specific notes:
 
 ## 6. Trust boundaries / validation
 
-- **Token authentication**: the consumer's `Validator` impl is the only authority. This crate calls it; on success it gets a `Validated { user_id, username, scopes }`. Order is fixed: validator runs *before* the 200 response so 401 / 403 propagate to the client distinctly. After 200, policy failures are reported via `HelloAck::Refused` instead. The validator contract (documented on the trait) forbids implementations from logging or echoing the token: the listener logs `ServerError` values, so anything echoed lands in operator journals.
+- **Token authentication**: the consumer's `Validator` impl is the identity authority. This crate calls it; on success it gets a redacted `Validated` carrying immutable ids, scopes, the per-tunnel assertion key, and (in controller deployments) a registration-bound admission lease with expiry. Order is fixed: validator runs *before* the 200 response so 401 / 403 propagate distinctly. After 200, policy failures are reported via `HelloAck::Refused`. The validator contract forbids logging, echoing, or persisting the token; listener error values are safe to log only because this seam honors that contract.
+- **Control-plane admission**: `RegistrationAdmission` is the fleet-capacity and liveness authority. The proxy must obtain a current permit before acknowledging or inserting a tunnel. Control loss invalidates permits and refuses new admissions; there is no local fallback in the production embedding.
+- **Residual assigned-node trust**: an honest proxy does not retain the PAT beyond validation and redacts all related debug surfaces, but the proxy process necessarily sees the raw PAT during initial validation and refresh. A fully compromised assigned node can capture and reuse it until identity revokes it or it expires. Admission leases are not a TEE boundary; node isolation and PAT rotation/revocation remain required incident response.
 - **Tunnel scope**: the validator returns scopes; the listener refuses tokens missing `TUNNEL_SCOPE` (`"tunnel"`) with 403.
 - **Public scope**: REMOVED. The tunnel is always authenticated -- there is no anonymous-readable path -- so `TUNNEL_PUBLIC_SCOPE` / `Hello.public` / `MissingPublicScope` are gone. The gateway authorizes a viewer with one `devserver_access(owner, devserver, caller)` check (a grant is the whole library); see the gateway's `devserver-proxy/design.md` and ADR-0001.
 - **Username validation** (`is_valid_username`): defense-in-depth. The username flows into public routing; if the upstream identity service ever emits `..`, slashes, or whitespace, the public side would mis-route. The handshake refuses any username that wouldn't be URL-safe.

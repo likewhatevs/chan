@@ -1,9 +1,8 @@
 //! Integration tests for devserver-proxy.
 //!
-//! No Postgres in this suite: devserver-proxy holds no sessions and
-//! no DB state. The proxy gate is driven by devserver-gate JWTs
-//! (HS256, shared `DEVSERVER_GATE_SECRET`), and tests mint those
-//! directly via `gateway_common::devserver_gate`.
+//! No Postgres in this suite: browser sessions and consumed entry ids are
+//! proxy-local bounded state. Tests mint identity-style Ed25519 entry
+//! credentials directly via `gateway_common::devserver_gate`.
 //!
 //! Tunnel registrations exercise the real chan-tunnel handshake
 //! (h2c POST, Hello/HelloAck, yamux) against an in-process tunnel
@@ -38,10 +37,19 @@ use devserver_proxy::config::{Config, DEFAULT_WS_IDLE_TIMEOUT};
 use devserver_proxy::http as dp_http;
 use devserver_proxy::identity_validator::CapturingValidator;
 use devserver_proxy::registry::Registry;
+use devserver_proxy::session_store::SessionStore;
 
-const DEVSERVER_GATE_SECRET: &[u8] = b"test-devserver-gate-secret-32-bytes-aa";
 const APEX_HOST: &str = "devserver.chan.app";
 const WILDCARD_SUFFIX: &str = ".devserver.chan.app";
+
+fn test_entry_signer() -> devserver_gate::EntrySigner {
+    devserver_gate::EntrySigner::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap()
+}
+
+fn test_entry_verifiers() -> devserver_gate::EntryVerifierRing {
+    let signer = test_entry_signer();
+    devserver_gate::EntryVerifierRing::from_base64_list(&signer.verifying_key_base64()).unwrap()
+}
 
 /// (user_id, username, devserver_id, scopes) row stored per-token in
 /// the stub. Aliased so clippy's `type_complexity` lint is happy on the
@@ -92,6 +100,8 @@ impl Validator for StubValidator {
                 gateway_assertion_key: Some(
                     chan_tunnel_proto::gateway_assertion::derive_assertion_key(token),
                 ),
+                admission_lease: None,
+                admission_lease_expires_at: None,
             }),
             None => Err(ServerError::InvalidToken),
         }
@@ -103,6 +113,7 @@ struct TestApp {
     registry: Registry,
     tunnel_addr: SocketAddr,
     stub: StubValidator,
+    sessions: SessionStore,
     _readiness: watch::Sender<bool>,
 }
 
@@ -128,7 +139,8 @@ impl TestApp {
             identity_url: "http://127.0.0.1:7000/".parse().unwrap(),
             identity_auth_token: "unused-in-tests".into(),
             dashboard_url: "https://id.chan.app/workspaces".into(),
-            workspace_gate_secret: std::str::from_utf8(DEVSERVER_GATE_SECRET).unwrap().into(),
+            identity_origin: CanonicalOrigin::parse("https://id.chan.app").unwrap(),
+            entry_verifiers: test_entry_verifiers(),
             control_url: "http://127.0.0.1:7101/".parse().unwrap(),
             proxy_token: "unused-control-token".into(),
             proxy_id: ProxyId::parse("p1").unwrap(),
@@ -137,11 +149,15 @@ impl TestApp {
             max_request_bytes: None,
             request_timeout: None,
             ws_idle_timeout,
+            session_max_active: 10_000,
+            session_lifetime: std::time::Duration::from_secs(3600),
+            entry_replay_max_active: 10_000,
             forwarded_proto: "https".into(),
         });
 
         let (readiness, readiness_rx) = watch::channel(true);
-        let router = dp_http::router(cfg, registry.clone(), readiness_rx);
+        let sessions = SessionStore::new(cfg.session_max_active, cfg.session_lifetime);
+        let router = dp_http::router(cfg, registry.clone(), readiness_rx, sessions.clone());
 
         // Real tunnel listener fed by a stub validator wrapped in
         // CapturingValidator (mirrors production wiring).
@@ -169,6 +185,7 @@ impl TestApp {
             registry,
             tunnel_addr,
             stub,
+            sessions,
             _readiness: readiness,
         }
     }
@@ -308,41 +325,67 @@ async fn send_host(
     (status, hdrs, bytes)
 }
 
-/// Mint a devserver-gate token of the requested shape. Tests use this to
-/// build URLs and cookies the proxy gate will accept (or to forge
-/// near-misses for the negative cases).
-fn mint(typ: devserver_gate::TokenType, sub: Uuid, drv: &str, aud: &str) -> String {
-    mint_role(typ, sub, "owner", drv, aud)
-}
-
-fn mint_role(
-    typ: devserver_gate::TokenType,
-    sub: Uuid,
-    role: &str,
-    drv: &str,
-    aud: &str,
-) -> String {
-    mint_identity(typ, sub, role, drv, aud, Default::default())
-}
-
-fn mint_identity(
-    typ: devserver_gate::TokenType,
-    sub: Uuid,
-    role: &str,
-    drv: &str,
-    aud: &str,
-    identity: devserver_gate::CallerIdentity,
-) -> String {
-    match typ {
-        devserver_gate::TokenType::Entry => {
-            devserver_gate::encode_entry(DEVSERVER_GATE_SECRET, sub, role, drv, aud, identity)
-                .unwrap()
-        }
-        devserver_gate::TokenType::Session => {
-            devserver_gate::encode_session(DEVSERVER_GATE_SECRET, sub, role, drv, aud, identity)
-                .unwrap()
-        }
+async fn send_host_body(
+    router: &Router,
+    method: Method,
+    host: &str,
+    uri: &str,
+    headers: &[(&str, &str)],
+    body: impl Into<Body>,
+) -> (StatusCode, HeaderMap, Bytes) {
+    let mut builder = Request::builder().method(method).uri(uri);
+    builder = builder.header(header::HOST, host);
+    for (k, v) in headers {
+        builder = builder.header(*k, *v);
     }
+    let res = router
+        .clone()
+        .oneshot(builder.body(body.into()).unwrap())
+        .await
+        .unwrap();
+    let status = res.status();
+    let hdrs = res.headers().clone();
+    let bytes = to_bytes(res.into_body(), 1 << 20).await.unwrap();
+    (status, hdrs, bytes)
+}
+
+async fn exchange_entry(
+    router: &Router,
+    host: &str,
+    credential: &str,
+) -> (StatusCode, HeaderMap, Bytes) {
+    let body: String = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("credential", credential)
+        .finish();
+    send_host_body(
+        router,
+        Method::POST,
+        host,
+        devserver_gate::ENTRY_EXCHANGE_PATH,
+        &[
+            ("origin", "https://id.chan.app"),
+            ("content-type", "application/x-www-form-urlencoded"),
+        ],
+        body,
+    )
+    .await
+}
+
+fn mint_for_owner(sub: Uuid, owner_user_id: Uuid, drv: &str, aud: &str, next_path: &str) -> String {
+    devserver_gate::encode_entry(
+        &test_entry_signer(),
+        sub,
+        owner_user_id,
+        drv,
+        aud,
+        "p1",
+        next_path,
+    )
+    .unwrap()
+}
+
+fn mint(sub: Uuid, drv: &str, aud: &str) -> String {
+    mint_for_owner(sub, sub, drv, aud, "/blog/")
 }
 
 fn host_for(user: &str) -> String {
@@ -364,26 +407,52 @@ const DS_AMB2: &str = "9999aaaa8888222222222222222222222222222222222222222222222
 /// A `Cookie` header value carrying a valid session token for
 /// `(sub, workspace)` on `host`. Every reverse-proxy request must pass
 /// the gate now that there is no un-gated public path.
-fn session_cookie(sub: Uuid, workspace: &str, host: &str) -> String {
-    let session = mint(devserver_gate::TokenType::Session, sub, workspace, host);
-    format!("devserver_gate={session}")
+fn session_cookie(app: &TestApp, sub: Uuid, workspace: &str, host: &str) -> String {
+    session_cookie_for_owner(app, sub, sub, workspace, host)
 }
 
-fn session_cookie_role(sub: Uuid, role: &str, workspace: &str, host: &str) -> String {
-    let session = mint_role(
-        devserver_gate::TokenType::Session,
-        sub,
-        role,
-        workspace,
-        host,
-    );
-    format!("devserver_gate={session}")
+fn session_cookie_for_owner(
+    app: &TestApp,
+    sub: Uuid,
+    owner_user_id: Uuid,
+    workspace: &str,
+    host: &str,
+) -> String {
+    format!(
+        "devserver_gate={}",
+        opaque_session(app, sub, owner_user_id, workspace, host)
+    )
 }
 
-fn session_and_csrf_cookie(sub: Uuid, workspace: &str, host: &str, csrf: &str) -> String {
+fn opaque_session(
+    app: &TestApp,
+    sub: Uuid,
+    owner_user_id: Uuid,
+    workspace: &str,
+    host: &str,
+) -> String {
+    let issued = app
+        .sessions
+        .issue(devserver_proxy::session_store::SessionPrincipal {
+            subject_user_id: sub,
+            owner_user_id,
+            devserver_id: workspace.to_string(),
+            audience: host.to_string(),
+        })
+        .unwrap();
+    issued.id().to_string()
+}
+
+fn session_and_csrf_cookie(
+    app: &TestApp,
+    sub: Uuid,
+    workspace: &str,
+    host: &str,
+    csrf: &str,
+) -> String {
     format!(
         "{}; devserver_csrf={csrf}",
-        session_cookie(sub, workspace, host)
+        session_cookie(app, sub, workspace, host)
     )
 }
 
@@ -427,7 +496,8 @@ async fn apex_readyz_reflects_control_readiness() {
         identity_url: "http://127.0.0.1:7000/".parse().unwrap(),
         identity_auth_token: "unused-in-tests".into(),
         dashboard_url: "https://id.chan.app/workspaces".into(),
-        workspace_gate_secret: std::str::from_utf8(DEVSERVER_GATE_SECRET).unwrap().into(),
+        identity_origin: CanonicalOrigin::parse("https://id.chan.app").unwrap(),
+        entry_verifiers: test_entry_verifiers(),
         control_url: "http://127.0.0.1:7101/".parse().unwrap(),
         proxy_token: "unused-control-token".into(),
         proxy_id: ProxyId::parse("p1").unwrap(),
@@ -436,10 +506,14 @@ async fn apex_readyz_reflects_control_readiness() {
         max_request_bytes: None,
         request_timeout: None,
         ws_idle_timeout: DEFAULT_WS_IDLE_TIMEOUT,
+        session_max_active: 10_000,
+        session_lifetime: std::time::Duration::from_secs(3600),
+        entry_replay_max_active: 10_000,
         forwarded_proto: "https".into(),
     });
     let (_readiness, readiness_rx) = watch::channel(false);
-    let unready = dp_http::router(test_cfg, registry, readiness_rx);
+    let sessions = SessionStore::new(test_cfg.session_max_active, test_cfg.session_lifetime);
+    let unready = dp_http::router(test_cfg, registry, readiness_rx, sessions);
     let (status, _, _) = send_host(&unready, Method::GET, APEX_HOST, "/readyz", &[]).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     app.cleanup().await;
@@ -544,15 +618,8 @@ async fn entry_token_mints_session_cookie() {
     app.register_tunnel("alice", "blog", uid, upstream).await;
 
     let host = host_for("alice");
-    let token = mint(devserver_gate::TokenType::Entry, uid, "blog", &host);
-    let (s, hdrs, _) = send_host(
-        &app.router,
-        Method::GET,
-        &host,
-        &format!("/blog/?t={token}"),
-        &[],
-    )
-    .await;
+    let token = mint(uid, "blog", &host);
+    let (s, hdrs, _) = exchange_entry(&app.router, &host, &token).await;
     assert_eq!(s, StatusCode::SEE_OTHER);
     let loc = hdrs.get(header::LOCATION).unwrap().to_str().unwrap();
     assert_eq!(loc, "/blog/");
@@ -582,21 +649,156 @@ async fn entry_token_mints_session_cookie() {
 }
 
 #[tokio::test]
-async fn entry_token_drops_t_param_but_keeps_other_query() {
+async fn entry_exchange_is_single_use_and_never_accepts_url_bearers() {
     let app = TestApp::new().await;
     let uid = Uuid::new_v4();
     app.register_tunnel("alice", "blog", uid, Router::new())
         .await;
     let host = host_for("alice");
-    let token = mint(devserver_gate::TokenType::Entry, uid, "blog", &host);
-    let (_, hdrs, _) = send_host(
+    let credential = mint(uid, "blog", &host);
+
+    let (first, headers, _) = exchange_entry(&app.router, &host, &credential).await;
+    assert_eq!(first, StatusCode::SEE_OTHER);
+    let location = headers.get(header::LOCATION).unwrap().to_str().unwrap();
+    assert_eq!(location, "/blog/");
+    assert!(!location.contains(&credential));
+
+    let (replay, _, _) = exchange_entry(&app.router, &host, &credential).await;
+    assert_eq!(replay, StatusCode::NOT_FOUND);
+    let (query, _, _) = send_host(
         &app.router,
         Method::GET,
         &host,
-        &format!("/blog/page?a=1&t={token}&b=2"),
+        &format!("/blog/?t={credential}"),
         &[],
     )
     .await;
+    assert_eq!(query, StatusCode::NOT_FOUND);
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn entry_exchange_rejects_origin_content_type_and_form_ambiguity() {
+    let app = TestApp::new().await;
+    let uid = Uuid::new_v4();
+    app.register_tunnel("alice", "blog", uid, Router::new())
+        .await;
+    let host = host_for("alice");
+    let credential = mint(uid, "blog", &host);
+    let encoded = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("credential", &credential)
+        .finish();
+
+    for (headers, want) in [
+        (
+            vec![("content-type", "application/x-www-form-urlencoded")],
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            vec![
+                ("origin", "null"),
+                ("content-type", "application/x-www-form-urlencoded"),
+            ],
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            vec![
+                ("origin", "https://evil.example"),
+                ("content-type", "application/x-www-form-urlencoded"),
+            ],
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            vec![
+                ("origin", "https://id.chan.app"),
+                ("origin", "https://id.chan.app"),
+                ("content-type", "application/x-www-form-urlencoded"),
+            ],
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            vec![("origin", "https://id.chan.app")],
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        ),
+        (
+            vec![
+                ("origin", "https://id.chan.app"),
+                (
+                    "content-type",
+                    "application/x-www-form-urlencoded; charset=utf-8",
+                ),
+            ],
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        ),
+        (
+            vec![
+                ("origin", "https://id.chan.app"),
+                ("content-type", "application/x-www-form-urlencoded"),
+                ("content-type", "application/x-www-form-urlencoded"),
+            ],
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        ),
+    ] {
+        let (status, _, _) = send_host_body(
+            &app.router,
+            Method::POST,
+            &host,
+            devserver_gate::ENTRY_EXCHANGE_PATH,
+            &headers,
+            encoded.clone(),
+        )
+        .await;
+        assert_eq!(status, want, "headers {headers:?}");
+    }
+
+    for malformed in [
+        "",
+        "credential=",
+        "other=x",
+        "credential=a&credential=b",
+        "credential=a&other=b",
+    ] {
+        let (status, _, _) = send_host_body(
+            &app.router,
+            Method::POST,
+            &host,
+            devserver_gate::ENTRY_EXCHANGE_PATH,
+            &[
+                ("origin", "https://id.chan.app"),
+                ("content-type", "application/x-www-form-urlencoded"),
+            ],
+            malformed,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body {malformed:?}");
+    }
+
+    let oversized = format!("credential={}", "x".repeat(8193));
+    let (status, _, _) = send_host_body(
+        &app.router,
+        Method::POST,
+        &host,
+        devserver_gate::ENTRY_EXCHANGE_PATH,
+        &[
+            ("origin", "https://id.chan.app"),
+            ("content-type", "application/x-www-form-urlencoded"),
+        ],
+        oversized,
+    )
+    .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn entry_token_redirects_only_to_signed_clean_path() {
+    let app = TestApp::new().await;
+    let uid = Uuid::new_v4();
+    app.register_tunnel("alice", "blog", uid, Router::new())
+        .await;
+    let host = host_for("alice");
+    let token = mint_for_owner(uid, uid, "blog", &host, "/blog/page?a=1&b=2");
+    let (_, hdrs, _) = exchange_entry(&app.router, &host, &token).await;
     let loc = hdrs.get(header::LOCATION).unwrap().to_str().unwrap();
     assert_eq!(loc, "/blog/page?a=1&b=2");
     app.cleanup().await;
@@ -611,20 +813,8 @@ async fn entry_token_for_wrong_devserver_is_404() {
     app.register_tunnel("alice", "blog", uid, Router::new())
         .await;
     let host = host_for("alice");
-    let token = mint(
-        devserver_gate::TokenType::Entry,
-        uid,
-        "stale-devserver",
-        &host,
-    );
-    let (s, _, _) = send_host(
-        &app.router,
-        Method::GET,
-        &host,
-        &format!("/blog/?t={token}"),
-        &[],
-    )
-    .await;
+    let token = mint(uid, "stale-devserver", &host);
+    let (s, _, _) = exchange_entry(&app.router, &host, &token).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
     app.cleanup().await;
 }
@@ -637,20 +827,8 @@ async fn entry_token_for_wrong_host_is_404() {
         .await;
     // Token minted with aud=bob.devserver.chan.app, presented on
     // alice.devserver.chan.app.
-    let bad_token = mint(
-        devserver_gate::TokenType::Entry,
-        uid,
-        "blog",
-        "bob.devserver.chan.app",
-    );
-    let (s, _, _) = send_host(
-        &app.router,
-        Method::GET,
-        &host_for("alice"),
-        &format!("/blog/?t={bad_token}"),
-        &[],
-    )
-    .await;
+    let bad_token = mint(uid, "blog", "bob.devserver.chan.app");
+    let (s, _, _) = exchange_entry(&app.router, &host_for("alice"), &bad_token).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
     app.cleanup().await;
 }
@@ -663,7 +841,7 @@ async fn session_cookie_admits() {
     app.register_tunnel("alice", "blog", uid, upstream).await;
 
     let host = host_for("alice");
-    let session = mint(devserver_gate::TokenType::Session, uid, "blog", &host);
+    let session = opaque_session(&app, uid, uid, "blog", &host);
 
     let proxy_addr = serve_router_real(app.router.clone()).await;
     let res = reqwest::Client::new()
@@ -679,6 +857,40 @@ async fn session_cookie_admits() {
 }
 
 #[tokio::test]
+async fn credentialed_response_denies_ambient_browser_authority() {
+    let app = TestApp::new().await;
+    let uid = Uuid::new_v4();
+    let upstream = Router::new().fallback(|| async {
+        (
+            [(header::CONTENT_SECURITY_POLICY, "default-src 'self'")],
+            "private",
+        )
+    });
+    app.register_tunnel("alice", "blog", uid, upstream).await;
+
+    let host = host_for("alice");
+    let (status, headers, _) = send_host(
+        &app.router,
+        Method::GET,
+        &host,
+        "/blog/",
+        &[("cookie", &session_cookie(&app, uid, "blog", &host))],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let policies: Vec<&str> = headers
+        .get_all("content-security-policy")
+        .iter()
+        .map(|value| value.to_str().unwrap())
+        .collect();
+    assert_eq!(policies, ["default-src 'self'", "frame-ancestors 'none'"]);
+    assert_eq!(headers.get("x-content-type-options").unwrap(), "nosniff");
+    assert_eq!(headers.get("referrer-policy").unwrap(), "no-referrer");
+    assert_eq!(headers.get("cache-control").unwrap(), "private, no-store");
+    app.cleanup().await;
+}
+
+#[tokio::test]
 async fn session_cookie_for_wrong_devserver_is_404() {
     let app = TestApp::new().await;
     let uid = Uuid::new_v4();
@@ -687,12 +899,7 @@ async fn session_cookie_for_wrong_devserver_is_404() {
     app.register_tunnel("alice", "blog", uid, Router::new())
         .await;
     let host = host_for("alice");
-    let session = mint(
-        devserver_gate::TokenType::Session,
-        uid,
-        "stale-devserver",
-        &host,
-    );
+    let session = opaque_session(&app, uid, uid, "stale-devserver", &host);
     let (s, _, _) = send_host(
         &app.router,
         Method::GET,
@@ -720,15 +927,8 @@ async fn entry_token_for_grantee_mints_session_carrying_grantee_sub() {
 
     let host = host_for("alice");
     // Bob is an accepted grantee; identity mints sub = bob.
-    let entry = mint(devserver_gate::TokenType::Entry, bob, "blog", &host);
-    let (s, hdrs, _) = send_host(
-        &app.router,
-        Method::GET,
-        &host,
-        &format!("/blog/?t={entry}"),
-        &[],
-    )
-    .await;
+    let entry = mint_for_owner(bob, alice, "blog", &host, "/blog/");
+    let (s, hdrs, _) = exchange_entry(&app.router, &host, &entry).await;
     assert_eq!(s, StatusCode::SEE_OTHER);
     let set = hdrs.get(header::SET_COOKIE).unwrap().to_str().unwrap();
     assert!(set.starts_with("devserver_gate="), "got {set}");
@@ -739,19 +939,17 @@ async fn entry_token_for_grantee_mints_session_carrying_grantee_sub() {
         .strip_prefix("devserver_gate=")
         .and_then(|s| s.split(';').next())
         .unwrap();
-    let aud = host_for("alice");
-    let claims = devserver_gate::decode(
-        DEVSERVER_GATE_SECRET,
-        cookie,
-        devserver_gate::TokenType::Session,
-        &aud,
-        "blog",
-    )
-    .expect("session cookie should decode");
+    let claims = app
+        .sessions
+        .lookup(cookie)
+        .expect("opaque session cookie should resolve")
+        .principal;
     assert_eq!(
-        claims.sub, bob,
+        claims.subject_user_id, bob,
         "session cookie sub must be grantee, not owner"
     );
+    assert_eq!(claims.owner_user_id, alice);
+    assert_eq!(claims.devserver_id, "blog");
     app.cleanup().await;
 }
 
@@ -767,7 +965,7 @@ async fn session_cookie_with_grantee_sub_admits() {
     let upstream = Router::new().fallback(|| async { "grantee pass" });
     app.register_tunnel("alice", "blog", alice, upstream).await;
     let host = host_for("alice");
-    let session = mint(devserver_gate::TokenType::Session, bob, "blog", &host);
+    let session = opaque_session(&app, bob, alice, "blog", &host);
 
     let proxy_addr = serve_router_real(app.router.clone()).await;
     let res = reqwest::Client::new()
@@ -789,24 +987,13 @@ async fn entry_token_with_bad_signature_is_404() {
     app.register_tunnel("alice", "blog", uid, Router::new())
         .await;
     let host = host_for("alice");
-    // Token minted with a different secret; same claim envelope.
-    let bad = devserver_gate::encode_entry(
-        b"some-other-secret-32-bytes-foobaa",
-        uid,
-        "owner",
-        "blog",
-        &host,
-        Default::default(),
-    )
-    .unwrap();
-    let (s, _, _) = send_host(
-        &app.router,
-        Method::GET,
-        &host,
-        &format!("/blog/?t={bad}"),
-        &[],
-    )
-    .await;
+    // Token signed with an untrusted identity key; same claim envelope.
+    let other_signer =
+        devserver_gate::EntrySigner::from_base64("AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE")
+            .unwrap();
+    let bad = devserver_gate::encode_entry(&other_signer, uid, uid, "blog", &host, "p1", "/blog/")
+        .unwrap();
+    let (s, _, _) = exchange_entry(&app.router, &host, &bad).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
     app.cleanup().await;
 }
@@ -828,7 +1015,7 @@ async fn proxy_preserves_workspace_segment() {
     app.register_tunnel("alice", "blog", uid, upstream).await;
 
     let host = host_for("alice");
-    let cookie = session_cookie(uid, "blog", &host);
+    let cookie = session_cookie(&app, uid, "blog", &host);
     let proxy_addr = serve_router_real(app.router.clone()).await;
     let client = reqwest::Client::new();
     let res = client
@@ -864,7 +1051,7 @@ async fn management_api_is_404_on_public_wildcard() {
     app.register_tunnel("alice", "blog", uid, upstream).await;
 
     let host = host_for("alice");
-    let cookie = session_cookie(uid, "blog", &host);
+    let cookie = session_cookie(&app, uid, "blog", &host);
     // Even with a valid session cookie, the management API is not proxied.
     let (s, _, _) = send_host(
         &app.router,
@@ -889,11 +1076,19 @@ async fn unsafe_methods_require_matching_csrf_header() {
     let host = host_for("alice");
     let proxy_addr = serve_router_real(app.router.clone()).await;
     let client = reqwest::Client::new();
-    for method in [Method::POST, Method::PUT, Method::DELETE] {
+    let methods = [
+        Method::POST,
+        Method::PUT,
+        Method::PATCH,
+        Method::DELETE,
+        Method::TRACE,
+        Method::from_bytes(b"PROPFIND").unwrap(),
+    ];
+    for method in methods {
         let res = client
             .request(method.clone(), format!("http://{proxy_addr}/blog/mutate"))
             .header(header::HOST, &host)
-            .header(header::COOKIE, session_cookie(uid, "blog", &host))
+            .header(header::COOKIE, session_cookie(&app, uid, "blog", &host))
             .send()
             .await
             .unwrap();
@@ -905,7 +1100,7 @@ async fn unsafe_methods_require_matching_csrf_header() {
             .header(header::HOST, &host)
             .header(
                 header::COOKIE,
-                session_and_csrf_cookie(uid, "blog", &host, csrf),
+                session_and_csrf_cookie(&app, uid, "blog", &host, csrf),
             )
             .header("x-chan-csrf", csrf)
             .send()
@@ -914,7 +1109,7 @@ async fn unsafe_methods_require_matching_csrf_header() {
         assert_eq!(res.status(), StatusCode::OK, "{method}");
     }
 
-    assert_eq!(captured.requests.lock().unwrap().len(), 3);
+    assert_eq!(captured.requests.lock().unwrap().len(), 6);
     app.cleanup().await;
 }
 
@@ -934,7 +1129,7 @@ async fn csrf_header_is_stripped_from_upstream() {
         .header(header::HOST, &host)
         .header(
             header::COOKIE,
-            session_and_csrf_cookie(uid, "blog", &host, csrf),
+            session_and_csrf_cookie(&app, uid, "blog", &host, csrf),
         )
         .header("x-chan-csrf", csrf)
         .send()
@@ -1003,7 +1198,7 @@ async fn x_forwarded_for_appended_when_absent() {
     reqwest::Client::new()
         .get(format!("http://{proxy_addr}/blog/x"))
         .header(header::HOST, &host)
-        .header(header::COOKIE, session_cookie(uid, "blog", &host))
+        .header(header::COOKIE, session_cookie(&app, uid, "blog", &host))
         .send()
         .await
         .unwrap();
@@ -1025,7 +1220,7 @@ async fn x_forwarded_for_appended_when_absent() {
 }
 
 #[tokio::test]
-async fn x_forwarded_for_extended() {
+async fn client_supplied_forwarded_headers_are_discarded() {
     let app = TestApp::new().await;
     let uid = Uuid::new_v4();
     let captured = Captured::default();
@@ -1037,7 +1232,7 @@ async fn x_forwarded_for_extended() {
     reqwest::Client::new()
         .get(format!("http://{proxy_addr}/blog/y"))
         .header(header::HOST, &host)
-        .header(header::COOKIE, session_cookie(uid, "blog", &host))
+        .header(header::COOKIE, session_cookie(&app, uid, "blog", &host))
         .header("x-forwarded-for", "203.0.113.5")
         // Inbound XFProto/XFHost: client-supplied and must be ignored.
         // Asserted below: outbound matches cfg / Host, not these values.
@@ -1048,11 +1243,9 @@ async fn x_forwarded_for_extended() {
         .unwrap();
 
     let headers = captured.requests.lock().unwrap()[0].headers.clone();
-    // XFF chain trust: existing chain preserved, peer IP appended.
-    // This is intentional; nginx is expected to normalize untrusted
-    // ingress XFF.
+    // Inbound XFF is untrusted without a configured edge allowlist.
     let xff = headers.get("x-forwarded-for").unwrap().to_str().unwrap();
-    assert_eq!(xff, "203.0.113.5, 127.0.0.1");
+    assert_eq!(xff, "127.0.0.1");
     // XFProto and XFHost are NOT trusted from inbound; the outbound
     // values come from cfg.forwarded_proto and the inbound Host
     // header. Without this we'd be a malleable forwarder for any
@@ -1088,7 +1281,7 @@ async fn cookie_header_stripped_from_upstream() {
         .header(header::HOST, &host)
         .header(
             header::COOKIE,
-            format!("{}; other=value", session_cookie(uid, "blog", &host)),
+            format!("{}; other=value", session_cookie(&app, uid, "blog", &host)),
         )
         .send()
         .await
@@ -1117,7 +1310,7 @@ async fn authorization_header_stripped_from_upstream() {
     reqwest::Client::new()
         .get(format!("http://{proxy_addr}/blog/a"))
         .header(header::HOST, &host)
-        .header(header::COOKIE, session_cookie(uid, "blog", &host))
+        .header(header::COOKIE, session_cookie(&app, uid, "blog", &host))
         .header(header::AUTHORIZATION, "Bearer chan_pat_secret")
         .send()
         .await
@@ -1155,7 +1348,7 @@ async fn gateway_assertion_matches_authenticated_session() {
         .header(header::HOST, &host)
         .header(
             header::COOKIE,
-            session_cookie_role(caller, "editor", devserver_id, &host),
+            session_cookie_for_owner(&app, caller, owner, devserver_id, &host),
         )
         .send()
         .await
@@ -1169,20 +1362,26 @@ async fn gateway_assertion_matches_authenticated_session() {
         .to_str()
         .unwrap();
     let key = chan_tunnel_proto::gateway_assertion::derive_assertion_key(tunnel_token);
-    let claims = chan_tunnel_proto::gateway_assertion::verify(&key, assertion, &host, devserver_id)
-        .expect("assertion verifies with tunnel token derived key");
+    let claims = chan_tunnel_proto::gateway_assertion::verify(
+        &key,
+        assertion,
+        &host,
+        devserver_id,
+        &owner.to_string(),
+    )
+    .expect("assertion verifies with tunnel token derived key");
     assert_eq!(claims.sub, caller.to_string());
-    assert_eq!(claims.role, "editor");
+    assert_eq!(claims.owner_user_id, owner.to_string());
     assert_eq!(claims.aud, host);
     assert_eq!(claims.drv, devserver_id);
     app.cleanup().await;
 }
 
 #[tokio::test]
-async fn gateway_assertion_carries_entry_identity() {
-    // Full identity chain: entry token (as identity-service mints it,
-    // with name/email) -> session cookie minted by the gate -> the
-    // per-request assertion the upstream sees.
+async fn gateway_assertion_omits_display_identity() {
+    // Authorization credentials carry only immutable ids. Display identity
+    // belongs on a separate lookup path and must not leak into entry/session
+    // credentials or the per-request gateway assertion.
     let app = TestApp::new().await;
     let owner = Uuid::new_v4();
     let caller = Uuid::new_v4();
@@ -1199,26 +1398,8 @@ async fn gateway_assertion_carries_entry_identity() {
     .await;
 
     let host = host_for("alice");
-    let identity = devserver_gate::CallerIdentity {
-        name: Some("Alice Doe".to_string()),
-        email: Some("alice@example.com".to_string()),
-    };
-    let entry = mint_identity(
-        devserver_gate::TokenType::Entry,
-        caller,
-        "editor",
-        devserver_id,
-        &host,
-        identity,
-    );
-    let (s, hdrs, _) = send_host(
-        &app.router,
-        Method::GET,
-        &host,
-        &format!("/blog/?t={entry}"),
-        &[],
-    )
-    .await;
+    let entry = mint_for_owner(caller, owner, devserver_id, &host, "/blog/");
+    let (s, hdrs, _) = exchange_entry(&app.router, &host, &entry).await;
     assert_eq!(s, StatusCode::SEE_OTHER);
     let session = hdrs
         .get_all(header::SET_COOKIE)
@@ -1248,19 +1429,23 @@ async fn gateway_assertion_carries_entry_identity() {
         .to_str()
         .unwrap();
     let key = chan_tunnel_proto::gateway_assertion::derive_assertion_key(tunnel_token);
-    let claims = chan_tunnel_proto::gateway_assertion::verify(&key, assertion, &host, devserver_id)
-        .expect("assertion verifies");
+    let claims = chan_tunnel_proto::gateway_assertion::verify(
+        &key,
+        assertion,
+        &host,
+        devserver_id,
+        &owner.to_string(),
+    )
+    .expect("assertion verifies");
     assert_eq!(claims.sub, caller.to_string());
-    assert_eq!(claims.name.as_deref(), Some("Alice Doe"));
-    assert_eq!(claims.email.as_deref(), Some("alice@example.com"));
+    let wire = serde_json::to_value(&claims).unwrap();
+    assert!(wire.get("name").is_none());
+    assert!(wire.get("email").is_none());
     app.cleanup().await;
 }
 
 #[tokio::test]
-async fn gateway_assertion_empty_identity_for_legacy_session() {
-    // A session cookie minted before identity claims existed carries
-    // no name/email; the assertion must verify and carry None for
-    // both rather than failing or inventing values.
+async fn gateway_assertion_from_opaque_session_has_only_authority_claims() {
     let app = TestApp::new().await;
     let owner = Uuid::new_v4();
     let caller = Uuid::new_v4();
@@ -1283,7 +1468,7 @@ async fn gateway_assertion_empty_identity_for_legacy_session() {
         .header(header::HOST, &host)
         .header(
             header::COOKIE,
-            session_cookie_role(caller, "viewer", devserver_id, &host),
+            session_cookie_for_owner(&app, caller, owner, devserver_id, &host),
         )
         .send()
         .await
@@ -1297,10 +1482,18 @@ async fn gateway_assertion_empty_identity_for_legacy_session() {
         .to_str()
         .unwrap();
     let key = chan_tunnel_proto::gateway_assertion::derive_assertion_key(tunnel_token);
-    let claims = chan_tunnel_proto::gateway_assertion::verify(&key, assertion, &host, devserver_id)
-        .expect("assertion verifies");
-    assert_eq!(claims.name, None);
-    assert_eq!(claims.email, None);
+    let claims = chan_tunnel_proto::gateway_assertion::verify(
+        &key,
+        assertion,
+        &host,
+        devserver_id,
+        &owner.to_string(),
+    )
+    .expect("assertion verifies");
+    assert_eq!(claims.sub, caller.to_string());
+    let wire = serde_json::to_value(&claims).unwrap();
+    assert!(wire.get("name").is_none());
+    assert!(wire.get("email").is_none());
     app.cleanup().await;
 }
 
@@ -1339,7 +1532,11 @@ async fn websocket_bridges_text_frames() {
         .insert(header::HOST, HeaderValue::from_str(&host).unwrap());
     req.headers_mut().insert(
         header::COOKIE,
-        HeaderValue::from_str(&session_cookie(uid, "blog", &host)).unwrap(),
+        HeaderValue::from_str(&session_cookie(&app, uid, "blog", &host)).unwrap(),
+    );
+    req.headers_mut().insert(
+        header::ORIGIN,
+        HeaderValue::from_str(&format!("https://{host}")).unwrap(),
     );
 
     let (mut client_ws, _resp) = tokio_tungstenite::connect_async(req).await.unwrap();
@@ -1377,6 +1574,51 @@ async fn websocket_upgrade_runs_auth_gate() {
     app.cleanup().await;
 }
 
+#[tokio::test]
+async fn websocket_upgrade_requires_the_exact_tenant_origin() {
+    let app = TestApp::new().await;
+    let uid = Uuid::new_v4();
+    app.register_tunnel("alice", "blog", uid, Router::new())
+        .await;
+    let host = host_for("alice");
+    let cookie = session_cookie(&app, uid, "blog", &host);
+
+    for origin in [
+        None,
+        Some("null"),
+        Some("https://bob.devserver.chan.app"),
+        Some("http://alice.devserver.chan.app"),
+        Some("https://alice.devserver.chan.app:7002"),
+        Some("https://alice.devserver.chan.app/path"),
+    ] {
+        let mut builder = Request::builder()
+            .method(Method::GET)
+            .uri("/blog/ws")
+            .header(header::HOST, &host)
+            .header(header::COOKIE, &cookie)
+            .header(header::UPGRADE, "websocket")
+            .header(header::CONNECTION, "Upgrade")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("sec-websocket-version", "13");
+        if let Some(origin) = origin {
+            builder = builder.header(header::ORIGIN, origin);
+        }
+        let res = app
+            .router
+            .clone()
+            .oneshot(builder.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::FORBIDDEN,
+            "origin {origin:?} must be refused"
+        );
+    }
+
+    app.cleanup().await;
+}
+
 // ---------------------------------------------------------------
 // Multi-devserver routing (disc hosts + bare-host compat)
 // ---------------------------------------------------------------
@@ -1395,7 +1637,7 @@ async fn disc_hosts_route_to_their_devservers() {
     let proxy_addr = serve_router_real(app.router.clone()).await;
     for (id, body) in [(DS_A, "ds-a"), (DS_B, "ds-b")] {
         let host = disc_host_for("alice", id);
-        let session = mint(devserver_gate::TokenType::Session, uid, id, &host);
+        let session = opaque_session(&app, uid, uid, id, &host);
         let res = reqwest::Client::new()
             .get(format!("http://{proxy_addr}/blog/"))
             .header(header::HOST, &host)
@@ -1425,7 +1667,7 @@ async fn bare_host_with_two_live_routes_by_credential() {
     let host = host_for("alice");
     let proxy_addr = serve_router_real(app.router.clone()).await;
     for (id, body) in [(DS_A, "ds-a"), (DS_B, "ds-b")] {
-        let session = mint(devserver_gate::TokenType::Session, uid, id, &host);
+        let session = opaque_session(&app, uid, uid, id, &host);
         let res = reqwest::Client::new()
             .get(format!("http://{proxy_addr}/blog/"))
             .header(header::HOST, &host)
@@ -1454,7 +1696,7 @@ async fn bare_host_with_two_live_and_no_credential_is_404() {
 }
 
 #[tokio::test]
-async fn bare_host_entry_token_mints_session_for_its_devserver() {
+async fn bare_host_entry_exchange_with_multiple_live_routes_is_rejected() {
     let app = TestApp::new().await;
     let uid = Uuid::new_v4();
     app.register_tunnel_hello("alice", DS_A, "ws-a", uid, Router::new())
@@ -1463,31 +1705,10 @@ async fn bare_host_entry_token_mints_session_for_its_devserver() {
         .await;
 
     let host = host_for("alice");
-    let entry = mint(devserver_gate::TokenType::Entry, uid, DS_B, &host);
-    let (s, hdrs, _) = send_host(
-        &app.router,
-        Method::GET,
-        &host,
-        &format!("/blog/?t={entry}"),
-        &[],
-    )
-    .await;
-    assert_eq!(s, StatusCode::SEE_OTHER);
-    let set = hdrs.get(header::SET_COOKIE).unwrap().to_str().unwrap();
-    let cookie = set
-        .strip_prefix("devserver_gate=")
-        .and_then(|s| s.split(';').next())
-        .unwrap();
-    // The minted session is bound to the entry's devserver, not to
-    // whichever live registration happens to sort first.
-    devserver_gate::decode(
-        DEVSERVER_GATE_SECRET,
-        cookie,
-        devserver_gate::TokenType::Session,
-        &host,
-        DS_B,
-    )
-    .expect("session should be bound to the entry's devserver");
+    let entry = mint(uid, DS_B, &host);
+    let (s, hdrs, _) = exchange_entry(&app.router, &host, &entry).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert!(!hdrs.contains_key(header::SET_COOKIE));
     app.cleanup().await;
 }
 
@@ -1503,7 +1724,7 @@ async fn ambiguous_disc_is_404() {
         .await;
 
     let host = disc_host_for("alice", DS_AMB1);
-    let session = mint(devserver_gate::TokenType::Session, uid, DS_AMB1, &host);
+    let session = opaque_session(&app, uid, uid, DS_AMB1, &host);
     let (s, _, _) = send_host(
         &app.router,
         Method::GET,
@@ -1525,7 +1746,7 @@ async fn unknown_disc_is_404() {
 
     // Well-formed disc host naming a devserver that is not live.
     let host = disc_host_for("alice", DS_B);
-    let session = mint(devserver_gate::TokenType::Session, uid, DS_A, &host);
+    let session = opaque_session(&app, uid, uid, DS_A, &host);
     let (s, _, _) = send_host(
         &app.router,
         Method::GET,
@@ -1552,12 +1773,7 @@ async fn credential_for_other_users_devserver_never_routes() {
     // it on alice's hosts (bare and disc) must 404. The aud claim
     // binds the credential to bob's host, so the bare-host drv loop
     // over alice's live set can never verify it.
-    let session = mint(
-        devserver_gate::TokenType::Session,
-        bob,
-        DS_B,
-        &host_for("bob"),
-    );
+    let session = opaque_session(&app, bob, bob, DS_B, &host_for("bob"));
     for host in [host_for("alice"), disc_host_for("alice", DS_A)] {
         let (s, _, _) = send_host(
             &app.router,
@@ -1629,6 +1845,9 @@ async fn ws_connect(
     request
         .headers_mut()
         .insert(header::COOKIE, cookie.parse().unwrap());
+    request
+        .headers_mut()
+        .insert(header::ORIGIN, format!("https://{host}").parse().unwrap());
     let (ws, _resp) = tokio_tungstenite::client_async(request, tcp)
         .await
         .expect("ws handshake through the proxy");
@@ -1695,7 +1914,7 @@ async fn ws_bridge_survives_idle_window_while_upstream_streams() {
     let (addr, server) = serve_proxy(app.router.clone()).await;
 
     let host = host_for("alice");
-    let cookie = session_cookie(uid, "blog", &host);
+    let cookie = session_cookie(&app, uid, "blog", &host);
     let mut ws = ws_connect(addr, &host, "/blog/ws-stream", &cookie).await;
 
     // Zero client->upstream frames for 3x the idle window: the shared
@@ -1729,7 +1948,7 @@ async fn ws_bridge_survives_idle_window_on_client_frames_alone() {
     let (addr, server) = serve_proxy(app.router.clone()).await;
 
     let host = host_for("alice");
-    let cookie = session_cookie(uid, "blog", &host);
+    let cookie = session_cookie(&app, uid, "blog", &host);
     let mut ws = ws_connect(addr, &host, "/blog/ws-sink", &cookie).await;
 
     // The upstream never sends; client frames every 150ms must keep
@@ -1784,7 +2003,7 @@ async fn ws_bridge_cuts_both_idle_socket_with_a_close_frame() {
     let (addr, server) = serve_proxy(app.router.clone()).await;
 
     let host = host_for("alice");
-    let cookie = session_cookie(uid, "blog", &host);
+    let cookie = session_cookie(&app, uid, "blog", &host);
     let mut ws = ws_connect(addr, &host, "/blog/ws-echo", &cookie).await;
 
     // Prove the socket is live end to end, then go silent in both

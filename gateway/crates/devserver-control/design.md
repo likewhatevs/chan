@@ -14,10 +14,10 @@ A shared database does not fix this. A database cannot serialize a yamux handle,
 
 devserver-control is a singleton, database-free controller. One process, two listeners, one actor:
 
-- `PROXY_BIND_ADDR` (default `127.0.0.1:7101`): raw h2c. Each devserver-proxy node opens `POST /v1/proxies/connect` with a Bearer token and holds the response stream for the life of its control session. The stream carries length-prefixed JSON frames in both directions (see Control transport).
-- `BIND_ADDR` (default `127.0.0.1:7003`): plain axum HTTP. `/healthz` and `/readyz` unauthenticated; the `/admin/v1/*` aggregate tree gated by `DEVSERVER_ADMIN_TOKEN` (constant-time compare).
+- `PROXY_BIND_ADDR` (default `127.0.0.1:7101`): raw h2c. Each devserver-proxy node opens `POST /v1/proxies/connect` with a proxy-id-scoped rotating Bearer credential and holds the response stream for the life of its control session. The stream carries length-prefixed JSON frames in both directions (see Control transport).
+- `BIND_ADDR` (default `127.0.0.1:7003`): plain axum HTTP. `/healthz` and `/readyz` are unauthenticated; `/admin/v1/*` uses separate rotating operator, identity, and profile credentials with route-level scopes.
 
-All fleet state lives in `ControllerState`, owned by a single actor task. Mutations arrive over a bounded mpsc channel (capacity 1024) from the session tasks and the HTTP handlers; reads go through oneshot request-replies or through `tokio::sync::watch` snapshots that the actor republishes after every applied change. There are no locks: the actor is the only task that touches the state, so no lock is ever held across an `.await`. State transitions return `Effect` values (send a frame, retire a session, settle a kill waiter) that the actor applies after the transition, which keeps the state machine synchronous and unit-testable.
+All fleet state lives in `ControllerState`, owned by a single actor task. Mutations arrive over a bounded mpsc channel (capacity 1024) from the session tasks and the HTTP handlers; fleet reads use coalesced `tokio::sync::watch` snapshots (published at most once per one-second actor tick), while owner reads use a maintained owner index and materialize only that owner's rows. There are no locks: the actor is the only task that touches the state, so no lock is ever held across an `.await`. State transitions return `Effect` values (send a frame, retire a session, settle a kill or revocation waiter) that the actor applies after the transition, which keeps the state machine synchronous and unit-testable.
 
 ```mermaid
 flowchart LR
@@ -41,7 +41,7 @@ The controller carries metadata and commands only. Tenant HTTP and WebSocket tra
 
 ## Control transport
 
-One h2 stream per connection, `application/x-chan-devserver-control+json; version=1`, Bearer `DEVSERVER_PROXY_TOKEN` compared in constant time. Each frame is a u32 big-endian length prefix followed by a JSON body, capped at 1 MiB. The frame types, limits, and id/origin validators live in `devserver-control-proto` so client and server cannot drift.
+One h2 stream per connection, `application/x-chan-devserver-control+json; version=1`, with `DEVSERVER_PROXY_CREDENTIALS` assigning one or two non-reused visible-ASCII Bearers to each exact proxy id. Credentials are compared in constant time. Each frame is a u32 big-endian length prefix followed by a JSON body, capped at 1 MiB. The frame types, limits, signed admission-lease contract, and id/origin validators live in `devserver-control-proto` so client and server cannot drift.
 
 The first frame must be `ClientHello { protocol_version, package_version, proxy_id, proxy_base_url, boot_id }`. Three checks run before the session exists:
 
@@ -49,17 +49,17 @@ The first frame must be `ClientHello { protocol_version, package_version, proxy_
 - `package_version` must equal the controller's own package version. All gateway services and proxies run the same package version, so a mismatched deploy fails loudly at the handshake instead of corrupting the fleet view.
 - `proxy_base_url` must equal `DEVSERVER_PROXY_BASE_URL_TEMPLATE` expanded with the presented `proxy_id` (exactly one `{proxy_id}` placeholder; canonical origin comparison, default ports stripped). A proxy cannot claim an origin that does not match its provisioned id.
 
-On pass the controller answers `ServerHello { protocol_version, package_version, heartbeat_seconds: 5, dead_seconds: 15, grace_seconds: 30 }`. Server-to-proxy frames are `SnapshotAccepted`, `FleetReady`, `AdmissionDecision`, `KillRegistrations`, `ResyncRequired`, `Ping`, `Shutdown`. Proxy-to-server frames are `ClientHello`, `SnapshotStart` / `SnapshotChunk` (128 rows per chunk, 100,000 rows per snapshot) / `SnapshotEnd`, `TunnelUp`, `TunnelDown`, `AdmissionRequest`, `AdmissionCancel`, `CommandResult`, `Pong`.
+On pass the controller answers `ServerHello { protocol_version, package_version, heartbeat_seconds: 5, dead_seconds: 15, grace_seconds: 30 }`. Server-to-proxy frames include snapshot/fleet readiness, admission decisions, registration kills, browser-session revocations, resync, heartbeat, and shutdown. Proxy-to-server frames include snapshots and deltas, admission request/cancel, signed lease refresh, command and revocation results, and pong. Snapshots are capped at 128 rows per chunk, 2,048 rows and 2 MiB per session; aggregate state is capped at 16,384 rows and 64 MiB.
 
-Connection hygiene: the h2 handshake, first stream, and `ClientHello` each have a 10s deadline; the initial or resync snapshot has an absolute 30s deadline; at most 1024 connections are in flight; a connection that opens extra streams gets 409 per stream and is shut down after 16 of them. One framed-reader task owns the inbound side of the stream for the whole session because a length-prefixed read is not cancellation-safe mid-frame.
+Connection hygiene: the h2 handshake, first stream, and `ClientHello` each have a 10s deadline; the initial or resync snapshot has an absolute 30s deadline; at most 128 connections are in flight; a connection that opens extra streams gets 409 per stream and is shut down after 16 of them. One framed-reader task owns the inbound side because a length-prefixed read is not cancellation-safe mid-frame. Its queue is 64 frames and the established session accepts at most 32 frames in any one-second sliding window. A full maximum snapshot needs only 18 frames, so a compromised authenticated proxy is disconnected before it can continuously monopolize the shared actor queue.
 
 ## Session lifecycle
 
-A session is `(proxy_id, incarnation)`. `begin_session` assigns a fresh incarnation and replaces any existing session for the same proxy id, retiring it; a reconnect with a different `boot_id` is logged at error level but still replaces, because the newest connection is the only one that can carry commands.
+A session is `(proxy_id, incarnation)` plus the process `boot_id`. A second live connection for the same proxy id is rejected rather than replacing the incumbent. Disconnected authority is retained by `(proxy_id, boot_id)` through the convergence window; a changed-boot reconnect cannot make the prior unreachable authority disappear. Once ready, a changed boot may join empty but a non-empty snapshot is quarantined until prior authority is settled, because connection recency is not proof that the old process and its tunnels are gone. Live sessions are capped at 128, live-plus-disconnected authorities at 256, and remembered boot ids at 1,024.
 
 The session then moves through two states:
 
-- **Joining**: the session has connected but its registry view is not part of the aggregate. The proxy stages a snapshot: `SnapshotStart`, any number of `SnapshotChunk`s, `SnapshotEnd` with the matching `base_generation`. Chunks are checked for duplicate registration ids and the running total is capped at 100,000 rows. Staged rows are invisible to the aggregate until the snapshot completes.
+- **Joining**: the session has connected but its registry view is not part of the aggregate. The proxy stages a snapshot: `SnapshotStart`, any number of `SnapshotChunk`s, `SnapshotEnd` with the matching `base_generation`. Chunks are checked for duplicate registration ids and the running total is capped at 2,048 rows and 2 MiB. Staged rows are invisible to the aggregate until the snapshot completes.
 - **Active**: the snapshot was accepted and, once reconciliation finishes, the controller sends `FleetReady`. Only Active, fleet-ready sessions participate in admission and own aggregate rows.
 
 After the snapshot, the proxy publishes deltas. Every delta carries a generation number that must extend the session's current generation by exactly one. A gap, a duplicate registration id seen anywhere in the fleet, a down for an unknown registration, or any frame illegal in the current phase triggers `ResyncRequired { expected_generation }`: the controller retracts the session's rows, drops it back to Joining, clears its fleet-ready flag, and waits for a fresh snapshot on the same stream. Generation contiguity is what lets the controller apply deltas without a round trip; any doubt costs one resync instead of a corrupt aggregate. A `TunnelUp` for a key that is already live on another session evicts the previous registration with a kill to its owning session, so a key never has two owners.
@@ -75,11 +75,13 @@ The rules, in order:
 1. The controller must be ready and the asking session Active and fleet-ready; otherwise `ControlWarming`.
 2. A re-request of the exact same claim (same session, request id, registration id) refreshes the claim and re-answers `Admit`, so a proxy that lost the first answer can retry idempotently.
 3. Reconnect neutrality: a key that is already live or already claimed does not count against the cap. A proxy reconnecting its existing tunnels after a controller restart can never be refused for capacity it already holds.
-4. Capacity: `MAX_DEVSERVERS_PER_USER` (default 100, 0 disables) bounds the number of distinct devserver ids per user across live rows plus pending claims. At or over the cap: `AtCapacity`.
+4. Capacity: positive `MAX_DEVSERVERS_PER_USER` (default 100; zero is rejected) bounds the number of distinct devserver ids per owner across live rows, staged rows, retained disconnected authority, and pending claims. At or over the cap: `AtCapacity`.
 5. A different pending claim for the same `(user, devserver_id)` key is superseded: the old claim holder gets `Stale` and the new claim wins.
 6. On `Admit` the controller records a pending claim with a 15s TTL. The matching `TunnelUp` must arrive with that claim's registration id; a `TunnelUp` without a matching claim is killed through the unclaimed-row path. An `AdmissionCancel` (proxy-side handshake failure after the decision) drops the claim early.
 
-Claims are what make the cap and the single-owner rule atomic: the decision and the reservation happen in the same state transition, so two proxies racing the same key cannot both pass.
+Each request also carries a short-lived identity-signed admission lease bound to `(owner_user_id, user, devserver_id, registration_id, proxy_id)`. The controller verifies the lease before reserving capacity, again on snapshots/deltas, and at refresh. A live tunnel refreshes by re-presenting its PAT to identity over a dedicated yamux stream; the proxy forwards only the resulting signed lease to the controller. The controller never receives the PAT, and an expired or unrefreshable lease closes the tunnel. Claims make capacity and single ownership atomic; leases make the immutable identity authority independently verifiable and time-bounded.
+
+This limits honest retention and controller authority; it does not make an assigned proxy a trusted execution environment. A fully compromised proxy can capture the transient PAT during validation or refresh and reuse it until identity revokes it or it expires. Node isolation and PAT rotation/revocation remain the incident boundary.
 
 ## Reconciliation
 
@@ -95,29 +97,33 @@ Reconciliation loser kills and routine eviction kills are the same mechanism: on
 
 - **Heartbeat.** The controller sends `Ping` every 5 seconds (at most 8 nonces outstanding). Any inbound frame counts as activity; a session with no activity for 15 seconds is dead: its rows are retracted, its claims dropped, and its stream closed.
 - **Readiness.** The controller is unready from boot until initial reconciliation completes. While unready, `/readyz` answers 503, every admin read and watch answers 503, and every admission request answers `ControlWarming`. If the last Active session is lost, the controller drops back to unready and clears the aggregate: a view with no live sources is worth nothing.
-- **Fail-closed proxies.** `ServerHello` announces `grace_seconds: 30`. A proxy whose control session is down refuses new admissions immediately and evicts every local tunnel when the 30-second grace expires; recovery requires a fresh snapshot and `FleetReady`. A reconnect that completes a fresh snapshot cancels the grace. These behaviors live in devserver-proxy; the controller's side is to never admit for, or publish rows of, a session that is not current.
-- **Bounded queues close sessions.** The per-session outbound queue (1024 frames) is written with `try_send`; a full or closed queue retires the session. The inbound frame queue (1024) overflow closes the session with `Shutdown`. The actor queue is 1024 commands. A slow or stuck proxy costs its own session, never the fleet view.
+- **Fail-closed proxies.** `ServerHello` announces `grace_seconds: 30`. A proxy whose control session is down refuses new admissions immediately and evicts every local tunnel when the 30-second grace expires; recovery requires a fresh snapshot and `FleetReady`. Snapshot acceptance may replace that deadline with a hard 45-second convergence deadline, and only `FleetReady` cancels it. These behaviors live in devserver-proxy; the controller's side is to never admit for, or publish rows of, a session that is not current.
+- **Retained disconnected authority.** A disconnected proxy's rows stop being published but continue to consume row/byte/capacity authority through the 30-second row convergence window. Its `(proxy_id, boot_id)` authority marker remains for 60 seconds after the latest disconnect, which exceeds the proxy's longest 45-second retained-authority path. Every same-boot disconnect extends the marker, and only successful same-boot convergence through `FleetReady` clears it early. Admin session revocation reports that proxy unreachable while this marker exists. This prevents a same-id reconnect, a second disconnect before `FleetReady`, or an empty current view from being mistaken for proof that stale data-plane authority is gone.
+- **Bounded queues and rates close sessions.** The per-session outbound queue and actor queue are 1024; a full outbound queue retires that session. The inbound queue is 64 and each session is limited to 32 frames per sliding second. A slow, stuck, or flooding proxy costs its own session, not the fleet actor.
 - **Command settlement.** A kill command settles as `Confirmed { killed, missing }`, `Failed` (proxy reported failures or an invalid report), `TimedOut` (5 seconds), or `SessionLost` (owning session ended first). Runtime kills report the outcome to the waiting admin request; reconciliation kills feed the reconciliation's success or retry.
 
 ## Admin tree
 
-All routes are Bearer-gated by `DEVSERVER_ADMIN_TOKEN` (constant-time compare). Reads come from the actor's watch snapshots, so they never block the actor loop.
+All routes are Bearer-gated with constant-time comparison. Operator credentials may use the whole tree; identity can read owner rows and issue kills/revocations; profile can additionally read redacted fleet views. Credentials are distinct across scopes and each scope accepts at most two rotation values.
 
 | Method | Path                                         | Behavior          |
 |--------|----------------------------------------------|-------------------|
 | GET    | `/admin/v1/tunnels`                          | aggregate tunnels |
-| GET    | `/admin/v1/users/{user}/tunnels`             | one user's rows   |
+| GET    | `/admin/v1/owners/{owner_user_id}/tunnels`    | one owner's indexed rows |
 | GET    | `/admin/v1/proxies`                          | proxy directory   |
 | POST   | `/admin/v1/tunnels/{user}/{devserver_id}/kill` | exact kill; 204 |
-| POST   | `/admin/v1/users/{user}/tunnels/kill`        | user-wide kill    |
+| POST   | `/admin/v1/owners/{owner_user_id}/tunnels/kill` | owner-wide kill |
+| POST   | `/admin/v1/sessions/revoke`                  | exact/subject browser-session revoke |
 | GET    | `/admin/v1/tunnels/watch`                    | SSE snapshots     |
 | GET    | `/admin/v1/proxies/watch`                    | SSE snapshots     |
 
 The tunnel snapshot sorts by `(user, devserver_id)` and each row carries its owning `proxy_id` and `proxy_base_url`; the proxy directory carries each node's status, package version, boot id, and tunnel count. The per-user read returns `[]` for a well-formed user with nothing live rather than a 404, so callers do not special-case the steady state.
 
-Kills address aggregate keys but execute by registration UUID, read at issue time: a delayed command cannot kill a successor registration for the same key. The exact kill issues one command to the owning session and awaits it; any outcome short of `Confirmed` is a 502 partial kill, because the proxy may have executed the kill without the controller learning of it. The user-wide kill first cancels the user's pending admission claims, then fans out as one command per owning proxy and awaits every confirmation. It answers 200 with the confirmed count (`killed` plus already-`missing` rows), or 502 `{"error": "partial kill", "killed": n}` when any proxy fails to confirm, so the count is the number actually gone. Both kills are idempotent: a retry with nothing left to kill is a success (`{"killed": 0}`), and a retry after a 502 kills whatever survived.
+Kills address aggregate keys but execute by registration UUID, read at issue time: a delayed command cannot kill a successor registration for the same key. The exact kill issues one command to the owning session and awaits it; any outcome short of `Confirmed` is a 502 partial kill, because the proxy may have executed the kill without the controller learning of it. The owner-wide kill first cancels pending claims, then fans out by owning proxy and awaits every confirmation. Both are idempotent and expose only confirmed counts.
 
-A malformed username on the per-user routes answers the same 404 shape as an unknown target, so the admin tree does not distinguish "no such user" from "invalid name" to a prober.
+Session revocation fans out to every active or warming proxy and refuses to report complete when controller authority is warming or any retained proxy authority is unreachable. A proxy lookup-deactivates matching opaque sessions, force-aborts their registered HTTP/WebSocket bridge tasks, and acknowledges only after those tasks have drained under a bounded deadline. A timed-out drain remains as a lookup-dead tombstone, including across control-loss cleanup, so a retried command cannot mistake an undrained transport for an empty match. Control-loss cleanup suspends browser-session issuance in the same critical section and only `FleetReady` reopens it, closing an in-flight entry exchange that captured a registry row before tunnel eviction. Inability to prove drain disconnects/retries the control session instead of producing a false success. This acknowledgement covers sessions that already exist at the proxy. A signed entry credential minted before revocation remains exchangeable for its 30-second lifetime plus clock skew, so account-deletion settlement keeps the HTTP operation pending, waits that window, and performs a second acknowledged revocation before treating the operation as final.
+
+A malformed owner UUID on owner-scoped routes answers the same 404 shape as an unknown target, so the admin tree does not distinguish invalid identifiers from absent authority to a prober.
 
 The watch routes stream server-sent events: a full snapshot on connect, a full snapshot on every change, 15-second keep-alives, and stream termination the moment the controller leaves readiness. Watches require readiness at connect (503 otherwise), so a consumer never mistakes an empty warming view for an empty fleet.
 
@@ -155,9 +161,9 @@ Admin reads and SSE watches are served from republished `watch` snapshots rather
 - Admission decisions and their capacity reservations happen in one state transition; claims expire after 15 seconds.
 - One reconciliation runs at a time.
 - Readiness implies at least one Active session; losing the last one retracts the whole aggregate.
-- The actor holds no locks and performs no blocking I/O; bounded queues (actor 1024, session 1024, inbound 1024) close or retire the session that fills them.
+- The actor holds no locks and performs no blocking I/O; bounded queues (actor 1024, outbound session 1024, inbound session 64) and the 32-frame/s session limit close or retire the offender.
 - Bearer comparisons (admin token, proxy token) run at constant time.
-- Every frame is bounded: 1 MiB per frame, 128 rows per snapshot chunk, 100,000 rows per snapshot, 4096 remembered confirmed-down ids per session, 8 outstanding ping nonces.
+- Every frame and aggregate is bounded: 1 MiB per frame, 128 rows per chunk, 2,048 rows/2 MiB per session snapshot, 16,384 fleet rows/64 MiB resident state, 4,096 remembered confirmed-down ids per session, 8 outstanding ping nonces.
 
 ## Error model
 
@@ -168,7 +174,7 @@ Admin reads and SSE watches are served from republished `watch` snapshots rather
 | `NotReady`                 | admin   | 503 on reads, watches, kills          |
 | `StaleSession`             | session | frame rejected; superseded session    |
 | `ProxyNotJoining`          | session | snapshot on a non-joining session     |
-| `SnapshotTooLarge`         | session | snapshot exceeds 100,000 rows         |
+| `SnapshotTooLarge`         | session | snapshot exceeds 2,048 rows or 2 MiB  |
 | `DuplicateRegistration`    | session | duplicate registration id in snapshot |
 | `ReconciliationInProgress` | session | snapshot refused; proxy retries       |
 | `InvalidPong`              | session | pong nonce not outstanding            |
@@ -179,6 +185,6 @@ Admin reads and SSE watches are served from republished `watch` snapshots rather
 
 - Controller HA, durable control state, leader election, cross-region replication (ADR-0002 consequences)
 - Any tenant data path (the controller never proxies tenant traffic)
-- mTLS (auth is Bearer only, on both listeners)
+- In-process TLS or mTLS. Both listeners must bind loopback unless `CHAN_GATEWAY_INTERNAL_TRANSPORT=overlay-encrypted` explicitly asserts a protected deployment overlay; Bearers authenticate peers but do not make h2c confidential.
 - Per-proxy admission policy or per-user overrides (one fleet-wide cap)
 - Delta-based watch streams (watches carry full snapshots)

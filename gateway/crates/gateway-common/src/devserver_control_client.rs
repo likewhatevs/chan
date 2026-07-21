@@ -10,14 +10,12 @@
 //!     are torn down at the same time the DB state changes, and the
 //!     sweeper marks from one cluster-wide snapshot.
 //!
-//! Errors are surfaced but every write call site should treat this
-//! as best-effort: a brief devserver-control outage shouldn't block the
-//! primary action (revoke, block, delete). On the wire the existing
-//! tokens stop validating immediately; the live substreams just
-//! linger a bit longer than ideal. Read calls bubble up directly
-//! because the dashboard and the sweeper genuinely need the answer:
-//! a controller 503 or transport error is an upstream failure, never
-//! an empty list.
+//! Errors are surfaced to the caller. Denial mutations reserve durable
+//! revocation work in profile's transaction, so an immediate control call may
+//! fail without losing the required retry. Read calls bubble up directly
+//! because the dashboard and sweeper genuinely need authoritative fleet data:
+//! a controller 503 or transport error is an upstream failure, never an empty
+//! list.
 //!
 //! `DevserverControlError` is the client's own error enum so this crate
 //! has no axum / IntoResponse dependency. Each consumer maps it onto
@@ -25,7 +23,7 @@
 
 use chrono::{DateTime, Utc};
 use reqwest::StatusCode;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
@@ -46,8 +44,10 @@ pub type DevserverControlResult<T> = Result<T, DevserverControlError>;
 /// a circular dep). `proxy_id` and `proxy_base_url` identify the
 /// proxy node that holds the registration; consumers that predate the
 /// distributed fleet ignore them.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct TunnelView {
+    pub registration_id: Uuid,
+    pub owner_user_id: Uuid,
     pub user: String,
     /// The registration's second key: one of the owner's live
     /// devserver ids (a user can hold several). Pinned to the
@@ -57,6 +57,28 @@ pub struct TunnelView {
     pub connected_at: DateTime<Utc>,
     pub proxy_id: String,
     pub proxy_base_url: String,
+    pub admission_lease: String,
+    pub admission_lease_expires_at: DateTime<Utc>,
+}
+
+impl std::fmt::Debug for TunnelView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TunnelView")
+            .field("registration_id", &self.registration_id)
+            .field("owner_user_id", &self.owner_user_id)
+            .field("user", &self.user)
+            .field("devserver_id", &self.devserver_id)
+            .field("peer_addr", &self.peer_addr)
+            .field("connected_at", &self.connected_at)
+            .field("proxy_id", &self.proxy_id)
+            .field("proxy_base_url", &self.proxy_base_url)
+            .field("admission_lease", &"[REDACTED]")
+            .field(
+                "admission_lease_expires_at",
+                &self.admission_lease_expires_at,
+            )
+            .finish()
+    }
 }
 
 /// One connected proxy node as devserver-control reports it. Mirrors
@@ -72,6 +94,26 @@ pub struct ProxyView {
     pub last_seen_at: DateTime<Utc>,
     pub tunnel_count: usize,
     pub status: ProxyStatus,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SessionRevocationResult {
+    pub revoked: usize,
+    pub proxies_confirmed: usize,
+    pub proxies_expected: usize,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "scope", rename_all = "snake_case")]
+enum SessionRevocationRequest<'a> {
+    Exact {
+        subject_user_id: Uuid,
+        owner_user_id: Uuid,
+        devserver_id: &'a str,
+    },
+    Subject {
+        subject_user_id: Uuid,
+    },
 }
 
 /// Session state the controller publishes for a proxy. Serialized
@@ -126,12 +168,11 @@ impl DevserverControlClient {
         Ok(Self { base, http, token })
     }
 
-    /// Force-evict every tunnel `username` has live across the fleet.
+    /// Force-evict every tunnel an immutable owner has live across the fleet.
     /// Idempotent; "nothing to kill" returns `0`.
-    pub async fn kill_user_tunnels(&self, username: &str) -> DevserverControlResult<usize> {
+    pub async fn kill_owner_tunnels(&self, owner_user_id: Uuid) -> DevserverControlResult<usize> {
         let mut url = self.base.clone();
-        let user = encode_segment(username);
-        url.set_path(&format!("/admin/v1/users/{user}/tunnels/kill"));
+        url.set_path(&format!("/admin/v1/owners/{owner_user_id}/tunnels/kill"));
         let res = self.http.post(url).bearer_auth(&self.token).send().await?;
         let status = res.status();
         if !status.is_success() {
@@ -146,6 +187,27 @@ impl DevserverControlClient {
         }
         let body: KillResponse = res.json().await?;
         Ok(body.killed)
+    }
+
+    /// Force-evict one immutable owner/devserver tuple.
+    pub async fn kill_tunnel(
+        &self,
+        owner_user_id: Uuid,
+        devserver_id: &str,
+    ) -> DevserverControlResult<()> {
+        let mut url = self.base.clone();
+        let devserver_id = encode_segment(devserver_id);
+        url.set_path(&format!(
+            "/admin/v1/tunnels/{owner_user_id}/{devserver_id}/kill"
+        ));
+        let res = self.http.post(url).bearer_auth(&self.token).send().await?;
+        let status = res.status();
+        if status == StatusCode::NO_CONTENT {
+            return Ok(());
+        }
+        let body = res.text().await.unwrap_or_default();
+        tracing::warn!(%status, body = %body, "devserver-control admin upstream error");
+        Err(DevserverControlError::Upstream(format!("{status}")))
     }
 
     /// Snapshot of EVERY live tunnel across all users and proxies
@@ -169,20 +231,19 @@ impl DevserverControlClient {
         Ok(tunnels)
     }
 
-    /// Snapshot of every live tunnel for `username` across the fleet.
+    /// Snapshot of every live tunnel for an immutable owner across the fleet.
     /// Identity's dashboard calls this on every `/api/me` so the SPA
     /// renders the user's workspace cards. Empty list when the user has
     /// nothing connected; absent user returns 200 with an empty list
     /// (the endpoint doesn't 404 on unknown users so callers don't have
     /// to special-case the steady state where a fresh sign-in has
     /// nothing registered yet).
-    pub async fn list_user_tunnels(
+    pub async fn list_owner_tunnels(
         &self,
-        username: &str,
+        owner_user_id: Uuid,
     ) -> DevserverControlResult<Vec<TunnelView>> {
         let mut url = self.base.clone();
-        let user = encode_segment(username);
-        url.set_path(&format!("/admin/v1/users/{user}/tunnels"));
+        url.set_path(&format!("/admin/v1/owners/{owner_user_id}/tunnels"));
         let res = self.http.get(url).bearer_auth(&self.token).send().await?;
         let status = res.status();
         if !status.is_success() {
@@ -211,6 +272,50 @@ impl DevserverControlClient {
         let proxies: Vec<ProxyView> = res.json().await?;
         Ok(proxies)
     }
+
+    pub async fn revoke_sessions_exact(
+        &self,
+        subject_user_id: Uuid,
+        owner_user_id: Uuid,
+        devserver_id: &str,
+    ) -> DevserverControlResult<SessionRevocationResult> {
+        self.revoke_sessions(SessionRevocationRequest::Exact {
+            subject_user_id,
+            owner_user_id,
+            devserver_id,
+        })
+        .await
+    }
+
+    pub async fn revoke_subject_sessions(
+        &self,
+        subject_user_id: Uuid,
+    ) -> DevserverControlResult<SessionRevocationResult> {
+        self.revoke_sessions(SessionRevocationRequest::Subject { subject_user_id })
+            .await
+    }
+
+    async fn revoke_sessions(
+        &self,
+        request: SessionRevocationRequest<'_>,
+    ) -> DevserverControlResult<SessionRevocationResult> {
+        let mut url = self.base.clone();
+        url.set_path("/admin/v1/sessions/revoke");
+        let res = self
+            .http
+            .post(url)
+            .bearer_auth(&self.token)
+            .json(&request)
+            .send()
+            .await?;
+        let status = res.status();
+        if !status.is_success() {
+            let body = res.text().await.unwrap_or_default();
+            tracing::warn!(%status, body = %body, "devserver-control session revoke failed");
+            return Err(DevserverControlError::Upstream(format!("{status}")));
+        }
+        Ok(res.json().await?)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -233,12 +338,16 @@ mod tests {
         // toward deletion.
         let v: TunnelView = serde_json::from_str(
             r#"{
+                "registration_id": "650e8400-e29b-41d4-a716-446655440000",
+                "owner_user_id": "550e8400-e29b-41d4-a716-446655440000",
                 "user": "alice",
                 "devserver_id": "abc123",
                 "peer_addr": "192.0.2.7:52011",
                 "connected_at": "2026-07-15T00:00:00Z",
                 "proxy_id": "p1",
-                "proxy_base_url": "https://p1.usr.chan.app"
+                "proxy_base_url": "https://p1.usr.chan.app",
+                "admission_lease": "v1.payload.signature",
+                "admission_lease_expires_at": "2026-07-15T00:02:00Z"
             }"#,
         )
         .expect("admin tunnel wire shape parses");
@@ -247,6 +356,9 @@ mod tests {
         assert_eq!(v.peer_addr.as_deref(), Some("192.0.2.7:52011"));
         assert_eq!(v.proxy_id, "p1");
         assert_eq!(v.proxy_base_url, "https://p1.usr.chan.app");
+        let debug = format!("{v:?}");
+        assert!(!debug.contains("v1.payload.signature"));
+        assert!(debug.contains("[REDACTED]"));
 
         // A payload using `username` must NOT parse: catching the rename
         // here beats debugging a sweeper that never marks anything.
@@ -257,7 +369,9 @@ mod tests {
                 "peer_addr": null,
                 "connected_at": "2026-07-15T00:00:00Z",
                 "proxy_id": "p1",
-                "proxy_base_url": "https://p1.usr.chan.app"
+                "proxy_base_url": "https://p1.usr.chan.app",
+                "admission_lease": "v1.payload.signature",
+                "admission_lease_expires_at": "2026-07-15T00:02:00Z"
             }"#,
         );
         assert!(renamed.is_err(), "the owner field is pinned to `user`");

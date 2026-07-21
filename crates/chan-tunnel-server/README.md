@@ -12,7 +12,9 @@ chan-tunnel-server = "0.11"
 ```
 Validator (trait)             implemented by host: token -> Validated
 Validated                     user_id, username, scopes
+                              assertion key, admission lease + expiry
 ServerError                   uniffi-friendly error variants
+RegistrationAdmission        controller-backed pre-insert permit + fence
 
 handshake(socket, token,
           validator, pre_ack) free function: validate + Hello/HelloAck
@@ -24,6 +26,8 @@ serve_tunnel_listener(
     registry, max_workspaces_per_user)
                               accept loop on a TCP listener; runs h2
                               server, validates, registers, workspaces
+serve_tunnel_listener_with_admission
+                              production path with fleet admission authority
 
 Registry                      live (user, devserver_id) -> TunnelHandle
 TunnelHandle                  open() -> yamux::Stream
@@ -44,7 +48,7 @@ The full workspace gate (used by CI and the pre-push hook) is `cargo fmt --check
 
 ## Design
 
-See [`design.md`](design.md) for the listener / driver / registry shape, the eviction policy, the public router's substream lifecycle including upgrades, and the cross-crate context. The wire format itself is in [`chan-tunnel-proto/design.md`](../chan-tunnel-proto/design.md).
+See [`design.md`](design.md) for the listener / driver / registry shape, controller admission fence, PAT-backed expiring lease refresh, eviction policy, and public substream lifecycle. The wire format itself is in [`chan-tunnel-proto/design.md`](../chan-tunnel-proto/design.md).
 
 ## License
 

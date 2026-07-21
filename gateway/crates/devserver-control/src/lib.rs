@@ -8,9 +8,9 @@ mod state;
 
 pub use actor::{
     spawn_controller, spawn_controller_owned, ActorError, ControllerHandle, KillPlan,
-    MutationStatus, ProxyControlSession,
+    MutationStatus, ProxyControlSession, SessionRevocationPlan,
 };
-pub use config::Config;
+pub use config::{AdminCredentials, AdminScope, Config, ProxyCredentials};
 pub use http::router as admin_router;
 pub use server::serve_control_listener;
 pub use state::{

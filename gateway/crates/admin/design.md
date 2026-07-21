@@ -53,9 +53,14 @@ Default rendering uses `comfy_table` with the `NOTHING` preset (no Unicode lines
 
 ## Key decisions
 
-### Single bearer
+### Per-service bearers
 
-`CHAN_ADMIN_TOKEN` is the only credential knob: one secret, sent to both services (single-token deployments set `PROFILE_ADMIN_TOKEN` and `DEVSERVER_ADMIN_TOKEN` to the same value). Deployments that rotate the two service tokens independently pass `--token` per invocation with the value matching the service that invocation talks to.
+The CLI accepts independent `CHAN_ADMIN_PROFILE_TOKEN`,
+`CHAN_ADMIN_IDENTITY_TOKEN`, and `CHAN_ADMIN_OPERATOR_TOKEN` credentials.
+`--profile-token`, `--identity-token`, and `--operator-token` are bound to one
+destination each; `--token` remains only as a compatibility alias for the
+controller operator token. The CLI never reuses one service's credential
+against another service.
 
 ### Exit codes are part of the contract
 

@@ -9,7 +9,9 @@ use tokio::sync::watch;
 use tower_http::trace::TraceLayer;
 
 use crate::config::Config;
+use crate::entry_replay::EntryReplayCache;
 use crate::registry::Registry;
+use crate::session_store::SessionStore;
 
 /// Application state passed to every handler. Holds no cookie or
 /// session machinery; devserver-proxy reads no cookie other than the
@@ -19,13 +21,22 @@ pub struct AppState {
     pub cfg: Arc<Config>,
     pub registry: Registry,
     pub readiness: watch::Receiver<bool>,
+    pub sessions: SessionStore,
+    pub entry_replays: EntryReplayCache,
 }
 
-pub fn router(cfg: Arc<Config>, registry: Registry, readiness: watch::Receiver<bool>) -> Router {
+pub fn router(
+    cfg: Arc<Config>,
+    registry: Registry,
+    readiness: watch::Receiver<bool>,
+    sessions: SessionStore,
+) -> Router {
     let state = AppState {
+        entry_replays: EntryReplayCache::new(cfg.entry_replay_max_active),
         cfg,
         registry,
         readiness,
+        sessions,
     };
     Router::new()
         // Liveness and control readiness exist only on the configured
@@ -107,10 +118,10 @@ async fn dispatch(State(state): State<AppState>, req: Request) -> Response {
     // dashboard front door (id.chan.app/workspaces in prod, configurable
     // via DASHBOARD_URL) -- devserver-proxy renders no UI of its own, and an
     // unauthenticated launcher can't call `/api/library/*` (it needs the
-    // `?t=` bearer), so the dashboard is where you sign in and Open.
+    // session cookie), so the dashboard is where you sign in and Open.
     //
-    // A root request that DOES carry a gate credential (`?t=` entry token
-    // or a `devserver_gate` session cookie) is a whole-devserver open: fall
+    // A root request that DOES carry a `devserver_gate` session cookie is a
+    // whole-devserver open: fall
     // through to the gate, which forwards `/` to the devserver root where
     // the launcher SPA is served. `proxy::handle` is segment-preserving, so
     // `/` forwards unchanged.

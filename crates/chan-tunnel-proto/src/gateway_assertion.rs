@@ -2,12 +2,11 @@
 //!
 //! The gateway proxy has already verified the public browser/session gate
 //! before it forwards a request through the tunnel. This envelope lets the
-//! proxied devserver distinguish an owner request from a read-only grantee
-//! request without trusting any client-supplied header.
+//! proxied devserver bind a caller to the exact immutable devserver owner
+//! without trusting any client-supplied header.
 //!
-//! Optional identity claims (`name`, `email`) inherit exactly this trust:
-//! a per-tunnel key derived from the raw PAT, HMAC-signed per request by
-//! the proxy. Loopback participants never traverse this layer.
+//! Display identity is deliberately excluded: authorization credentials carry
+//! immutable authority only. A separate lookup path can supply cosmetic data.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -17,19 +16,18 @@ use sha2::{Digest, Sha256};
 
 /// Header name carrying the assertion from devserver-proxy to chan-server.
 pub const HEADER_NAME: &str = "x-chan-gateway-assertion";
-
-/// Role string used by profile-service for devserver owners.
-pub const ROLE_OWNER: &str = "owner";
+const ASSERTION_LIFETIME_SECS: i64 = 60;
+const CLOCK_SKEW_SECS: i64 = 5;
 
 /// Per-tunnel HMAC key derived from the raw tunnel PAT on both sides.
 pub type AssertionKey = [u8; 32];
 
 /// Canonical `aud` value for gateway-bound tokens and assertions.
 ///
-/// Public gateway isolation is host-based. Production binds to the lowercase
-/// hostname without a port; local/dev deployments that expose a non-default
-/// port keep that port because browsers include it in `Host`.
-pub fn canonical_audience(host: &str) -> String {
+/// Public gateway isolation is origin-based. A port is stripped only when it
+/// is the default for the actual request scheme (`http`/`ws`: 80,
+/// `https`/`wss`: 443); cross-default ports remain authority-bearing.
+pub fn canonical_audience(scheme: &str, host: &str) -> String {
     let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
     if host.is_empty() {
         return host;
@@ -40,7 +38,7 @@ pub fn canonical_audience(host: &str) -> String {
             let literal = &host[..=end + 1];
             let suffix = &host[end + 2..];
             if let Some(port) = suffix.strip_prefix(':') {
-                return if is_default_port(port) {
+                return if is_default_port(scheme, port) {
                     literal.to_string()
                 } else {
                     format!("{literal}:{port}")
@@ -52,7 +50,7 @@ pub fn canonical_audience(host: &str) -> String {
 
     match host.rsplit_once(':') {
         Some((name, port)) if !name.contains(':') => {
-            if is_default_port(port) {
+            if is_default_port(scheme, port) {
                 name.to_string()
             } else {
                 format!("{name}:{port}")
@@ -62,8 +60,11 @@ pub fn canonical_audience(host: &str) -> String {
     }
 }
 
-fn is_default_port(port: &str) -> bool {
-    port == "80" || port == "443" || port.is_empty()
+fn is_default_port(scheme: &str, port: &str) -> bool {
+    matches!(
+        (scheme.trim().to_ascii_lowercase().as_str(), port),
+        ("http" | "ws", "80") | ("https" | "wss", "443")
+    )
 }
 
 /// Signed claims for one proxied request.
@@ -71,16 +72,8 @@ fn is_default_port(port: &str) -> bool {
 pub struct Claims {
     /// Caller user id as a string. UUID syntax is owned by gateway/profile.
     pub sub: String,
-    /// `owner`, `editor`, or `viewer`.
-    pub role: String,
-    /// Caller display name resolved by the gateway at entry mint. Absent
-    /// when the gateway predates identity claims or the profile lookup
-    /// failed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Caller email, same provenance as `name`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub email: Option<String>,
+    /// Immutable owner user id of the exact devserver data plane.
+    pub owner_user_id: String,
     /// Wildcard host the browser hit.
     pub aud: String,
     /// Token-resolved devserver id.
@@ -92,15 +85,7 @@ pub struct Claims {
 impl Claims {
     /// True only for owner-level launcher access.
     pub fn is_owner(&self) -> bool {
-        self.role == ROLE_OWNER
-    }
-
-    /// Attach the caller's gateway-resolved identity.
-    #[must_use]
-    pub fn with_identity(mut self, name: Option<String>, email: Option<String>) -> Self {
-        self.name = name;
-        self.email = email;
-        self
+        self.sub == self.owner_user_id
     }
 }
 
@@ -118,6 +103,12 @@ pub enum AssertionError {
     WrongAudience,
     #[error("gateway assertion devserver mismatch")]
     WrongDevserver,
+    #[error("gateway assertion owner mismatch")]
+    WrongOwner,
+    #[error("gateway assertion issued in the future")]
+    FutureIssued,
+    #[error("gateway assertion lifetime invalid")]
+    InvalidLifetime,
 }
 
 pub type AssertionResult<T> = Result<T, AssertionError>;
@@ -140,17 +131,20 @@ pub fn devserver_id_from_token(token: &str) -> String {
 }
 
 /// Build claims with a short lifetime from the current wall clock.
-pub fn claims(sub: impl Into<String>, role: impl Into<String>, aud: &str, drv: &str) -> Claims {
+pub fn claims(
+    sub: impl Into<String>,
+    owner_user_id: impl Into<String>,
+    aud: &str,
+    drv: &str,
+) -> Claims {
     let now = now_unix();
     Claims {
         sub: sub.into(),
-        role: role.into(),
-        name: None,
-        email: None,
+        owner_user_id: owner_user_id.into(),
         aud: aud.to_string(),
         drv: drv.to_string(),
         iat: now,
-        exp: now + 60,
+        exp: now + ASSERTION_LIFETIME_SECS,
     }
 }
 
@@ -169,6 +163,7 @@ pub fn verify(
     token: &str,
     expected_aud: &str,
     expected_drv: &str,
+    expected_owner_user_id: &str,
 ) -> AssertionResult<Claims> {
     let (payload, sig) = token.split_once('.').ok_or(AssertionError::Malformed)?;
     if payload.is_empty() || sig.is_empty() || sig.contains('.') {
@@ -192,8 +187,18 @@ pub fn verify(
     if claims.drv != expected_drv {
         return Err(AssertionError::WrongDevserver);
     }
-    if claims.exp < now_unix() {
+    if claims.owner_user_id != expected_owner_user_id {
+        return Err(AssertionError::WrongOwner);
+    }
+    let now = now_unix();
+    if claims.iat > now + CLOCK_SKEW_SECS {
+        return Err(AssertionError::FutureIssued);
+    }
+    if claims.exp <= now {
         return Err(AssertionError::Expired);
+    }
+    if claims.exp <= claims.iat || claims.exp - claims.iat > ASSERTION_LIFETIME_SECS {
+        return Err(AssertionError::InvalidLifetime);
     }
     Ok(claims)
 }
@@ -252,41 +257,23 @@ mod tests {
     fn assertion_roundtrip() {
         let key = derive_assertion_key("chan_pat_secret");
         assert_eq!(devserver_id_from_token("abc").len(), 64);
-        let c = claims(
-            "11111111-1111-4111-8111-111111111111",
-            "owner",
-            "a.dev",
-            "drv",
-        );
+        let owner = "11111111-1111-4111-8111-111111111111";
+        let c = claims(owner, owner, "a.dev", "drv");
         let token = sign(&key, &c).unwrap();
-        let got = verify(&key, &token, "a.dev", "drv").unwrap();
+        let got = verify(&key, &token, "a.dev", "drv", owner).unwrap();
         assert_eq!(got.sub, c.sub);
         assert!(got.is_owner());
     }
 
     #[test]
-    fn assertion_roundtrip_with_identity() {
+    fn assertion_contains_no_display_identity() {
         let key = derive_assertion_key("chan_pat_secret");
-        let c = claims("u", "viewer", "a.dev", "drv").with_identity(
-            Some("Ada Lovelace".to_string()),
-            Some("ada@example.com".to_string()),
-        );
-        let token = sign(&key, &c).unwrap();
-        let got = verify(&key, &token, "a.dev", "drv").unwrap();
-        assert_eq!(got.name.as_deref(), Some("Ada Lovelace"));
-        assert_eq!(got.email.as_deref(), Some("ada@example.com"));
-    }
-
-    #[test]
-    fn assertion_without_identity_stays_legacy_shaped() {
-        let key = derive_assertion_key("chan_pat_secret");
-        let c = claims("u", "owner", "a.dev", "drv");
+        let c = claims("owner", "owner", "a.dev", "drv");
         let payload = serde_json::to_string(&c).unwrap();
         assert!(!payload.contains("\"name\""));
         assert!(!payload.contains("\"email\""));
-        let got = verify(&key, &sign(&key, &c).unwrap(), "a.dev", "drv").unwrap();
-        assert_eq!(got.name, None);
-        assert_eq!(got.email, None);
+        let got = verify(&key, &sign(&key, &c).unwrap(), "a.dev", "drv", "owner").unwrap();
+        assert_eq!(got.sub, "owner");
     }
 
     #[test]
@@ -298,19 +285,17 @@ mod tests {
         let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.to_string());
         let sig = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(hmac_sha256(&key, payload.as_bytes()));
-        let got = verify(&key, &format!("{payload}.{sig}"), "a.dev", "drv").unwrap();
+        let got = verify(&key, &format!("{payload}.{sig}"), "a.dev", "drv", "owner").unwrap();
         assert_eq!(got.sub, "u");
-        assert_eq!(got.name, None);
-        assert_eq!(got.email, None);
     }
 
     #[test]
     fn assertion_rejects_wrong_host() {
         let key = derive_assertion_key("chan_pat_secret");
-        let c = claims("u", "viewer", "a.dev", "drv");
+        let c = claims("u", "owner", "a.dev", "drv");
         let token = sign(&key, &c).unwrap();
         assert_eq!(
-            verify(&key, &token, "b.dev", "drv").unwrap_err(),
+            verify(&key, &token, "b.dev", "drv", "owner").unwrap_err(),
             AssertionError::WrongAudience
         );
     }
@@ -322,24 +307,75 @@ mod tests {
         let mut token = sign(&key, &c).unwrap();
         token.push('x');
         assert_eq!(
-            verify(&key, &token, "a.dev", "drv").unwrap_err(),
+            verify(&key, &token, "a.dev", "drv", "owner").unwrap_err(),
             AssertionError::BadSignature
         );
     }
 
     #[test]
-    fn canonical_audience_prefers_host_without_default_port() {
+    fn assertion_rejects_wrong_owner() {
+        let key = derive_assertion_key("chan_pat_secret");
+        let c = claims("caller", "owner-a", "a.dev", "drv");
+        let token = sign(&key, &c).unwrap();
         assert_eq!(
-            canonical_audience("Alice.Devserver.Chan.App"),
+            verify(&key, &token, "a.dev", "drv", "owner-b").unwrap_err(),
+            AssertionError::WrongOwner
+        );
+    }
+
+    #[test]
+    fn assertion_rejects_future_issue_and_overlong_lifetime() {
+        let key = derive_assertion_key("chan_pat_secret");
+        let mut future = claims("caller", "owner", "a.dev", "drv");
+        future.iat = now_unix() + CLOCK_SKEW_SECS + 1;
+        future.exp = future.iat + ASSERTION_LIFETIME_SECS;
+        assert_eq!(
+            verify(&key, &sign(&key, &future).unwrap(), "a.dev", "drv", "owner").unwrap_err(),
+            AssertionError::FutureIssued
+        );
+
+        let mut overlong = claims("caller", "owner", "a.dev", "drv");
+        overlong.exp = overlong.iat + ASSERTION_LIFETIME_SECS + 1;
+        assert_eq!(
+            verify(
+                &key,
+                &sign(&key, &overlong).unwrap(),
+                "a.dev",
+                "drv",
+                "owner"
+            )
+            .unwrap_err(),
+            AssertionError::InvalidLifetime
+        );
+    }
+
+    #[test]
+    fn canonical_audience_strips_only_the_schemes_actual_default_port() {
+        assert_eq!(
+            canonical_audience("https", "Alice.Devserver.Chan.App"),
             "alice.devserver.chan.app",
         );
         assert_eq!(
-            canonical_audience("alice.devserver.chan.app:443"),
+            canonical_audience("https", "alice.devserver.chan.app:443"),
             "alice.devserver.chan.app",
         );
         assert_eq!(
-            canonical_audience("alice.devserver.chan.app:7002"),
+            canonical_audience("http", "alice.devserver.chan.app:80"),
+            "alice.devserver.chan.app",
+        );
+        assert_eq!(
+            canonical_audience("https", "alice.devserver.chan.app:80"),
+            "alice.devserver.chan.app:80",
+        );
+        assert_eq!(
+            canonical_audience("http", "alice.devserver.chan.app:443"),
+            "alice.devserver.chan.app:443",
+        );
+        assert_eq!(
+            canonical_audience("https", "alice.devserver.chan.app:7002"),
             "alice.devserver.chan.app:7002",
         );
+        assert_eq!(canonical_audience("wss", "[::1]:443"), "[::1]");
+        assert_eq!(canonical_audience("ws", "[::1]:443"), "[::1]:443");
     }
 }

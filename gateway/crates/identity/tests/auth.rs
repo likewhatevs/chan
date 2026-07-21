@@ -122,6 +122,7 @@ impl TestApp {
 
         let cfg = Arc::new(Config {
             bind_addr: "127.0.0.1:0".parse().unwrap(),
+            internal_bind_addr: "127.0.0.1:0".parse().unwrap(),
             base_url,
             devserver_proxy_origin: "https://usr.chan.app".parse().unwrap(),
             devserver_tunnel_origin: "https://tunnel.example.test".parse().unwrap(),
@@ -135,11 +136,25 @@ impl TestApp {
             // Tests that need a live devserver mock the tunnel list (see
             // `mock_live_devserver`); the rest get an empty list via the
             // no-match error path, which `me` tolerates.
-            workspace_admin: Some(
-                DevserverControlClient::new(profile.uri().parse().unwrap(), "test-admin".into())
-                    .unwrap(),
-            ),
-            workspace_gate_secret: "test-workspace-gate-secret-32-bytes-aa".to_string(),
+            workspace_admin: DevserverControlClient::new(
+                profile.uri().parse().unwrap(),
+                "test-admin".into(),
+            )
+            .unwrap(),
+            admission_lease_verifier: {
+                let signer = devserver_control_proto::AdmissionLeaseSigner::from_base64(
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                )
+                .unwrap();
+                devserver_control_proto::AdmissionLeaseVerifier::from_base64(
+                    &signer.verifying_key_base64(),
+                )
+                .unwrap()
+            },
+            entry_signer: gateway_common::devserver_gate::EntrySigner::from_base64(
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            )
+            .unwrap(),
             providers: vec![Arc::new(provider)],
         });
 
@@ -243,6 +258,25 @@ fn extract_state(authorize_url: &str) -> String {
         .find(|(k, _)| k == "state")
         .map(|(_, v)| v.into_owned())
         .expect("state param")
+}
+
+fn assert_entry_handoff(status: StatusCode, headers: &[(String, String)], location: &str) {
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        location.is_empty(),
+        "credential must not appear in Location"
+    );
+    let value = |name: &str| {
+        headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    };
+    assert_eq!(value("cache-control"), Some("no-store"));
+    assert_eq!(value("referrer-policy"), Some("no-referrer"));
+    assert!(
+        value("content-security-policy").is_some_and(|csp| csp.contains("form-action https://"))
+    );
 }
 
 fn fake_user_id() -> Uuid {
@@ -453,15 +487,15 @@ async fn delete_profile_succeeds_and_clears_session() {
     let uid = fake_user_id();
     happy_login(&app, &mut c, uid, "octo@example.com").await;
 
-    // Mock profile-service DELETE /v1/users/{uid}.
-    Mock::given(method("DELETE"))
-        .and(path(format!("/v1/users/{uid}")))
-        .respond_with(ResponseTemplate::new(204))
+    // Profile establishes durable local denial before identity acknowledges.
+    Mock::given(method("POST"))
+        .and(path(format!("/v1/users/{uid}/pending-delete")))
+        .respond_with(ResponseTemplate::new(202))
         .mount(&app.profile)
         .await;
 
     let (s, _, _, _) = c.send(Method::DELETE, "/api/profile", None).await;
-    assert_eq!(s, StatusCode::NO_CONTENT);
+    assert_eq!(s, StatusCode::ACCEPTED);
 
     // Session was flushed. /api/me with the same cookie -> 401.
     let (s, _, _, _) = c.send(Method::GET, "/api/me", None).await;
@@ -625,9 +659,9 @@ async fn blocked_user_can_still_delete_account() {
     let uid = fake_user_id();
     happy_login(&app, &mut c, uid, "octo@example.com").await;
 
-    Mock::given(method("DELETE"))
-        .and(path(format!("/v1/users/{uid}")))
-        .respond_with(ResponseTemplate::new(204))
+    Mock::given(method("POST"))
+        .and(path(format!("/v1/users/{uid}/pending-delete")))
+        .respond_with(ResponseTemplate::new(202))
         .mount(&app.profile)
         .await;
     Mock::given(method("GET"))
@@ -639,7 +673,7 @@ async fn blocked_user_can_still_delete_account() {
         .await;
 
     let (s, _, _, _) = c.send(Method::DELETE, "/api/profile", None).await;
-    assert_eq!(s, StatusCode::NO_CONTENT);
+    assert_eq!(s, StatusCode::ACCEPTED);
     app.cleanup().await;
 }
 
@@ -660,13 +694,7 @@ fn live_user_body(uid: Uuid, email: &str, username: &str) -> Value {
     })
 }
 
-fn grant_body(
-    grant_id: Uuid,
-    owner_id: Uuid,
-    devserver_id: &str,
-    email: &str,
-    role: &str,
-) -> Value {
+fn grant_body(grant_id: Uuid, owner_id: Uuid, devserver_id: &str, email: &str) -> Value {
     let now = chrono::Utc::now().to_rfc3339();
     json!({
         "id": grant_id,
@@ -674,46 +702,71 @@ fn grant_body(
         "devserver_id": devserver_id,
         "grantee_email": email,
         "grantee_user_id": null,
-        "role": role,
         "created_at": now,
         "accepted_at": null,
     })
 }
 
-/// Mock the proxy admin tunnel list so `username` has one live
+/// Mock the scoped controller tunnel list so `username` has one live
 /// devserver. The open routes read the live devserver_id from here to
 /// mint the gate `drv`.
-async fn mock_live_devserver(app: &TestApp, username: &str, devserver_id: &str) {
-    mock_live_devservers(app, username, &[devserver_id]).await;
+async fn mock_live_devserver(
+    app: &TestApp,
+    owner_user_id: Uuid,
+    username: &str,
+    devserver_id: &str,
+) {
+    mock_live_devservers(app, owner_user_id, username, &[devserver_id]).await;
 }
 
 /// Same, with several live devservers.
-async fn mock_live_devservers(app: &TestApp, username: &str, devserver_ids: &[&str]) {
-    let now = chrono::Utc::now().to_rfc3339();
+async fn mock_live_devservers(
+    app: &TestApp,
+    owner_user_id: Uuid,
+    username: &str,
+    devserver_ids: &[&str],
+) {
+    let now = chrono::Utc::now();
+    let signer = devserver_control_proto::AdmissionLeaseSigner::from_base64(
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    )
+    .unwrap();
     let rows: Vec<serde_json::Value> = devserver_ids
         .iter()
         .map(|id| {
+            let registration_id = Uuid::new_v4();
+            let lease = signer
+                .sign(
+                    devserver_control_proto::AdmissionLeaseBinding {
+                        owner_user_id,
+                        user: username.into(),
+                        devserver_id: (*id).into(),
+                        registration_id,
+                        proxy_id: devserver_control_proto::ProxyId::parse("p1").unwrap(),
+                    },
+                    now,
+                    120,
+                )
+                .unwrap();
             json!({
+                "registration_id": registration_id,
+                "owner_user_id": owner_user_id,
                 "user": username,
                 "devserver_id": id,
                 "peer_addr": null,
-                "connected_at": now,
+                "connected_at": now.to_rfc3339(),
                 "proxy_id": "p1",
                 "proxy_base_url": "https://p1.usr.chan.app",
+                "admission_lease": lease,
+                "admission_lease_expires_at": (now + chrono::Duration::seconds(120)).to_rfc3339(),
             })
         })
         .collect();
     Mock::given(method("GET"))
-        .and(path(format!("/admin/v1/users/{username}/tunnels")))
+        .and(path(format!("/admin/v1/owners/{owner_user_id}/tunnels")))
         .respond_with(ResponseTemplate::new(200).set_body_json(rows))
         .mount(&app.profile)
         .await;
-}
-
-/// The tenant host identity mints for `(username, dsid)` on `p1`,
-/// the node the live-devserver mocks report.
-fn disc_host(username: &str, dsid: &str) -> String {
-    format!("{username}--{}.p1.usr.chan.app", &dsid[..12])
 }
 
 #[tokio::test]
@@ -725,7 +778,7 @@ async fn grant_create_requires_session() {
         .send(
             Method::POST,
             &format!("/api/devservers/{dsid}/grants"),
-            Some(json!({"grantee_email": "a@b.com", "role": "viewer"})),
+            Some(json!({"grantee_email": "a@b.com"})),
         )
         .await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);
@@ -756,7 +809,7 @@ async fn grant_create_validates_role() {
             Some(json!({"grantee_email": "a@b.com", "role": "admin"})),
         )
         .await;
-    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
     app.cleanup().await;
 }
 
@@ -784,7 +837,6 @@ async fn grant_create_forwards_to_profile() {
             uid,
             &dsid,
             "alice@x.com",
-            "editor",
         )))
         .mount(&app.profile)
         .await;
@@ -793,12 +845,12 @@ async fn grant_create_forwards_to_profile() {
         .send(
             Method::POST,
             &format!("/api/devservers/{dsid}/grants"),
-            Some(json!({"grantee_email": "alice@x.com", "role": "editor"})),
+            Some(json!({"grantee_email": "alice@x.com"})),
         )
         .await;
     assert_eq!(s, StatusCode::CREATED);
     assert_eq!(body["id"].as_str().unwrap(), grant_id.to_string());
-    assert_eq!(body["role"], "editor");
+    assert!(body.get("role").is_none());
     app.cleanup().await;
 }
 
@@ -904,24 +956,17 @@ async fn share_landing_grantee_minted_jwt_redirect() {
         .mount(&app.profile)
         .await;
     let dsid = "a".repeat(64);
-    mock_live_devserver(&app, "owner-handle", &dsid).await;
+    mock_live_devserver(&app, owner_uid, "owner-handle", &dsid).await;
     Mock::given(method("GET"))
         .and(path(format!(
             "/v1/users/{owner_uid}/devservers/{dsid}/access"
         )))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"role": "editor"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"access": true})))
         .mount(&app.profile)
         .await;
 
-    let (s, _, _, location) = c.send(Method::GET, "/s/owner-handle/photos", None).await;
-    assert_eq!(s, StatusCode::SEE_OTHER);
-    assert!(
-        location.starts_with(&format!(
-            "https://{}/photos/?t=",
-            disc_host("owner-handle", &dsid)
-        )),
-        "got {location}"
-    );
+    let (s, headers, _, location) = c.send(Method::GET, "/s/owner-handle/photos", None).await;
+    assert_entry_handoff(s, &headers, &location);
     app.cleanup().await;
 }
 
@@ -967,24 +1012,15 @@ async fn share_landing_root_owner_minted_jwt_redirect() {
         .mount(&app.profile)
         .await;
     let dsid = "a".repeat(64);
-    mock_live_devserver(&app, "owner-handle", &dsid).await;
+    mock_live_devserver(&app, uid, "owner-handle", &dsid).await;
     Mock::given(method("GET"))
         .and(path(format!("/v1/users/{uid}/devservers/{dsid}/access")))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"role": "owner"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"access": true})))
         .mount(&app.profile)
         .await;
 
-    let (s, _, _, location) = c.send(Method::GET, "/s/owner-handle", None).await;
-    assert_eq!(s, StatusCode::SEE_OTHER);
-    assert!(
-        location.starts_with(&format!("https://{}/?t=", disc_host("owner-handle", &dsid))),
-        "got {location}"
-    );
-    // Root open lands at the devserver ROOT -- no `/{workspace}/` segment.
-    assert!(
-        !location.contains("/photos/"),
-        "root open must not carry a workspace segment: {location}"
-    );
+    let (s, headers, _, location) = c.send(Method::GET, "/s/owner-handle", None).await;
+    assert_entry_handoff(s, &headers, &location);
     app.cleanup().await;
 }
 
@@ -1016,30 +1052,23 @@ async fn share_landing_d_selector_picks_devserver() {
         .await;
     let ds1 = "a".repeat(64);
     let ds2 = "b".repeat(64);
-    mock_live_devservers(&app, "owner-handle", &[&ds1, &ds2]).await;
+    mock_live_devservers(&app, owner_uid, "owner-handle", &[&ds1, &ds2]).await;
     Mock::given(method("GET"))
         .and(path(format!(
             "/v1/users/{owner_uid}/devservers/{ds2}/access"
         )))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"role": "editor"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"access": true})))
         .mount(&app.profile)
         .await;
 
-    let (s, _, _, location) = c
+    let (s, headers, _, location) = c
         .send(
             Method::GET,
             &format!("/s/owner-handle/photos?d={}", &ds2[..12]),
             None,
         )
         .await;
-    assert_eq!(s, StatusCode::SEE_OTHER);
-    assert!(
-        location.starts_with(&format!(
-            "https://{}/photos/?t=",
-            disc_host("owner-handle", &ds2)
-        )),
-        "got {location}"
-    );
+    assert_entry_handoff(s, &headers, &location);
     app.cleanup().await;
 }
 
@@ -1068,7 +1097,7 @@ async fn share_landing_unknown_or_malformed_d_is_404() {
         )))
         .mount(&app.profile)
         .await;
-    mock_live_devserver(&app, "owner-handle", &"a".repeat(64)).await;
+    mock_live_devserver(&app, owner_uid, "owner-handle", &"a".repeat(64)).await;
 
     // Well-formed selector that matches no live devserver.
     let (s, _, _, _) = c
@@ -1116,7 +1145,7 @@ async fn share_landing_multi_live_falls_back_to_first_accessible() {
         .await;
     let ds1 = "a".repeat(64);
     let ds2 = "b".repeat(64);
-    mock_live_devservers(&app, "owner-handle", &[&ds1, &ds2]).await;
+    mock_live_devservers(&app, owner_uid, "owner-handle", &[&ds1, &ds2]).await;
     Mock::given(method("GET"))
         .and(path(format!(
             "/v1/users/{owner_uid}/devservers/{ds1}/access"
@@ -1128,19 +1157,12 @@ async fn share_landing_multi_live_falls_back_to_first_accessible() {
         .and(path(format!(
             "/v1/users/{owner_uid}/devservers/{ds2}/access"
         )))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"role": "viewer"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"access": true})))
         .mount(&app.profile)
         .await;
 
-    let (s, _, _, location) = c.send(Method::GET, "/s/owner-handle/photos", None).await;
-    assert_eq!(s, StatusCode::SEE_OTHER);
-    assert!(
-        location.starts_with(&format!(
-            "https://{}/photos/?t=",
-            disc_host("owner-handle", &ds2)
-        )),
-        "got {location}"
-    );
+    let (s, headers, _, location) = c.send(Method::GET, "/s/owner-handle/photos", None).await;
+    assert_entry_handoff(s, &headers, &location);
     app.cleanup().await;
 }
 
@@ -1173,16 +1195,37 @@ async fn share_landing_node_base_outside_the_namespace_is_502() {
         .mount(&app.profile)
         .await;
     let dsid = "a".repeat(64);
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = chrono::Utc::now();
+    let registration_id = Uuid::new_v4();
+    let lease = devserver_control_proto::AdmissionLeaseSigner::from_base64(
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    )
+    .unwrap()
+    .sign(
+        devserver_control_proto::AdmissionLeaseBinding {
+            owner_user_id: owner_uid,
+            user: "owner-handle".into(),
+            devserver_id: dsid.clone(),
+            registration_id,
+            proxy_id: devserver_control_proto::ProxyId::parse("p1").unwrap(),
+        },
+        now,
+        120,
+    )
+    .unwrap();
     Mock::given(method("GET"))
-        .and(path("/admin/v1/users/owner-handle/tunnels"))
+        .and(path(format!("/admin/v1/owners/{owner_uid}/tunnels")))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+            "registration_id": registration_id,
+            "owner_user_id": owner_uid,
             "user": "owner-handle",
             "devserver_id": dsid,
             "peer_addr": null,
-            "connected_at": now,
+            "connected_at": now.to_rfc3339(),
             "proxy_id": "p1",
             "proxy_base_url": "https://p1.evil.example.net",
+            "admission_lease": lease,
+            "admission_lease_expires_at": (now + chrono::Duration::seconds(120)).to_rfc3339(),
         }])))
         .mount(&app.profile)
         .await;
@@ -1190,7 +1233,7 @@ async fn share_landing_node_base_outside_the_namespace_is_502() {
         .and(path(format!(
             "/v1/users/{owner_uid}/devservers/{dsid}/access"
         )))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"role": "editor"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"access": true})))
         .mount(&app.profile)
         .await;
 
@@ -1252,7 +1295,7 @@ async fn share_landing_no_access_is_404() {
         .mount(&app.profile)
         .await;
     let dsid = "a".repeat(64);
-    mock_live_devserver(&app, "owner-handle", &dsid).await;
+    mock_live_devserver(&app, owner_uid, "owner-handle", &dsid).await;
     Mock::given(method("GET"))
         .and(path(format!(
             "/v1/users/{owner_uid}/devservers/{dsid}/access"

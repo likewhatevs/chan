@@ -20,6 +20,9 @@ cd "$(dirname "$0")"
 SCRIPT_DIR="$(pwd -P)"
 SECRETS_DIR="$SCRIPT_DIR/secrets"
 ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)/gateway"
+TLS_SHIM="$SCRIPT_DIR/tls-shim.mjs"
+TLS_CERT="$SECRETS_DIR/tls/edge.crt"
+TLS_KEY="$SECRETS_DIR/tls/edge.key"
 
 PROXIES=${CHAN_DEV_PROXIES:-1}
 case "$PROXIES" in
@@ -40,6 +43,9 @@ for f in "${envs[@]}"; do
         exit 1
     fi
 done
+command -v node >/dev/null || { echo "error: node is required for local TLS edges" >&2; exit 1; }
+[[ -f "$TLS_SHIM" && -f "$TLS_CERT" && -f "$TLS_KEY" ]] \
+    || { echo "error: local TLS material missing; run setup.sh" >&2; exit 1; }
 
 # Build everything up front so the services don't race to
 # compile the same dependency graph from cold.
@@ -89,13 +95,26 @@ start_service() {
     pids+=($!)
 }
 
-# Order: profile first so migrations are done before identity
-# tries to look up users; identity second; the controller before the
+start_tls_edge() {
+    local name=$1 listen=$2 target=$3 protocol=$4 color=$5
+    (
+        node "$TLS_SHIM" "$listen" "$target" "$TLS_CERT" "$TLS_KEY" "$protocol" 2>&1 \
+            | awk -v name="$name" -v c="$color" '
+                BEGIN { reset = "\033[0m" }
+                { printf "%s%-12s%s | %s\n", c, "[" name "]", reset, $0; fflush() }
+              '
+    ) &
+    pids+=($!)
+}
+
+# Order: profile first; setup.sh has already run migrations. Identity starts
+# second; the controller before the
 # proxies so their control streams attach on first try; proxies last
 # so their tunnel handshakes go to a live identity.
 start_service profile      profile-service     "$SECRETS_DIR/profile.env"     $'\033[36m'
 sleep 1
 start_service identity     identity-service    "$SECRETS_DIR/identity.env"    $'\033[33m'
+start_tls_edge identity-tls 127.0.0.1:17000 127.0.0.1:16900 http1 $'\033[33m'
 sleep 1
 start_service devserver-control devserver-control-service "$SECRETS_DIR/devserver-control.env" $'\033[32m'
 sleep 1
@@ -103,20 +122,24 @@ proxy_colors=($'\033[35m' $'\033[34m' $'\033[31m')
 for ((n = 1; n <= PROXIES; n++)); do
     start_service "devserver-proxy.p$n" devserver-proxy-service \
         "$SECRETS_DIR/devserver-proxy.p$n.env" "${proxy_colors[$((n - 1))]}"
+    start_tls_edge "proxy-tls.p$n" "127.0.0.$n:17002" "127.0.0.$n:16902" http1 \
+        "${proxy_colors[$((n - 1))]}"
+    start_tls_edge "tunnel-tls.p$n" "127.0.0.$n:17100" "127.0.0.$n:16910" h2 \
+        "${proxy_colors[$((n - 1))]}"
     sleep 1
 done
 
 echo
 echo "==> services starting"
 echo "    profile         127.0.0.1:17001"
-echo "    identity        http://id.localtest.me:17000"
+echo "    identity        https://id.localtest.me:17000 (TLS) 127.0.0.1:17004 (internal)"
 echo "    devserver-control 127.0.0.1:17003 (admin) 127.0.0.1:17101 (h2c control)"
 for ((n = 1; n <= PROXIES; n++)); do
-    echo "    devserver-proxy.p$n http://p$n.devserver.localtest.me:17002 (node) 127.0.0.$n:17100 (h2c tunnel)"
+    echo "    devserver-proxy.p$n https://p$n.devserver.localtest.me:17002 (TLS node) 127.0.0.$n:17100 (TLS tunnel)"
 done
 echo
 echo "    (proxies: $PROXIES; set CHAN_DEV_PROXIES=3 for the full fleet)"
-echo "Open the dashboard: http://id.localtest.me:17000"
+echo "Open the dashboard: https://id.localtest.me:17000"
 echo "Ctrl-C to stop."
 echo
 

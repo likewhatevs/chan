@@ -1,6 +1,10 @@
-# chan-devserver: an Ubuntu rootfs that runs one or more chan devservers as
-# lingering systemd --user services, each publishing its mounted workspaces
-# over the gateway tunnel at {handle}.devserver.chan.app. Unlike the sibling
+# chan-devserver: an Ubuntu rootfs that runs one chan devserver as a lingering
+# systemd --user service, publishing its mounted workspaces over the gateway
+# tunnel at {handle}.devserver.chan.app. One container is one externally shared
+# trust domain: provisioning a second Unix user is refused, and the managed user
+# cannot be root/uid 0/gid 0, have supplemental groups, or retain the legacy
+# sudoers drop-in. First provision must create a fresh dedicated account; only
+# the root-owned owner marker permits that same account on a rerun. Unlike the sibling
 # chan-desktop-*.sdme templates (which bake a build toolchain), this is a
 # RUNTIME rootfs: it ships the bits its systemd --user devserver path needs and
 # lets chan-devserver-provision install the released `chan` per-user at runtime,
@@ -31,18 +35,11 @@ FROM ubuntu
 #   curl               the install.sh fetch, plus token/health probes
 #   dbus-user-session  the per-user D-Bus session bus `systemctl --user` needs;
 #                      without it a lingering user's manager has no bus to reach
-#   adduser            chan-devserver-provision runs `adduser <user> sudo`;
-#                      minimal ubuntu rootfs no longer ships it
-#
-# sudo is deliberately NOT installed here: the runtime overlay path drops its
-# setuid bit, and sudo then refuses to run ("must be owned by uid 0 and have
-# the setuid bit set"). chan-devserver-provision apt-installs it at RUNTIME,
-# where dpkg sets setuid in the live filesystem, and configures it there.
 #
 # --no-install-recommends keeps the base lean; the booting base provides systemd.
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        ca-certificates dialog curl dbus-user-session adduser && \
+        ca-certificates dialog curl dbus-user-session && \
     rm -rf /var/lib/apt/lists/*
 
 # The runtime provisioning helper (see its header). COPY resolves the source

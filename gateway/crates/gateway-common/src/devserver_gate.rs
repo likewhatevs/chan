@@ -1,131 +1,150 @@
-//! Devserver-gate JWT envelope shared by identity-service (mints entry
-//! tokens) and devserver-proxy (verifies entry tokens, mints + verifies
-//! session cookies). HS256 only; `alg: none` is hard-rejected by the
-//! validation config.
+//! Short-lived, identity-signed credentials used to establish opaque
+//! proxy-local browser sessions.
 //!
 //! Token shapes:
 //!
-//! * `typ: "entry"` (issued by identity, lives in `?t=` URL param,
-//!   30s exp). After successful verification devserver-proxy mints a
-//!   session token of the same envelope but with `typ: "session"`,
-//!   sets it as a host-only `Path=/` cookie, and 303s to the
-//!   clean URL.
-//! * `typ: "session"` (issued and verified by devserver-proxy, lives in
-//!   the `devserver_gate` cookie, 24h exp).
-//!
-//! Both shapes carry the same envelope so the verify path can decode
-//! once and dispatch on `typ`. `aud` binds the token to the wildcard
+//! Entry credentials are carried only in a bounded POST body to the fixed
+//! exchange path and expire after 30 seconds. The proxy verifies Ed25519,
+//! consumes the random `jti` once, then returns a host-only opaque session
+//! cookie. `aud` binds the token to the wildcard
 //! host (`alice.devserver.chan.app`) so a token minted for one user is
 //! not accepted on another user's subdomain. `drv` binds it to one
 //! live devserver registration for the same reason.
-//!
-//! Why HS256 (symmetric): both services run in the same trust zone
-//! and share the same secret already (`DEVSERVER_GATE_SECRET`, a
-//! cross-service secret kept generic across the rename). HS256
-//! gives the smallest token footprint and the simplest key rotation
-//! (one secret rotation invalidates every live token). Asymmetric
-//! buys nothing here.
-//!
-//! Optional identity claims (`name`, `email`) are resolved by
-//! identity-service at entry mint and propagated into the session
-//! token unchanged, so a display-name change stays stale until the
-//! next entry mint (up to the 24h session-cookie lifetime). They are
-//! cosmetic (participant display strings on the devserver), never an
-//! authorization input.
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use chrono::{DateTime, Duration, Utc};
-use jsonwebtoken::{
-    decode as jwt_decode, encode as jwt_encode, Algorithm, DecodingKey, EncodingKey, Header,
-    Validation,
-};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// One envelope for both shapes; `typ` discriminates.
+pub const ENTRY_PURPOSE: &str = "chan.devserver.entry";
+pub const ENTRY_EXCHANGE_PATH: &str = "/_chan/entry";
+pub const ENTRY_VERSION: u16 = 1;
+pub const ENTRY_LIFETIME_SECONDS: i64 = 30;
+pub const ENTRY_CLOCK_SKEW_SECONDS: i64 = 5;
+const MAX_ENTRY_TOKEN_BYTES: usize = 4096;
+const MAX_ENTRY_VERIFYING_KEYS: usize = 2;
+
+#[derive(Clone)]
+pub struct EntrySigner(SigningKey);
+
+impl std::fmt::Debug for EntrySigner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EntrySigner").finish_non_exhaustive()
+    }
+}
+
+impl EntrySigner {
+    pub fn from_base64(raw: &str) -> DevserverGateResult<Self> {
+        let bytes = decode_canonical_key(raw, "entry signing key")?;
+        Ok(Self(SigningKey::from_bytes(&bytes)))
+    }
+
+    pub fn verifying_key_base64(&self) -> String {
+        URL_SAFE_NO_PAD.encode(self.0.verifying_key().as_bytes())
+    }
+}
+
+#[derive(Clone)]
+pub struct EntryVerifierRing(Vec<VerifyingKey>);
+
+impl std::fmt::Debug for EntryVerifierRing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EntryVerifierRing")
+            .field("key_count", &self.0.len())
+            .finish()
+    }
+}
+
+impl EntryVerifierRing {
+    /// Parse one or two semicolon-delimited Ed25519 public keys. Two keys allow
+    /// a bounded rotation overlap; duplicates and empty members are rejected.
+    pub fn from_base64_list(raw: &str) -> DevserverGateResult<Self> {
+        let parts: Vec<&str> = raw.split(';').collect();
+        if parts.is_empty()
+            || parts.len() > MAX_ENTRY_VERIFYING_KEYS
+            || parts
+                .iter()
+                .any(|part| part.is_empty() || part.trim() != *part)
+        {
+            return Err(DevserverGateError::Key(
+                "entry verifier ring must contain one or two canonical keys".into(),
+            ));
+        }
+        let mut keys = Vec::with_capacity(parts.len());
+        for part in parts {
+            let bytes = decode_canonical_key(part, "entry verifying key")?;
+            let key = VerifyingKey::from_bytes(&bytes)
+                .map_err(|_| DevserverGateError::Key("invalid entry verifying key".into()))?;
+            if keys.contains(&key) {
+                return Err(DevserverGateError::Key(
+                    "entry verifier ring contains a duplicate key".into(),
+                ));
+            }
+            keys.push(key);
+        }
+        Ok(Self(keys))
+    }
+}
+
+fn decode_canonical_key(raw: &str, label: &str) -> DevserverGateResult<[u8; 32]> {
+    let bytes = URL_SAFE_NO_PAD
+        .decode(raw)
+        .map_err(|_| DevserverGateError::Key(format!("{label} is not canonical base64url")))?;
+    if bytes.len() != 32 || URL_SAFE_NO_PAD.encode(&bytes) != raw {
+        return Err(DevserverGateError::Key(format!(
+            "{label} must be canonical base64url for exactly 32 bytes"
+        )));
+    }
+    bytes
+        .try_into()
+        .map_err(|_| DevserverGateError::Key(format!("{label} has the wrong length")))
+}
+
+/// Signed entry credential claims.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
-    /// Stable logical token issuer. Verified opportunistically (we trust the
-    /// signature; `iss` is a debug aid in logs), so it names the service role
-    /// instead of a deployment hostname.
+    /// Purpose and protocol version make this credential unusable in another
+    /// signed-token context even if the same key is accidentally configured.
+    pub purpose: String,
+    pub version: u16,
+    /// Stable logical token issuer. Decode verifies this exact service role;
+    /// it deliberately does not depend on a deployment hostname.
     pub iss: String,
-    /// `users.id` of the workspace owner.
+    /// Immutable caller user id.
     pub sub: Uuid,
-    /// Access role resolved by profile-service: `owner`, `editor`, or
-    /// `viewer`.
-    #[serde(default = "default_role")]
-    pub role: String,
+    /// Immutable owner of the exact devserver data plane.
+    pub owner_user_id: Uuid,
     /// Devserver id resolved from the live tunnel registration.
     pub drv: String,
     /// Exact tenant host the token is bound to.
     pub aud: String,
-    /// `"entry"` or `"session"`. See module doc.
+    /// Fixed credential type (`"entry"`).
     pub typ: String,
-    /// Caller display name, resolved by identity-service at entry
-    /// mint. Absent when the minting service predates identity claims
-    /// or the profile lookup failed. See the module doc for the
-    /// staleness bound.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Caller email, same provenance as `name`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub email: Option<String>,
+    /// Provisioned proxy node that alone may exchange this entry credential.
+    pub proxy_id: String,
+    /// Random single-use credential id retained by the target proxy until exp.
+    pub jti: Uuid,
+    /// Relative target path the proxy redirects to after successful POST
+    /// exchange. Signed so the browser cannot turn the exchange into an open
+    /// redirect or choose a different tenant path.
+    pub next_path: String,
     pub iat: i64,
     pub exp: i64,
 }
 
-impl Claims {
-    /// The identity bundle carried by this token, for propagating an
-    /// entry token's identity into the session mint.
-    pub fn identity(&self) -> CallerIdentity {
-        CallerIdentity {
-            name: self.name.clone(),
-            email: self.email.clone(),
-        }
-    }
-}
-
-/// Caller identity attached to a token at mint time. `Default` is the
-/// no-identity bundle for callers that have nothing to attach.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct CallerIdentity {
-    pub name: Option<String>,
-    pub email: Option<String>,
-}
-
-fn default_role() -> String {
-    "viewer".to_string()
-}
-
-/// Discriminator for the verify call site so we can hard-require the
-/// shape we expect at each hop. Decoupled from the `typ` string so a
-/// future shape (`refresh`?) doesn't require parsing surgery.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TokenType {
-    Entry,
-    Session,
-}
-
-impl TokenType {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            TokenType::Entry => "entry",
-            TokenType::Session => "session",
-        }
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum DevserverGateError {
-    /// Signature failed HMAC verify, or the wire shape is bad.
+    #[error("invalid devserver-gate key: {0}")]
+    Key(String),
+    /// Signature verification failed, or the wire shape is bad.
     /// Library-level decode errors collapse here; the only thing we
     /// surface upstream is "token bad."
     #[error("invalid devserver-gate token: {0}")]
     Decode(String),
 
-    /// `exp` is in the past. Common case for an expired session
-    /// cookie; the caller should treat this the same way as "no
-    /// cookie at all" (404 on the proxy path) so existence does not
-    /// leak.
+    /// `exp` is in the past.
     #[error("devserver-gate token expired")]
     Expired,
 
@@ -137,123 +156,168 @@ pub enum DevserverGateError {
     #[error("devserver-gate token devserver mismatch")]
     WrongWorkspace,
 
-    /// `typ` claim does not match the verify-call's expectation.
-    /// Defensive: prevents an "entry" token being replayed as a
-    /// session cookie or vice versa. `got` is attacker-controlled
-    /// (any string the caller put in the JWT), so the Display form
-    /// only surfaces `want` to avoid echoing arbitrary content into
-    /// any future log site that formats the error. Operators who
-    /// need the observed value can read it directly off the variant.
-    #[error("devserver-gate token type mismatch (want {want:?})")]
-    WrongType { got: String, want: &'static str },
+    /// Immutable owner does not match the tunnel registration.
+    #[error("devserver-gate token owner mismatch")]
+    WrongOwner,
+
+    #[error("devserver-gate token proxy mismatch")]
+    WrongProxy,
+
+    #[error("devserver-gate token purpose or version mismatch")]
+    WrongContext,
 }
 
 pub type DevserverGateResult<T> = Result<T, DevserverGateError>;
 
 /// Mint an entry token (30s exp).
 pub fn encode_entry(
-    secret: &[u8],
+    signer: &EntrySigner,
     sub: Uuid,
-    role: &str,
+    owner_user_id: Uuid,
     drv: &str,
     aud: &str,
-    identity: CallerIdentity,
+    proxy_id: &str,
+    next_path: &str,
 ) -> DevserverGateResult<String> {
-    encode(secret, sub, role, drv, aud, identity, TokenType::Entry)
-}
-
-/// Mint a session token (24h exp).
-pub fn encode_session(
-    secret: &[u8],
-    sub: Uuid,
-    role: &str,
-    drv: &str,
-    aud: &str,
-    identity: CallerIdentity,
-) -> DevserverGateResult<String> {
-    encode(secret, sub, role, drv, aud, identity, TokenType::Session)
-}
-
-fn encode(
-    secret: &[u8],
-    sub: Uuid,
-    role: &str,
-    drv: &str,
-    aud: &str,
-    identity: CallerIdentity,
-    typ: TokenType,
-) -> DevserverGateResult<String> {
+    validate_entry_next_path(next_path)?;
     let now = Utc::now();
-    let (iss, lifetime) = match typ {
-        TokenType::Entry => ("chan-gateway-identity", Duration::seconds(30)),
-        TokenType::Session => ("chan-gateway-devserver-proxy", Duration::hours(24)),
-    };
     let claims = Claims {
-        iss: iss.to_string(),
+        purpose: ENTRY_PURPOSE.to_string(),
+        version: ENTRY_VERSION,
+        iss: "chan-gateway-identity".to_string(),
         sub,
-        role: role.to_string(),
+        owner_user_id,
         drv: drv.to_string(),
         aud: aud.to_string(),
-        typ: typ.as_str().to_string(),
-        name: identity.name,
-        email: identity.email,
+        typ: "entry".to_string(),
+        proxy_id: proxy_id.to_string(),
+        jti: Uuid::new_v4(),
+        next_path: next_path.to_string(),
         iat: now.timestamp(),
-        exp: (now + lifetime).timestamp(),
+        exp: (now + Duration::seconds(ENTRY_LIFETIME_SECONDS)).timestamp(),
     };
-    jwt_encode(
-        &Header::new(Algorithm::HS256),
-        &claims,
-        &EncodingKey::from_secret(secret),
-    )
-    .map_err(|e| DevserverGateError::Decode(format!("encode: {e}")))
+    let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"EdDSA","typ":"JWT"}"#);
+    let payload = URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&claims)
+            .map_err(|error| DevserverGateError::Decode(format!("encode: {error}")))?,
+    );
+    let signed = format!("{header}.{payload}");
+    let signature = signer.0.sign(signed.as_bytes());
+    Ok(format!(
+        "{signed}.{}",
+        URL_SAFE_NO_PAD.encode(signature.to_bytes())
+    ))
 }
 
-/// Verify a token and return the claims. `expected_typ` hard-fails if
-/// the token's `typ` does not match (an entry token cannot ride in
-/// the cookie slot and vice versa). `expected_aud` and `expected_drv`
-/// bind the verification to the host and workspace the request actually
-/// hit; passing different values is a logic error in the caller.
-///
-/// The validation config:
-/// * `Algorithm::HS256` only (no `alg: none`, no asymmetric algs);
-/// * `validate_exp = true` (library-level expiry check);
-/// * `aud` is matched in-band here against `expected_aud`.
-///
-/// `Validation::new(HS256)` already enforces alg + exp; we keep the
-/// explicit `validate_exp(true)` for documentation.
-pub fn decode(
-    secret: &[u8],
+/// Verify an identity-signed entry credential under a bounded public-key ring
+/// and bind it to the exact receiving proxy and tenant authority.
+pub fn decode_entry(
+    verifiers: &EntryVerifierRing,
     token: &str,
-    expected_typ: TokenType,
+    expected_proxy_id: &str,
     expected_aud: &str,
     expected_drv: &str,
+    expected_owner_user_id: Uuid,
 ) -> DevserverGateResult<Claims> {
-    let mut validation = Validation::new(Algorithm::HS256);
-    validation.validate_exp = true;
-    // We match `aud` ourselves below so the error mapping is clean.
-    // jsonwebtoken's aud check returns `InvalidAudience`, which we'd
-    // collapse into the same WrongAudience anyway.
-    validation.validate_aud = false;
+    if token.is_empty() || token.len() > MAX_ENTRY_TOKEN_BYTES {
+        return Err(DevserverGateError::Decode(
+            "invalid entry token length".into(),
+        ));
+    }
+    let mut parts = token.split('.');
+    let (Some(header), Some(payload), Some(signature), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err(DevserverGateError::Decode("malformed entry token".into()));
+    };
+    let decoded_header = URL_SAFE_NO_PAD
+        .decode(header)
+        .map_err(|_| DevserverGateError::Decode("invalid entry header".into()))?;
+    if decoded_header != br#"{"alg":"EdDSA","typ":"JWT"}"# {
+        return Err(DevserverGateError::Decode(
+            "unexpected entry signature algorithm".into(),
+        ));
+    }
+    let signature_bytes = URL_SAFE_NO_PAD
+        .decode(signature)
+        .map_err(|_| DevserverGateError::Decode("invalid entry signature".into()))?;
+    let signature = Signature::from_slice(&signature_bytes)
+        .map_err(|_| DevserverGateError::Decode("invalid entry signature".into()))?;
+    let signed = format!("{header}.{payload}");
+    if !verifiers
+        .0
+        .iter()
+        .any(|key| key.verify(signed.as_bytes(), &signature).is_ok())
+    {
+        return Err(DevserverGateError::Decode(
+            "entry signature verification failed".into(),
+        ));
+    }
+    let payload = URL_SAFE_NO_PAD
+        .decode(payload)
+        .map_err(|_| DevserverGateError::Decode("invalid entry payload".into()))?;
+    let claims: Claims = serde_json::from_slice(&payload)
+        .map_err(|_| DevserverGateError::Decode("invalid entry claims".into()))?;
+    let now = Utc::now().timestamp();
+    if claims.exp < now - ENTRY_CLOCK_SKEW_SECONDS {
+        return Err(DevserverGateError::Expired);
+    }
+    if claims.iat > now + ENTRY_CLOCK_SKEW_SECONDS
+        || claims.exp - claims.iat != ENTRY_LIFETIME_SECONDS
+    {
+        return Err(DevserverGateError::WrongContext);
+    }
+    if claims.purpose != ENTRY_PURPOSE
+        || claims.version != ENTRY_VERSION
+        || claims.iss != "chan-gateway-identity"
+        || claims.typ != "entry"
+    {
+        return Err(DevserverGateError::WrongContext);
+    }
+    if claims.proxy_id != expected_proxy_id {
+        return Err(DevserverGateError::WrongProxy);
+    }
+    if claims.jti.is_nil() {
+        return Err(DevserverGateError::WrongContext);
+    }
+    validate_entry_next_path(&claims.next_path)?;
+    validate_bindings(&claims, expected_aud, expected_drv, expected_owner_user_id)?;
+    Ok(claims)
+}
 
-    let data = jwt_decode::<Claims>(token, &DecodingKey::from_secret(secret), &validation)
-        .map_err(|e| match e.kind() {
-            jsonwebtoken::errors::ErrorKind::ExpiredSignature => DevserverGateError::Expired,
-            _ => DevserverGateError::Decode(format!("{e}")),
-        })?;
-    let claims = data.claims;
+pub fn validate_entry_next_path(path: &str) -> DevserverGateResult<()> {
+    if path.is_empty()
+        || path.len() > 2048
+        || !path.starts_with('/')
+        || path.starts_with("//")
+        || path.contains('\\')
+        || path.chars().any(char::is_control)
+    {
+        return Err(DevserverGateError::WrongContext);
+    }
+    let uri: axum::http::Uri = path.parse().map_err(|_| DevserverGateError::WrongContext)?;
+    if uri.scheme().is_some() || uri.authority().is_some() {
+        return Err(DevserverGateError::WrongContext);
+    }
+    Ok(())
+}
+
+fn validate_bindings(
+    claims: &Claims,
+    expected_aud: &str,
+    expected_drv: &str,
+    expected_owner_user_id: Uuid,
+) -> DevserverGateResult<()> {
     if claims.aud != expected_aud {
         return Err(DevserverGateError::WrongAudience);
     }
     if claims.drv != expected_drv {
         return Err(DevserverGateError::WrongWorkspace);
     }
-    if claims.typ != expected_typ.as_str() {
-        return Err(DevserverGateError::WrongType {
-            got: claims.typ.clone(),
-            want: expected_typ.as_str(),
-        });
+    if claims.owner_user_id != expected_owner_user_id {
+        return Err(DevserverGateError::WrongOwner);
     }
-    Ok(claims)
+    Ok(())
 }
 
 /// Convenience: when did this token issue?
@@ -265,29 +329,38 @@ pub fn issued_at(claims: &Claims) -> DateTime<Utc> {
 mod tests {
     use super::*;
 
-    const SECRET: &[u8] = b"test-secret-must-be-long-enough-32";
+    const SIGNING_KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
     fn sample_uuid() -> Uuid {
         Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap()
     }
 
+    fn entry_keys() -> (EntrySigner, EntryVerifierRing) {
+        let signer = EntrySigner::from_base64(SIGNING_KEY).unwrap();
+        let ring = EntryVerifierRing::from_base64_list(&signer.verifying_key_base64()).unwrap();
+        (signer, ring)
+    }
+
     #[test]
     fn entry_roundtrip_ok() {
+        let (signer, ring) = entry_keys();
         let t = encode_entry(
-            SECRET,
+            &signer,
             sample_uuid(),
-            "owner",
+            sample_uuid(),
             "blog",
             "alice.devserver.chan.app",
-            CallerIdentity::default(),
+            "p1",
+            "/blog/",
         )
         .unwrap();
-        let c = decode(
-            SECRET,
+        let c = decode_entry(
+            &ring,
             &t,
-            TokenType::Entry,
+            "p1",
             "alice.devserver.chan.app",
             "blog",
+            sample_uuid(),
         )
         .unwrap();
         assert_eq!(c.sub, sample_uuid());
@@ -295,148 +368,89 @@ mod tests {
         assert_eq!(c.aud, "alice.devserver.chan.app");
         assert_eq!(c.typ, "entry");
         assert_eq!(c.iss, "chan-gateway-identity");
-        assert_eq!(c.role, "owner");
-    }
-
-    #[test]
-    fn session_roundtrip_ok() {
-        let t = encode_session(
-            SECRET,
-            sample_uuid(),
-            "editor",
-            "blog",
-            "alice.devserver.chan.app",
-            CallerIdentity::default(),
-        )
-        .unwrap();
-        let c = decode(
-            SECRET,
-            &t,
-            TokenType::Session,
-            "alice.devserver.chan.app",
-            "blog",
-        )
-        .unwrap();
-        assert_eq!(c.iss, "chan-gateway-devserver-proxy");
-        assert_eq!(c.typ, "session");
-        assert_eq!(c.role, "editor");
-    }
-
-    #[test]
-    fn cross_type_replay_rejected() {
-        // An entry token must not be accepted in the session slot.
-        // Defensive: even if someone exfiltrates an entry token, it
-        // can only ride the URL leg, not the cookie leg.
-        let entry = encode_entry(
-            SECRET,
-            sample_uuid(),
-            "owner",
-            "blog",
-            "alice.devserver.chan.app",
-            CallerIdentity::default(),
-        )
-        .unwrap();
-        let err = decode(
-            SECRET,
-            &entry,
-            TokenType::Session,
-            "alice.devserver.chan.app",
-            "blog",
-        )
-        .unwrap_err();
-        assert!(matches!(err, DevserverGateError::WrongType { .. }));
+        assert_eq!(c.owner_user_id, sample_uuid());
+        assert_eq!(c.proxy_id, "p1");
+        assert_eq!(c.purpose, ENTRY_PURPOSE);
+        assert_eq!(c.version, ENTRY_VERSION);
     }
 
     #[test]
     fn aud_mismatch_rejected() {
+        let (signer, ring) = entry_keys();
         let t = encode_entry(
-            SECRET,
+            &signer,
             sample_uuid(),
-            "owner",
+            sample_uuid(),
             "blog",
             "alice.devserver.chan.app",
-            CallerIdentity::default(),
+            "p1",
+            "/blog/",
         )
         .unwrap();
-        let err = decode(
-            SECRET,
+        let err = decode_entry(
+            &ring,
             &t,
-            TokenType::Entry,
+            "p1",
             "bob.devserver.chan.app",
             "blog",
+            sample_uuid(),
         )
         .unwrap_err();
         assert!(matches!(err, DevserverGateError::WrongAudience));
     }
 
     #[test]
-    fn drv_mismatch_rejected() {
-        // Critical isolation property: a token minted for alice/blog
-        // must not be accepted on alice/journal even on the same
-        // subdomain.
-        let t = encode_session(
-            SECRET,
-            sample_uuid(),
-            "owner",
-            "blog",
-            "alice.devserver.chan.app",
-            CallerIdentity::default(),
-        )
-        .unwrap();
-        let err = decode(
-            SECRET,
-            &t,
-            TokenType::Session,
-            "alice.devserver.chan.app",
-            "journal",
-        )
-        .unwrap_err();
-        assert!(matches!(err, DevserverGateError::WrongWorkspace));
-    }
-
-    #[test]
-    fn wrong_secret_rejected() {
+    fn wrong_verifying_key_rejected() {
+        let (signer, _) = entry_keys();
         let t = encode_entry(
-            SECRET,
+            &signer,
             sample_uuid(),
-            "owner",
+            sample_uuid(),
             "blog",
             "alice.devserver.chan.app",
-            CallerIdentity::default(),
+            "p1",
+            "/blog/",
         )
         .unwrap();
-        let err = decode(
-            b"different-secret-32-bytes-long-ab",
+        let other =
+            EntrySigner::from_base64("AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE").unwrap();
+        let ring = EntryVerifierRing::from_base64_list(&other.verifying_key_base64()).unwrap();
+        let err = decode_entry(
+            &ring,
             &t,
-            TokenType::Entry,
+            "p1",
             "alice.devserver.chan.app",
             "blog",
+            sample_uuid(),
         )
         .unwrap_err();
         assert!(matches!(err, DevserverGateError::Decode(_)));
     }
 
     #[test]
-    fn alg_none_rejected() {
-        // Defense-in-depth: even if someone hand-crafts an `alg: none`
-        // header pointing at our `aud`/`drv`, the decoder must refuse
-        // it because Validation::new(HS256) hard-requires HS256.
+    fn unexpected_signature_algorithm_header_is_rejected() {
+        // The verifier accepts only the exact canonical EdDSA header. An
+        // unsigned or algorithm-substitution envelope is rejected before
+        // claims decoding.
         //
         // Construction: header `{"alg":"none","typ":"JWT"}` + claims
         // with no signature trailing.
         let header = base64_url(r#"{"alg":"none","typ":"JWT"}"#);
         let payload = base64_url(
             r#"{"iss":"id.chan.app","sub":"11111111-1111-4111-8111-111111111111",
+                "owner_user_id":"11111111-1111-4111-8111-111111111111",
                 "drv":"blog","aud":"alice.devserver.chan.app","typ":"entry",
                 "iat":0,"exp":9999999999}"#,
         );
         let token = format!("{header}.{payload}.");
-        let err = decode(
-            SECRET,
+        let (_, ring) = entry_keys();
+        let err = decode_entry(
+            &ring,
             &token,
-            TokenType::Entry,
+            "p1",
             "alice.devserver.chan.app",
             "blog",
+            sample_uuid(),
         )
         .unwrap_err();
         assert!(matches!(err, DevserverGateError::Decode(_)));
@@ -449,110 +463,27 @@ mod tests {
     }
 
     #[test]
-    fn identity_roundtrips_entry_to_session() {
-        let identity = CallerIdentity {
-            name: Some("Alice Doe".to_string()),
-            email: Some("alice@example.com".to_string()),
-        };
-        let entry = encode_entry(
-            SECRET,
-            sample_uuid(),
-            "editor",
-            "blog",
-            "alice.devserver.chan.app",
-            identity.clone(),
-        )
-        .unwrap();
-        let c = decode(
-            SECRET,
-            &entry,
-            TokenType::Entry,
-            "alice.devserver.chan.app",
-            "blog",
-        )
-        .unwrap();
-        assert_eq!(c.identity(), identity);
-
-        // The proxy propagates the verified entry identity into the
-        // session mint; the session token must carry it unchanged.
-        let session = encode_session(SECRET, c.sub, &c.role, &c.drv, &c.aud, c.identity()).unwrap();
-        let s = decode(
-            SECRET,
-            &session,
-            TokenType::Session,
-            "alice.devserver.chan.app",
-            "blog",
-        )
-        .unwrap();
-        assert_eq!(s.identity(), identity);
+    fn verifier_ring_is_bounded_canonical_and_duplicate_free() {
+        let (signer, _) = entry_keys();
+        let key = signer.verifying_key_base64();
+        assert!(EntryVerifierRing::from_base64_list("").is_err());
+        assert!(EntryVerifierRing::from_base64_list(&format!("{key};{key}")).is_err());
+        assert!(EntryVerifierRing::from_base64_list(&format!(" {key}")).is_err());
+        assert!(EntryVerifierRing::from_base64_list(&format!("{key};{key};{key}")).is_err());
     }
 
-    /// A token minted by a service that predates the identity claims
-    /// has no name/email members at all; it must decode with both None.
     #[test]
-    fn legacy_token_without_identity_decodes_to_none() {
-        let now = Utc::now().timestamp();
-        let legacy = serde_json::json!({
-            "iss": "id.chan.app",
-            "sub": sample_uuid(),
-            "role": "owner",
-            "drv": "blog",
-            "aud": "alice.devserver.chan.app",
-            "typ": "entry",
-            "iat": now,
-            "exp": now + 30,
-        });
-        let token = jwt_encode(
-            &Header::new(Algorithm::HS256),
-            &legacy,
-            &EncodingKey::from_secret(SECRET),
-        )
-        .unwrap();
-        let c = decode(
-            SECRET,
-            &token,
-            TokenType::Entry,
-            "alice.devserver.chan.app",
-            "blog",
-        )
-        .unwrap();
-        assert_eq!(c.name, None);
-        assert_eq!(c.email, None);
-    }
-
-    /// A token minted by a future service with claims this build does
-    /// not know must still verify; unknown members are ignored.
-    #[test]
-    fn unknown_claims_ignored() {
-        let now = Utc::now().timestamp();
-        let future = serde_json::json!({
-            "iss": "id.chan.app",
-            "sub": sample_uuid(),
-            "role": "owner",
-            "drv": "blog",
-            "aud": "alice.devserver.chan.app",
-            "typ": "entry",
-            "name": "Alice Doe",
-            "email": "alice@example.com",
-            "avatar_url": "https://example.com/a.png",
-            "iat": now,
-            "exp": now + 30,
-        });
-        let token = jwt_encode(
-            &Header::new(Algorithm::HS256),
-            &future,
-            &EncodingKey::from_secret(SECRET),
-        )
-        .unwrap();
-        let c = decode(
-            SECRET,
-            &token,
-            TokenType::Entry,
-            "alice.devserver.chan.app",
-            "blog",
-        )
-        .unwrap();
-        assert_eq!(c.name.as_deref(), Some("Alice Doe"));
-        assert_eq!(c.email.as_deref(), Some("alice@example.com"));
+    fn entry_next_path_rejects_redirect_and_header_injection_shapes() {
+        for bad in [
+            "",
+            "relative",
+            "//evil.example/x",
+            "https://evil.example/x",
+            "/\\evil",
+            "/ok\r\nlocation: https://evil.example",
+        ] {
+            assert!(validate_entry_next_path(bad).is_err(), "accepted {bad:?}");
+        }
+        assert!(validate_entry_next_path("/notes/index.html?mode=edit").is_ok());
     }
 }

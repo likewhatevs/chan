@@ -66,8 +66,6 @@ export type AuditEntry = {
 
 export type ProvidersResponse = { providers: string[] };
 
-export type DevserverGrantRole = "viewer" | "editor";
-
 export type DevserverGrant = {
   id: string;
   owner_user_id: string;
@@ -77,7 +75,6 @@ export type DevserverGrant = {
   /// matching grantee_email. Until then the grant is "pending" and
   /// the recipient cannot open the devserver.
   grantee_user_id: string | null;
-  role: DevserverGrantRole;
   created_at: string;
   accepted_at: string | null;
 };
@@ -97,7 +94,6 @@ export type IncomingShare = {
   owner_avatar_url: string | null;
   devserver_id: string;
   label: string;
-  role: DevserverGrantRole;
   accepted_at: string;
 };
 
@@ -135,11 +131,11 @@ export const api = {
 
   listDevserverGrants: (devserverId: string) =>
     request<DevserverGrant[]>(`/api/devservers/${encodeURIComponent(devserverId)}/grants`),
-  addDevserverGrant: (devserverId: string, grantee_email: string, role: DevserverGrantRole) =>
+  addDevserverGrant: (devserverId: string, grantee_email: string) =>
     request<DevserverGrant>(`/api/devservers/${encodeURIComponent(devserverId)}/grants`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ grantee_email, role }),
+      body: JSON.stringify({ grantee_email }),
     }),
   deleteDevserverGrant: (id: string) =>
     request<void>(`/api/grants/${id}`, { method: "DELETE" }),

@@ -6,8 +6,8 @@ Wants=network-online.target chan-gateway-profile.service
 
 [Service]
 Type=simple
-User=chan-gateway
-Group=chan-gateway
+User=chan-gateway-devserver-proxy
+Group=chan-gateway-devserver-proxy
 # Shared public-origin config (domain.env) loaded first; the
 # per-service file may override. Optional (`-`) so a stack that sets
 # the origins inline still starts.

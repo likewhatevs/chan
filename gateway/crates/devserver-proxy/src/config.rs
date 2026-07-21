@@ -9,6 +9,7 @@ use url::Url;
 /// 20s) never trips it; short enough that abandoned bridges do not pin
 /// yamux substreams for hours.
 pub const DEFAULT_WS_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+const MAX_SESSION_LIFETIME_SECS: usize = 60 * 60;
 
 /// Runtime config sourced from environment variables.
 #[derive(Clone)]
@@ -44,13 +45,12 @@ pub struct Config {
     /// the `devserver.` prefix on `apex_host` for `id.` and assuming
     /// `https`.
     pub dashboard_url: String,
-    /// HMAC-SHA256 secret used to verify entry tokens from identity
-    /// and mint session tokens for the `devserver_gate` cookie. Same
-    /// value also configured on identity-service. The env var keeps the
-    /// generic `DEVSERVER_GATE_SECRET` name (a cross-service shared
-    /// secret), so the field tracks the var rather than the cookie.
-    /// Required.
-    pub workspace_gate_secret: String,
+    /// Exact public identity origin allowed to POST an entry credential.
+    pub identity_origin: CanonicalOrigin,
+    /// One or two identity Ed25519 public keys accepted for entry exchange.
+    /// A second key is rotation overlap only and should be removed after the
+    /// 30-second entry lifetime plus clock skew.
+    pub entry_verifiers: gateway_common::devserver_gate::EntryVerifierRing,
     /// h2c origin of the singleton fleet controller proxy listener.
     pub control_url: Url,
     /// Bearer presented only to the controller proxy listener.
@@ -77,6 +77,13 @@ pub struct Config {
     /// Always [`DEFAULT_WS_IDLE_TIMEOUT`] in production (not
     /// env-sourced); tests inject sub-second values via the struct.
     pub ws_idle_timeout: std::time::Duration,
+    /// Maximum number of proxy-local opaque browser sessions.
+    pub session_max_active: usize,
+    /// Absolute opaque-session lifetime. Activity cannot extend it.
+    pub session_lifetime: std::time::Duration,
+    /// Maximum number of unexpired, consumed entry credential ids retained
+    /// for replay rejection.
+    pub entry_replay_max_active: usize,
     /// Value to set on the outbound `X-Forwarded-Proto` header before
     /// forwarding to the upstream `chan devserver`. devserver-proxy itself
     /// does not see TLS (nginx terminates), so we cannot derive this
@@ -92,13 +99,19 @@ impl Config {
             .unwrap_or_else(|_| "127.0.0.1:7002".to_string())
             .parse()
             .context("BIND_ADDR must be host:port")?;
+        gateway_common::internal_transport::require_protected_listener("BIND_ADDR", bind_addr)?;
 
         let tunnel_bind_addr: SocketAddr = std::env::var("TUNNEL_BIND_ADDR")
             .unwrap_or_else(|_| "127.0.0.1:7100".to_string())
             .parse()
             .context("TUNNEL_BIND_ADDR must be host:port")?;
+        gateway_common::internal_transport::require_protected_listener(
+            "TUNNEL_BIND_ADDR",
+            tunnel_bind_addr,
+        )?;
 
         let tunnel_origin = required_origin("DEVSERVER_TUNNEL_ORIGIN")?;
+        require_secure_public_url("DEVSERVER_TUNNEL_ORIGIN", &tunnel_origin, bind_addr)?;
         let proxy_base_url_raw = std::env::var("DEVSERVER_PROXY_BASE_URL")
             .context("DEVSERVER_PROXY_BASE_URL is required")?;
         let proxy_base_url = CanonicalOrigin::parse(proxy_base_url_raw.trim())
@@ -107,6 +120,11 @@ impl Config {
             .as_str()
             .parse()
             .context("DEVSERVER_PROXY_BASE_URL must be a URL origin")?;
+        require_secure_public_url(
+            "DEVSERVER_PROXY_BASE_URL",
+            &proxy_base_url_parsed,
+            bind_addr,
+        )?;
         let apex_host = tunnel_origin
             .host_str()
             .context("DEVSERVER_TUNNEL_ORIGIN must contain a host")?
@@ -122,6 +140,10 @@ impl Config {
             .unwrap_or_else(|_| "http://127.0.0.1:7000".to_string())
             .parse()
             .context("IDENTITY_URL must be a URL")?;
+        gateway_common::internal_transport::require_protected_http_url(
+            "IDENTITY_URL",
+            &identity_url,
+        )?;
 
         // Bearer devserver-proxy presents on identity-service's
         // /internal/v1/tokens/validate. Required; the same value is
@@ -134,12 +156,16 @@ impl Config {
         if identity_auth_token.is_empty() {
             anyhow::bail!("IDENTITY_INTERNAL_TOKEN must not be empty");
         }
+        validate_bearer_secret("IDENTITY_INTERNAL_TOKEN", &identity_auth_token)?;
 
-        let workspace_gate_secret =
-            std::env::var("DEVSERVER_GATE_SECRET").context("DEVSERVER_GATE_SECRET is required")?;
-        if workspace_gate_secret.is_empty() {
-            anyhow::bail!("DEVSERVER_GATE_SECRET must not be empty");
-        }
+        let entry_verifying_keys = std::env::var("DEVSERVER_ENTRY_VERIFYING_KEYS")
+            .context("DEVSERVER_ENTRY_VERIFYING_KEYS is required")?;
+        let entry_verifiers = gateway_common::devserver_gate::EntryVerifierRing::from_base64_list(
+            entry_verifying_keys.trim(),
+        )
+        .context(
+            "DEVSERVER_ENTRY_VERIFYING_KEYS must contain one or two canonical Ed25519 public keys",
+        )?;
 
         let dashboard_url = std::env::var("DASHBOARD_URL")
             .context("DASHBOARD_URL is required")?
@@ -148,12 +174,27 @@ impl Config {
         if dashboard_url.is_empty() {
             anyhow::bail!("DASHBOARD_URL must not be empty");
         }
+        let dashboard_parsed: Url = dashboard_url
+            .parse()
+            .context("DASHBOARD_URL must be an http(s) URL")?;
+        require_secure_public_url("DASHBOARD_URL", &dashboard_parsed, bind_addr)?;
+        let identity_origin_raw = std::env::var("IDENTITY_PUBLIC_ORIGIN")
+            .context("IDENTITY_PUBLIC_ORIGIN is required")?;
+        let identity_origin = CanonicalOrigin::parse(identity_origin_raw.trim())
+            .context("IDENTITY_PUBLIC_ORIGIN must be a canonical http(s) origin")?;
+        let identity_origin_url: Url = identity_origin.as_str().parse().unwrap();
+        require_secure_public_url("IDENTITY_PUBLIC_ORIGIN", &identity_origin_url, bind_addr)?;
 
         let control_url = required_origin("DEVSERVER_CONTROL_URL")?;
         if control_url.scheme() != "http" {
             anyhow::bail!("DEVSERVER_CONTROL_URL must use http for the h2c proxy listener");
         }
+        gateway_common::internal_transport::require_protected_http_url(
+            "DEVSERVER_CONTROL_URL",
+            &control_url,
+        )?;
         let proxy_token = required_secret("DEVSERVER_PROXY_TOKEN")?;
+        validate_bearer_secret("DEVSERVER_PROXY_TOKEN", &proxy_token)?;
         let proxy_id_raw =
             std::env::var("DEVSERVER_PROXY_ID").context("DEVSERVER_PROXY_ID is required")?;
         let proxy_id = ProxyId::parse(proxy_id_raw.trim())
@@ -170,6 +211,9 @@ impl Config {
                 "FORWARDED_PROTO must be \"http\" or \"https\" (got {forwarded_proto:?})"
             );
         }
+        if forwarded_proto != "https" && !bind_addr.ip().is_loopback() {
+            anyhow::bail!("FORWARDED_PROTO must be https on a non-loopback public listener");
+        }
 
         let request_timeout = match std::env::var("REQUEST_TIMEOUT_SECS") {
             Ok(v) => {
@@ -185,6 +229,12 @@ impl Config {
             }
             Err(_) => Some(std::time::Duration::from_secs(60)),
         };
+        let session_max_active = parse_nonzero_usize("SESSION_MAX_ACTIVE", 10_000)?;
+        let session_lifetime_secs = validate_session_lifetime_secs(parse_nonzero_usize(
+            "SESSION_LIFETIME_SECS",
+            MAX_SESSION_LIFETIME_SECS,
+        )?)?;
+        let entry_replay_max_active = parse_nonzero_usize("ENTRY_REPLAY_MAX_ACTIVE", 10_000)?;
 
         Ok(Self {
             bind_addr,
@@ -194,7 +244,8 @@ impl Config {
             identity_url,
             identity_auth_token,
             dashboard_url,
-            workspace_gate_secret,
+            identity_origin,
+            entry_verifiers,
             control_url,
             proxy_token,
             proxy_id,
@@ -203,6 +254,9 @@ impl Config {
             max_request_bytes,
             request_timeout,
             ws_idle_timeout: DEFAULT_WS_IDLE_TIMEOUT,
+            session_max_active,
+            session_lifetime: std::time::Duration::from_secs(session_lifetime_secs as u64),
+            entry_replay_max_active,
             forwarded_proto,
         })
     }
@@ -277,6 +331,40 @@ impl Config {
     }
 }
 
+fn parse_nonzero_usize(name: &str, default: usize) -> anyhow::Result<usize> {
+    let value = std::env::var(name).unwrap_or_else(|_| default.to_string());
+    let value: usize = value
+        .trim()
+        .parse()
+        .with_context(|| format!("{name} must be a positive integer"))?;
+    if value == 0 {
+        anyhow::bail!("{name} must be greater than zero");
+    }
+    Ok(value)
+}
+
+fn require_secure_public_url(
+    name: &str,
+    url: &Url,
+    public_bind_addr: SocketAddr,
+) -> anyhow::Result<()> {
+    if !matches!(url.scheme(), "http" | "https") {
+        anyhow::bail!("{name} must use http or https");
+    }
+    if url.scheme() == "https" {
+        return Ok(());
+    }
+    let host = url.host_str().context("public URL must have a host")?;
+    let loopback_host = host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback());
+    if public_bind_addr.ip().is_loopback() && loopback_host {
+        return Ok(());
+    }
+    anyhow::bail!("{name} must use https unless both its host and the public listener are loopback")
+}
+
 fn required_origin(name: &str) -> anyhow::Result<Url> {
     let raw = std::env::var(name).with_context(|| format!("{name} is required"))?;
     let url: Url = raw
@@ -306,6 +394,13 @@ fn required_secret(name: &str) -> anyhow::Result<String> {
     Ok(value)
 }
 
+fn validate_bearer_secret(name: &str, value: &str) -> anyhow::Result<()> {
+    if !value.bytes().all(|byte| byte.is_ascii_graphic()) {
+        anyhow::bail!("{name} must contain only visible ASCII bytes");
+    }
+    Ok(())
+}
+
 fn parse_byte_cap(name: &str, default: Option<usize>) -> anyhow::Result<Option<usize>> {
     match std::env::var(name) {
         Ok(v) => {
@@ -317,6 +412,13 @@ fn parse_byte_cap(name: &str, default: Option<usize>) -> anyhow::Result<Option<u
         }
         Err(_) => Ok(default),
     }
+}
+
+fn validate_session_lifetime_secs(value: usize) -> anyhow::Result<usize> {
+    if value > MAX_SESSION_LIFETIME_SECS {
+        anyhow::bail!("SESSION_LIFETIME_SECS must be at most {MAX_SESSION_LIFETIME_SECS}");
+    }
+    Ok(value)
 }
 
 #[cfg(test)]
@@ -332,7 +434,17 @@ mod tests {
             identity_url: "http://127.0.0.1:7000/".parse().unwrap(),
             identity_auth_token: "x".into(),
             dashboard_url: "https://id.chan.app/workspaces".into(),
-            workspace_gate_secret: "x".into(),
+            identity_origin: CanonicalOrigin::parse("https://id.chan.app").unwrap(),
+            entry_verifiers: {
+                let signer = gateway_common::devserver_gate::EntrySigner::from_base64(
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                )
+                .unwrap();
+                gateway_common::devserver_gate::EntryVerifierRing::from_base64_list(
+                    &signer.verifying_key_base64(),
+                )
+                .unwrap()
+            },
             control_url: "http://127.0.0.1:7101/".parse().unwrap(),
             proxy_token: "x".into(),
             proxy_id: ProxyId::parse("p1").unwrap(),
@@ -341,6 +453,9 @@ mod tests {
             max_request_bytes: None,
             request_timeout: None,
             ws_idle_timeout: DEFAULT_WS_IDLE_TIMEOUT,
+            session_max_active: 10_000,
+            session_lifetime: std::time::Duration::from_secs(3600),
+            entry_replay_max_active: 10_000,
             forwarded_proto: "https".into(),
         }
     }
@@ -351,6 +466,54 @@ mod tests {
         assert_eq!(c.parse_wildcard_host("devserver.chan.app"), None);
         assert_eq!(c.parse_wildcard_host("DEVSERVER.chan.app"), None);
         assert_eq!(c.parse_wildcard_host("devserver.chan.app:7002"), None);
+    }
+
+    #[test]
+    fn public_cleartext_requires_a_loopback_origin_and_listener() {
+        let loopback: SocketAddr = "127.0.0.1:7002".parse().unwrap();
+        let public: SocketAddr = "0.0.0.0:7002".parse().unwrap();
+        assert!(require_secure_public_url(
+            "TEST_URL",
+            &Url::parse("http://localhost:7002").unwrap(),
+            loopback,
+        )
+        .is_ok());
+        assert!(require_secure_public_url(
+            "TEST_URL",
+            &Url::parse("http://localhost:7002").unwrap(),
+            public,
+        )
+        .is_err());
+        assert!(require_secure_public_url(
+            "TEST_URL",
+            &Url::parse("http://127.example.com:7002").unwrap(),
+            loopback,
+        )
+        .is_err());
+        assert!(require_secure_public_url(
+            "TEST_URL",
+            &Url::parse("https://proxy.example.test").unwrap(),
+            public,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn bearer_secrets_reject_ascii_whitespace() {
+        assert!(validate_bearer_secret("TEST", "opaque-token").is_ok());
+        assert!(validate_bearer_secret("TEST", "opaque token").is_err());
+        assert!(validate_bearer_secret("TEST", "opaque\ttoken").is_err());
+        assert!(validate_bearer_secret("TEST", "opaque\ntoken").is_err());
+        assert!(validate_bearer_secret("TEST", "opaque💥token").is_err());
+    }
+
+    #[test]
+    fn opaque_session_lifetime_cannot_exceed_the_one_hour_revocation_backstop() {
+        assert_eq!(
+            validate_session_lifetime_secs(MAX_SESSION_LIFETIME_SECS).unwrap(),
+            MAX_SESSION_LIFETIME_SECS
+        );
+        assert!(validate_session_lifetime_secs(MAX_SESSION_LIFETIME_SECS + 1).is_err());
     }
 
     #[test]

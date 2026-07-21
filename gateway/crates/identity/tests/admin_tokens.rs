@@ -93,6 +93,7 @@ impl TestApp {
 
         let cfg = Arc::new(Config {
             bind_addr: "127.0.0.1:0".parse().unwrap(),
+            internal_bind_addr: "127.0.0.1:0".parse().unwrap(),
             base_url: "http://localhost:7000/".parse().unwrap(),
             devserver_proxy_origin: "https://proxy.example.test".parse().unwrap(),
             devserver_tunnel_origin: "https://tunnel.example.test".parse().unwrap(),
@@ -101,8 +102,25 @@ impl TestApp {
             profile_client,
             internal_auth_token: "test-internal".to_string(),
             identity_admin_token: admin_token.to_string(),
-            workspace_admin: None,
-            workspace_gate_secret: "test-workspace-gate-secret-32-bytes-aa".to_string(),
+            workspace_admin: gateway_common::devserver_control_client::DevserverControlClient::new(
+                "http://127.0.0.1:7002".parse().unwrap(),
+                "test-identity-admin-token".into(),
+            )
+            .unwrap(),
+            admission_lease_verifier: {
+                let signer = devserver_control_proto::AdmissionLeaseSigner::from_base64(
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                )
+                .unwrap();
+                devserver_control_proto::AdmissionLeaseVerifier::from_base64(
+                    &signer.verifying_key_base64(),
+                )
+                .unwrap()
+            },
+            entry_signer: gateway_common::devserver_gate::EntrySigner::from_base64(
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            )
+            .unwrap(),
             providers: vec![],
         });
 

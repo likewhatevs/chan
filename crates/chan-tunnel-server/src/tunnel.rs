@@ -258,7 +258,13 @@ async fn handle_tunnel_conn(
     // Server-side timeout independent of any timeout the `Validator`
     // impl might enforce internally: a hung identity service cannot
     // pin this task and its permit forever.
-    let validated = match tokio::time::timeout(VALIDATE_TIMEOUT, validator.validate(&token)).await {
+    let registration_id = uuid::Uuid::new_v4();
+    let validated = match tokio::time::timeout(
+        VALIDATE_TIMEOUT,
+        validator.validate_registration(&token, registration_id),
+    )
+    .await
+    {
         Ok(Ok(v)) => v,
         Err(_) => {
             let resp = Response::builder()
@@ -303,7 +309,8 @@ async fn handle_tunnel_conn(
 
     let duplex = H2Duplex::new(send, recv_body);
     let (hello, validated, permit, yconn) =
-        handshake_validated_with_admission(duplex, validated, admission.as_ref()).await?;
+        handshake_validated_with_admission(duplex, validated, admission.as_ref(), registration_id)
+            .await?;
 
     if !admission.permit_is_current(permit) {
         admission.cancel(permit).await;
@@ -320,12 +327,15 @@ async fn handle_tunnel_conn(
     // under one lock acquisition. Controller-backed callers disable this
     // local authority with zero. A local-cap loser here has already
     // received HelloAck, so dropping `yconn` closes the transport.
-    let (handle, open_rx, shutdown_rx) = match registry.register_with_id_and_cap(
+    let (handle, open_rx, shutdown_rx) = match registry.register_authorized_with_id_and_cap(
         user.clone(),
         devserver.clone(),
         Some(peer),
         validated.gateway_assertion_key,
         permit.registration_id,
+        validated.user_id,
+        validated.admission_lease.as_deref().map(Arc::from),
+        validated.admission_lease_expires_at,
         max_workspaces_per_user,
     ) {
         Ok(triple) => triple,
@@ -373,7 +383,16 @@ async fn handle_tunnel_conn(
     // dialer. The per-tunnel driver runs without holding a permit.
     drop(inflight_permit);
 
-    workspace_tunnel(yconn, open_rx, shutdown_rx, registry.clone(), handle).await;
+    workspace_tunnel(
+        yconn,
+        open_rx,
+        shutdown_rx,
+        registry.clone(),
+        handle,
+        validator,
+        validated,
+    )
+    .await;
     tracing::info!(%user, %devserver, "tunnel driver exited");
     Ok(())
 }

@@ -17,13 +17,11 @@
 //!   * no live devserver registration matching the host (`{user}`,
 //!     and the `{disc}` prefix when present) -> 404
 //!   * `/api/devserver/*` (the local-only management API) -> 404
-//!   * request has `?t=<entry-jwt>`:
-//!     * verify HS256 + exp + aud (Host) + drv (a resolved devserver
-//!       id) -> mint a session JWT carrying the entry's `sub`, set
-//!       host-only `devserver_gate` and `devserver_csrf` cookies scoped
-//!       to `Path=/`, 303 to the clean URL
-//!     * any failure -> 404
-//!   * request has a valid `devserver_gate` cookie (signature + aud + drv)
+//!   * identity-origin POST to the fixed entry exchange path: verify the
+//!     Ed25519 credential and exact bindings, atomically consume its `jti`,
+//!     mint an opaque proxy-local session, set host-only gate/CSRF cookies,
+//!     and 303 to the signed clean path
+//!   * request has a valid opaque `devserver_gate` cookie (aud + drv bound)
 //!     -> pass through
 //!   * anything else (no cookie, expired, wrong aud, wrong devserver)
 //!     -> 404
@@ -38,7 +36,7 @@
 //! 404 is preferred over 401 / 403 on the proxy path so an
 //! unauthenticated probe cannot distinguish "devserver does not exist"
 //! from "devserver exists but you are not signed in" or "wrong devserver in
-//! the cookie." Owners returning after the 24h cookie expires bounce
+//! the cookie." Owners returning after the one-hour maximum session expires bounce
 //! through the id.chan.app dashboard.
 //!
 //! Two transports, both ride a fresh yamux substream opened on the
@@ -61,7 +59,7 @@ use bytes::Bytes;
 use chan_tunnel_proto::gateway_assertion;
 use chan_tunnel_server::TunnelHandle;
 use futures_util::{SinkExt, StreamExt};
-use gateway_common::devserver_gate::{self, CallerIdentity, TokenType};
+use gateway_common::devserver_gate;
 use http_body_util::Limited;
 use hyper_util::rt::TokioIo;
 use rand::RngCore;
@@ -77,6 +75,7 @@ use uuid::Uuid;
 use crate::error::{Error, Result};
 use crate::http::AppState;
 use crate::registry::Entry;
+use crate::session_store::{ActiveOperation, SessionPrincipal, SessionRecord};
 
 /// Wraps a response body with a hard deadline shared with the
 /// `proxy_http` send_request timeout. If the upstream goes silent or
@@ -99,6 +98,7 @@ use crate::registry::Entry;
 struct DeadlineBody {
     inner: Body,
     sleep: Pin<Box<tokio::time::Sleep>>,
+    cancelled: Pin<Box<dyn Future<Output = ()> + Send>>,
     /// Abort handle for the upstream conn task. Wrapped in
     /// `tokio_util::task::AbortOnDropHandle`? No: we want the abort
     /// to fire on body drop regardless of whether the stream
@@ -108,10 +108,16 @@ struct DeadlineBody {
 }
 
 impl DeadlineBody {
-    fn new(inner: Body, deadline: tokio::time::Instant, conn: tokio::task::AbortHandle) -> Self {
+    fn new(
+        inner: Body,
+        deadline: tokio::time::Instant,
+        cancellation: tokio_util::sync::CancellationToken,
+        conn: tokio::task::AbortHandle,
+    ) -> Self {
         Self {
             inner,
             sleep: Box::pin(tokio::time::sleep_until(deadline)),
+            cancelled: Box::pin(cancellation.cancelled_owned()),
             conn: Some(conn),
         }
     }
@@ -137,9 +143,14 @@ impl http_body::Body for DeadlineBody {
         cx: &mut Context<'_>,
     ) -> Poll<Option<std::result::Result<http_body::Frame<Self::Data>, Self::Error>>> {
         if self.sleep.as_mut().poll(cx).is_ready() {
-            tracing::warn!("proxy response body exceeded request deadline");
+            tracing::warn!("proxy response body exceeded authorization/request deadline");
             return Poll::Ready(Some(Err(axum::Error::new(
-                "response body exceeded request deadline",
+                "response body exceeded authorization/request deadline",
+            ))));
+        }
+        if self.cancelled.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(Some(Err(axum::Error::new(
+                "browser session authorization revoked",
             ))));
         }
         Pin::new(&mut self.inner).poll_frame(cx)
@@ -156,10 +167,12 @@ impl http_body::Body for DeadlineBody {
 
 /// Cookie name for the session-shape devserver-gate token. Host-only on
 /// `{user}.devserver.chan.app`; `Path=/`; HttpOnly; Secure; SameSite=Lax;
-/// 24h lifetime (matches the session JWT exp).
+/// Absolute proxy-local session lifetime.
 const COOKIE_NAME: &str = "devserver_gate";
 const CSRF_COOKIE_NAME: &str = "devserver_csrf";
 const CSRF_HEADER_NAME: &str = "x-chan-csrf";
+const ENTRY_FORM_CONTENT_TYPE: &str = "application/x-www-form-urlencoded";
+const MAX_ENTRY_FORM_BYTES: usize = 8192;
 
 /// Hop-by-hop headers we strip on both legs (RFC 7230 6.1).
 /// Match is on the lowercase header name string; `HeaderName` can
@@ -184,14 +197,11 @@ fn is_hop_by_hop(name: &HeaderName) -> bool {
 /// names it marks as hop-by-hop. The caller strips each returned name
 /// on top of the static HOP_BY_HOP_NAMES list (RFC 7230 6.1 §3).
 fn connection_listed_headers(headers: &HeaderMap) -> Vec<HeaderName> {
-    let Some(value) = headers
-        .get(header::CONNECTION)
-        .and_then(|v| v.to_str().ok())
-    else {
-        return Vec::new();
-    };
-    value
-        .split(',')
+    headers
+        .get_all(header::CONNECTION)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
         .map(str::trim)
         .filter(|s| !s.is_empty())
         // "close" / "keep-alive" are connection options, not headers.
@@ -236,6 +246,15 @@ pub async fn handle(state: AppState, user: String, disc: Option<String>, req: Re
         return not_found_response(req.headers());
     }
 
+    let is_entry_exchange = req.uri().path() == devserver_gate::ENTRY_EXCHANGE_PATH;
+    // A bare host with many live devservers must not turn one invalid entry
+    // POST into an Ed25519 verification loop over the whole per-user fleet.
+    // Production entry URLs carry a discriminator; retaining the one-route
+    // legacy case keeps that path bounded to exactly one verification.
+    if is_entry_exchange && disc.is_none() && candidates.len() != 1 {
+        return not_found_response(req.headers());
+    }
+
     // The management API is local-only; the proxy carries tenant content
     // only and never proxies `/api/devserver/*` on the public wildcard.
     if is_management_path(req.uri().path()) {
@@ -246,7 +265,14 @@ pub async fn handle(state: AppState, user: String, disc: Option<String>, req: Re
     // subdomain do not validate on another, so a credential for
     // another user's devserver never verifies here regardless of
     // which candidate it is tried against.
-    let aud = host_header(req.headers()).unwrap_or_default();
+    let aud = chan_tunnel_proto::gateway_assertion::canonical_audience(
+        &state.cfg.forwarded_proto,
+        &host_header(req.headers()).unwrap_or_default(),
+    );
+
+    if is_entry_exchange {
+        return exchange_entry(&state, candidates, req, &aud).await;
+    }
 
     let is_ws = is_websocket_upgrade(req.headers());
 
@@ -255,7 +281,7 @@ pub async fn handle(state: AppState, user: String, disc: Option<String>, req: Re
     // credential verifies under (aud, drv) wins.
     let mut resolved = None;
     for (devserver_id, entry) in candidates {
-        match resolve_gate(&state, &req, &devserver_id, &aud) {
+        match resolve_gate(&state, &req, &devserver_id, entry.owner_id, &aud) {
             Gate::Reject => continue,
             gate => {
                 resolved = Some((devserver_id, entry, gate));
@@ -266,34 +292,25 @@ pub async fn handle(state: AppState, user: String, disc: Option<String>, req: Re
     let Some((devserver_id, entry, gate)) = resolved else {
         return not_found_response(req.headers());
     };
-    let caller = match gate {
-        Gate::Pass {
-            sub,
-            role,
-            identity,
-        } => GatewayCaller {
-            sub,
-            role,
-            identity,
-        },
-        Gate::IssueSession {
-            sub,
-            role,
-            identity,
-        } => {
-            return issue_session_cookie(
-                state.cfg.workspace_gate_secret.as_bytes(),
-                sub,
-                &role,
-                identity,
-                &devserver_id,
-                &aud,
-                req.uri(),
-            );
-        }
+    let (caller, authorization) = match gate {
+        Gate::Pass { record } => (
+            GatewayCaller {
+                sub: record.principal.subject_user_id,
+                owner_user_id: record.principal.owner_user_id,
+            },
+            record,
+        ),
         // The loop above filtered rejects; kept as the safe default.
         Gate::Reject => return not_found_response(req.headers()),
     };
+    if is_ws && !websocket_origin_matches(req.headers(), &state.cfg.forwarded_proto, &aud) {
+        tracing::warn!(
+            aud = %aud,
+            devserver_id = %devserver_id,
+            "gateway websocket origin check failed",
+        );
+        return (StatusCode::FORBIDDEN, "forbidden").into_response();
+    }
     if requires_csrf(req.method()) && !csrf_header_matches_cookie(req.headers()) {
         tracing::warn!(
             aud = %aud,
@@ -303,15 +320,26 @@ pub async fn handle(state: AppState, user: String, disc: Option<String>, req: Re
         );
         return (StatusCode::FORBIDDEN, "forbidden").into_response();
     }
-    // The registry-cached owner_id is not consulted by the proxy gate
-    // (comparing `sub` against the owner would lock out grantees; the
-    // signed aud + drv claims are the authorization assertion). It
-    // stays in `Entry` as metadata for admin tooling.
-    let _ = entry.owner_id;
-
+    // Every request entering a devserver tunnel must carry a signed gateway
+    // assertion. A registration without a per-tunnel assertion key is an
+    // invalid trust state, not a reason to downgrade to an unauthenticated
+    // upstream request.
+    let assertion = match gateway_assertion_value(
+        entry.handle.gateway_assertion_key.as_ref(),
+        &caller,
+        &aud,
+        &devserver_id,
+    ) {
+        Ok(value) => value,
+        Err(error) => return error.into_response(),
+    };
+    let Some(operation) = authorization.begin_operation() else {
+        return not_found_response(req.headers());
+    };
     // Segment-preserving forward: hand the devserver the full public
-    // `/{workspace}/...` path (only the `?t=` entry token is stripped);
-    // the devserver is the single tenant-routing authority.
+    // `/{workspace}/...` path. Entry credentials are accepted only at the
+    // fixed body-only exchange endpoint, so tenant query parameters remain
+    // ordinary upstream application data.
     let upstream_path_and_query = forward_path(req.uri());
 
     if is_ws {
@@ -327,29 +355,39 @@ pub async fn handle(state: AppState, user: String, disc: Option<String>, req: Re
             }
         };
         let forwarded = forwarded_headers(&parts, &state.cfg.forwarded_proto);
-        let assertion = gateway_assertion_value(
-            entry.handle.gateway_assertion_key.as_ref(),
-            &caller,
-            &aud,
-            &devserver_id,
-        );
         let handle = entry.handle.clone();
         let idle_timeout = state.cfg.ws_idle_timeout;
+        let cancellation = authorization.cancellation.clone();
+        let expires_at = authorization.expires_at;
+        let (client_tx, client_rx) = tokio::sync::oneshot::channel();
+        let bridge = operation.spawn(async move {
+            let Ok(client) = client_rx.await else {
+                return;
+            };
+            if let Err(e) = bridge_ws(
+                client,
+                handle,
+                &upstream_path_and_query,
+                &forwarded,
+                BridgePolicy {
+                    assertion,
+                    idle_timeout,
+                    cancellation,
+                    expires_at,
+                },
+            )
+            .await
+            {
+                tracing::warn!(error = ?e, "ws bridge ended with error");
+            }
+        });
+        // Detaching is intentional: the session operation registry owns the
+        // task's AbortHandle and revocation waits until its guard is dropped.
+        drop(bridge);
         let _ = body; // upgrade swallows the body anyway.
         return upgrade
             .on_upgrade(move |client| async move {
-                if let Err(e) = bridge_ws(
-                    client,
-                    handle,
-                    &upstream_path_and_query,
-                    &forwarded,
-                    assertion,
-                    idle_timeout,
-                )
-                .await
-                {
-                    tracing::warn!(error = ?e, "ws bridge ended with error");
-                }
+                let _ = client_tx.send(client);
             })
             .into_response();
     }
@@ -358,19 +396,99 @@ pub async fn handle(state: AppState, user: String, disc: Option<String>, req: Re
         max_request_bytes: state.cfg.max_request_bytes,
         max_response_bytes: state.cfg.max_response_bytes,
         request_timeout: state.cfg.request_timeout,
+        authorization: &authorization,
         forwarded_proto: state.cfg.forwarded_proto.as_str(),
-        assertion: gateway_assertion_value(
-            entry.handle.gateway_assertion_key.as_ref(),
-            &caller,
-            &aud,
-            &devserver_id,
-        ),
+        assertion,
     };
-    let res = proxy_http(entry.handle.clone(), req, upstream_path_and_query, opts).await;
+    let res = proxy_http(
+        entry.handle.clone(),
+        req,
+        upstream_path_and_query,
+        opts,
+        operation,
+    )
+    .await;
     match res {
-        Ok(r) => r,
+        Ok(mut response) => {
+            apply_credentialed_response_policy(&mut response);
+            response
+        }
         Err(e) => e.into_response(),
     }
+}
+
+async fn exchange_entry(
+    state: &AppState,
+    candidates: Vec<(String, Entry)>,
+    req: Request,
+    aud: &str,
+) -> Response {
+    if req.method() != axum::http::Method::POST {
+        return not_found_response(req.headers());
+    }
+    if !exact_origin_matches(req.headers(), state.cfg.identity_origin.as_str()) {
+        return (StatusCode::FORBIDDEN, "forbidden").into_response();
+    }
+    if !exact_entry_content_type(req.headers()) {
+        return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "unsupported media type").into_response();
+    }
+    let body = match axum::body::to_bytes(req.into_body(), MAX_ENTRY_FORM_BYTES).await {
+        Ok(body) => body,
+        Err(_) => return (StatusCode::PAYLOAD_TOO_LARGE, "payload too large").into_response(),
+    };
+    let fields: Vec<_> = url::form_urlencoded::parse(&body).collect();
+    let token = match fields.as_slice() {
+        [(name, value)] if name == "credential" && !value.is_empty() => value.as_ref(),
+        _ => return (StatusCode::BAD_REQUEST, "malformed entry exchange").into_response(),
+    };
+
+    for (devserver_id, entry) in candidates {
+        let Ok(claims) = devserver_gate::decode_entry(
+            &state.cfg.entry_verifiers,
+            token,
+            state.cfg.proxy_id.as_str(),
+            aud,
+            &devserver_id,
+            entry.owner_id,
+        ) else {
+            continue;
+        };
+        match state.entry_replays.consume(
+            claims.jti,
+            claims.sub,
+            claims
+                .exp
+                .saturating_add(devserver_gate::ENTRY_CLOCK_SKEW_SECONDS),
+            chrono::Utc::now().timestamp(),
+        ) {
+            Ok(()) => {}
+            Err(crate::entry_replay::ConsumeError::Replay) => {
+                return not_found_response(&HeaderMap::new())
+            }
+            Err(crate::entry_replay::ConsumeError::AtCapacity) => {
+                return (StatusCode::SERVICE_UNAVAILABLE, "entry capacity reached").into_response()
+            }
+        }
+        let mut response = issue_session_cookie(
+            &state.sessions,
+            claims.sub,
+            claims.owner_user_id,
+            &devserver_id,
+            aud,
+            &claims.next_path,
+        );
+        apply_credentialed_response_policy(&mut response);
+        return response;
+    }
+    not_found_response(&HeaderMap::new())
+}
+
+fn exact_entry_content_type(headers: &HeaderMap) -> bool {
+    let mut values = headers.get_all(header::CONTENT_TYPE).iter();
+    matches!(
+        (values.next(), values.next()),
+        (Some(value), None) if value.as_bytes() == ENTRY_FORM_CONTENT_TYPE.as_bytes()
+    )
 }
 
 /// Per-request configuration slice handed to `proxy_http`. Bundled so
@@ -380,94 +498,52 @@ struct ProxyOpts<'a> {
     max_request_bytes: Option<usize>,
     max_response_bytes: Option<usize>,
     request_timeout: Option<std::time::Duration>,
+    authorization: &'a SessionRecord,
     forwarded_proto: &'a str,
-    assertion: Option<HeaderValue>,
+    assertion: HeaderValue,
 }
 
 struct GatewayCaller {
     sub: Uuid,
-    role: String,
-    /// Identity resolved by identity-service at entry mint; copied
-    /// into every per-request assertion so the devserver can render
-    /// participant display strings. Never an authorization input.
-    identity: CallerIdentity,
+    owner_user_id: Uuid,
 }
 
 /// Outcome of the auth-gate decision.
 enum Gate {
     /// Forward the request under an existing gateway session.
-    Pass {
-        sub: Uuid,
-        role: String,
-        identity: CallerIdentity,
-    },
-    /// Entry token validated; mint a session cookie carrying the
-    /// entry's `sub` and 303 to the clean URL (no `?t=` query). `sub`
-    /// is the user identified by identity-service at mint time,
-    /// owner or accepted grantee, and is propagated into the session
-    /// cookie so the upstream attribution chain stays accurate. The
-    /// entry's identity claims ride along the same way (no post-entry
-    /// lookups; see the devserver_gate module doc for the staleness
-    /// bound).
-    IssueSession {
-        sub: Uuid,
-        role: String,
-        identity: CallerIdentity,
-    },
+    Pass { record: SessionRecord },
     /// Anything that should map to 404 on the proxy path: no token,
     /// bad signature, expired, wrong aud, wrong devserver.
     Reject,
 }
 
-fn resolve_gate(state: &AppState, req: &Request, devserver_id: &str, aud: &str) -> Gate {
-    let secret = state.cfg.workspace_gate_secret.as_bytes();
-
-    // Entry token in `?t=` is how the dashboard hands a freshly
-    // authenticated user off to the wildcard. A valid entry triggers
-    // the cookie-mint redirect. An invalid `t` must fall through to the
-    // session-cookie path: chan tenants also use `?t=` for their own
-    // per-tenant bearer, and browsers with an existing devserver_gate
-    // cookie need that query to reach the upstream intact.
-    //
-    // We do not compare `sub` against the registry-cached owner: that
-    // would lock out every accepted grantee. The aud + drv claims
-    // (signed at mint time by identity, which already checked
-    // `devserver_access`) are the authorization assertion. Identity owns
-    // the policy; devserver-proxy verifies the assertion. `drv` is the
-    // devserver id, matched against the user's live registration.
-    if let Some(token) = entry_token_param(req.uri()) {
-        if let Ok(claims) =
-            devserver_gate::decode(secret, &token, TokenType::Entry, aud, devserver_id)
-        {
-            return Gate::IssueSession {
-                sub: claims.sub,
-                identity: claims.identity(),
-                role: claims.role,
-            };
-        }
-    }
-
+fn resolve_gate(
+    state: &AppState,
+    req: &Request,
+    devserver_id: &str,
+    owner_user_id: Uuid,
+    aud: &str,
+) -> Gate {
     // No entry token: any one valid session cookie admits. A browser
     // may send several `devserver_gate` cookies under unusual conditions
     // (stale cookie at a different path that got attached to this
     // request); accept the first that verifies under this aud + drv so
     // a stale duplicate doesn't 404 a legitimate session.
     for cookie in cookie_values(req.headers(), COOKIE_NAME) {
-        if let Ok(claims) =
-            devserver_gate::decode(secret, &cookie, TokenType::Session, aud, devserver_id)
-        {
-            return Gate::Pass {
-                sub: claims.sub,
-                identity: claims.identity(),
-                role: claims.role,
-            };
+        if let Some(record) = state.sessions.lookup(&cookie) {
+            if record.principal.audience == aud
+                && record.principal.devserver_id == devserver_id
+                && record.principal.owner_user_id == owner_user_id
+            {
+                return Gate::Pass { record };
+            }
         }
     }
     Gate::Reject
 }
 
-/// True when a request carries a gate credential, an `?t=` entry token
-/// or a `devserver_gate` session cookie. The dispatcher uses this to
+/// True when a request carries a `devserver_gate` session cookie. The
+/// dispatcher uses this to
 /// decide what a bare wildcard `/` means: a credential-bearing root is an
 /// authenticated open that falls through to the gate and is forwarded to
 /// the devserver root (where the launcher SPA is served), while a naked
@@ -475,7 +551,8 @@ fn resolve_gate(state: &AppState, req: &Request, devserver_id: &str, aud: &str) 
 /// validate the credential. `resolve_gate` does that on the
 /// fall-through; it only distinguishes "an open attempt" from "naked".
 pub(crate) fn has_gate_credential(uri: &Uri, headers: &HeaderMap) -> bool {
-    entry_token_param(uri).is_some() || !cookie_values(headers, COOKIE_NAME).is_empty()
+    let _ = uri;
+    !cookie_values(headers, COOKIE_NAME).is_empty()
 }
 
 /// True when the path targets the devserver's local-only management API
@@ -489,60 +566,13 @@ fn is_management_path(path: &str) -> bool {
 /// The path forwarded into the tunnel: the full inbound path+query. The proxy is
 /// a segment-PRESERVING forwarder. It does NOT strip the `{workspace}` segment;
 /// the devserver mounts each tenant at its public `/{workspace}/` slug and
-/// routes internally. Valid gateway entry tokens are consumed before forwarding
-/// and 303 to a clean URL; any forwarded `?t=` belongs to the upstream tenant.
+/// routes internally. Entry credentials are consumed at a separate fixed POST
+/// endpoint, so any forwarded `?t=` belongs to the upstream tenant.
 /// Always returns a path that starts with `/`.
 fn forward_path(uri: &Uri) -> String {
     uri.path_and_query()
         .map(|p| p.as_str().to_string())
         .unwrap_or_else(|| "/".to_string())
-}
-
-/// Pull `?t=<token>` value out of the URI. Returns None when absent
-/// or empty.
-fn entry_token_param(uri: &Uri) -> Option<String> {
-    let q = uri.query()?;
-    for pair in q.split('&') {
-        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
-        if k == "t" && !v.is_empty() {
-            return Some(percent_decode(v));
-        }
-    }
-    None
-}
-
-/// Strip the `t=` parameter from a path+query string. Used when
-/// building the clean URL we redirect to after the entry token is
-/// consumed, and when forwarding upstream so the chan-serve peer
-/// never sees the token.
-fn strip_entry_token_query(path_and_query: &str) -> String {
-    let Some((path, query)) = path_and_query.split_once('?') else {
-        return path_and_query.to_string();
-    };
-    let filtered: Vec<&str> = query
-        .split('&')
-        .filter(|p| {
-            let (k, _) = p.split_once('=').unwrap_or((*p, ""));
-            k != "t"
-        })
-        .collect();
-    if filtered.is_empty() {
-        path.to_string()
-    } else {
-        format!("{path}?{}", filtered.join("&"))
-    }
-}
-
-/// Minimal percent-decode for query-string values. Tokens are
-/// base64url + `.` separators, so the only escapes we ever expect
-/// are `%3D` (`=`), `%2E` (`.`), and `%2D` (`-`); a real decoder
-/// would handle every triplet. We pull in url::form_urlencoded for
-/// correctness anyway.
-fn percent_decode(s: &str) -> String {
-    url::form_urlencoded::parse(format!("v={s}").as_bytes())
-        .next()
-        .map(|(_, v)| v.into_owned())
-        .unwrap_or_else(|| s.to_string())
 }
 
 /// Read the `devserver_gate` cookie value from the Cookie header(s).
@@ -573,22 +603,23 @@ fn cookie_values(headers: &HeaderMap, cookie_name: &str) -> Vec<String> {
     out
 }
 
-/// Read the inbound Host header verbatim (lowercased; HTTP Host
-/// values are case-insensitive). Used as the `aud` claim in token
-/// verification so a token minted for one subdomain cannot be
-/// replayed on another.
+/// Read and normalize the inbound Host spelling. Scheme-aware default-port
+/// canonicalization happens at the caller using the configured public scheme.
 fn host_header(headers: &HeaderMap) -> Option<String> {
     headers
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
-        .map(chan_tunnel_proto::gateway_assertion::canonical_audience)
+        .map(|host| host.trim().trim_end_matches('.').to_ascii_lowercase())
 }
 
 fn requires_csrf(method: &axum::http::Method) -> bool {
-    method == axum::http::Method::POST
-        || method == axum::http::Method::PUT
-        || method == axum::http::Method::PATCH
-        || method == axum::http::Method::DELETE
+    // Treat every method outside the HTTP safe-method set as state-changing.
+    // Restricting this to the common four verbs leaves extension methods such
+    // as PROPFIND or application-defined mutation verbs exposed to ambient
+    // browser cookies whenever an upstream happens to support them.
+    method != axum::http::Method::GET
+        && method != axum::http::Method::HEAD
+        && method != axum::http::Method::OPTIONS
 }
 
 fn csrf_header_matches_cookie(headers: &HeaderMap) -> bool {
@@ -629,8 +660,48 @@ fn is_websocket_upgrade(headers: &HeaderMap) -> bool {
     upgrade && conn
 }
 
-/// Mint a session JWT for `sub`, set it as a host-only `Path=/`
-/// cookie, and 303 to the clean URL (`?t=` stripped). Browsers
+/// Browser WebSockets carry ambient cookies, while sibling tenant origins are
+/// same-site. The browser's serialized Origin must therefore name the exact
+/// externally visible origin before an upgrade can reach the devserver.
+fn websocket_origin_matches(headers: &HeaderMap, scheme: &str, aud: &str) -> bool {
+    exact_origin_matches(headers, &format!("{scheme}://{aud}"))
+}
+
+fn exact_origin_matches(headers: &HeaderMap, expected: &str) -> bool {
+    let mut origins = headers.get_all(header::ORIGIN).iter();
+    let Some(origin) = origins.next().and_then(|value| value.to_str().ok()) else {
+        return false;
+    };
+    if origins.next().is_some() {
+        return false;
+    }
+    origin == expected
+}
+
+fn apply_credentialed_response_policy(response: &mut Response) {
+    let headers = response.headers_mut();
+    // A second CSP is intersected with any upstream policy, so framing is
+    // denied without discarding stricter application directives.
+    headers.append(
+        HeaderName::from_static("content-security-policy"),
+        HeaderValue::from_static("frame-ancestors 'none'"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+}
+
+/// Mint an opaque proxy-local session for `sub`, set it as a host-only
+/// `Path=/` cookie, and 303 to the signed clean path. Browsers
 /// follow the 303 with the new cookie attached. `sub` comes from the
 /// entry token we just verified, owner or accepted grantee, so the
 /// session cookie identifies the right user for upstream attribution.
@@ -638,41 +709,46 @@ fn is_websocket_upgrade(headers: &HeaderMap) -> bool {
 /// this host is content the cookie-holder is authorized to reach, and
 /// user-to-user isolation stays on the host-only `aud` claim.
 fn issue_session_cookie(
-    secret: &[u8],
+    sessions: &crate::session_store::SessionStore,
     sub: Uuid,
-    role: &str,
-    identity: CallerIdentity,
+    owner_user_id: Uuid,
     devserver_id: &str,
     aud: &str,
-    uri: &Uri,
+    next_path: &str,
 ) -> Response {
-    let session =
-        match devserver_gate::encode_session(secret, sub, role, devserver_id, aud, identity) {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::error!(error = ?e, "failed to mint devserver_gate session token");
-                return (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response();
-            }
-        };
+    let issued = match sessions.issue(SessionPrincipal {
+        subject_user_id: sub,
+        owner_user_id,
+        devserver_id: devserver_id.to_string(),
+        audience: aud.to_string(),
+    }) {
+        Ok(issued) => issued,
+        Err(error) => {
+            tracing::warn!(?error, "proxy-local browser session capacity reached");
+            return (StatusCode::SERVICE_UNAVAILABLE, "session capacity reached").into_response();
+        }
+    };
     let csrf = random_csrf_token();
-    let clean = strip_entry_token_query(uri.path_and_query().map(|p| p.as_str()).unwrap_or("/"));
-    // 24h Max-Age matches the JWT exp. Cookies without Max-Age would
-    // be session cookies (gone when the browser closes); we want
-    // them to outlive a tab close.
+    let max_age = issued
+        .record
+        .expires_at
+        .saturating_duration_since(tokio::time::Instant::now())
+        .as_secs();
     let cookie_value = format!(
-        "{COOKIE_NAME}={session}; \
+        "{COOKIE_NAME}={}; \
          Path=/; \
-         HttpOnly; Secure; SameSite=Lax; Max-Age=86400"
+         HttpOnly; Secure; SameSite=Lax; Max-Age={max_age}",
+        issued.id(),
     );
     let csrf_cookie = format!(
         "{CSRF_COOKIE_NAME}={csrf}; \
          Path=/; \
-         Secure; SameSite=Lax; Max-Age=86400"
+         Secure; SameSite=Lax; Max-Age={max_age}"
     );
     let mut res = (StatusCode::SEE_OTHER, "").into_response();
     res.headers_mut().insert(
         header::LOCATION,
-        HeaderValue::from_str(&clean).unwrap_or(HeaderValue::from_static("/")),
+        HeaderValue::from_str(next_path).unwrap_or(HeaderValue::from_static("/")),
     );
     res.headers_mut().append(
         header::SET_COOKIE,
@@ -701,31 +777,54 @@ async fn proxy_http(
     req: Request,
     upstream_path_and_query: String,
     opts: ProxyOpts<'_>,
+    operation: ActiveOperation,
 ) -> Result<Response> {
     // The full request deadline (headers + body streaming) is anchored
     // at this Instant. send_request is bounded explicitly below; the
     // response body is bounded by wrapping it in DeadlineBody, which
     // shares the same deadline so a slow-drip upstream can't outlast
     // the configured timeout. Bypassed when request_timeout is None.
-    let deadline = opts
+    let request_deadline = opts
         .request_timeout
         .map(|d| tokio::time::Instant::now() + d);
+    let deadline = request_deadline
+        .map(|request| request.min(opts.authorization.expires_at))
+        .unwrap_or(opts.authorization.expires_at);
 
-    let stream = handle
-        .open()
-        .await
-        .map_err(|e| Error::Upstream(format!("tunnel disconnected: {e}")))?;
+    let cancellation = opts.authorization.cancellation.clone();
+    let stream = tokio::select! {
+        _ = cancellation.cancelled() => {
+            return Ok(not_found_response(&HeaderMap::new()));
+        }
+        timed = tokio::time::timeout_at(deadline, handle.open()) => match timed {
+            Ok(result) => result
+                .map_err(|e| Error::Upstream(format!("tunnel disconnected: {e}")))?,
+            Err(_) => {
+                return Ok((StatusCode::GATEWAY_TIMEOUT, "upstream timed out").into_response());
+            }
+        }
+    };
     let io = TokioIo::new(stream.compat());
 
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
-        .await
-        .map_err(|e| Error::Upstream(format!("upstream h1 handshake: {e}")))?;
+    let handshake = hyper::client::conn::http1::handshake(io);
+    let (mut sender, conn) = tokio::select! {
+        _ = cancellation.cancelled() => {
+            return Ok(not_found_response(&HeaderMap::new()));
+        }
+        timed = tokio::time::timeout_at(deadline, handshake) => match timed {
+            Ok(result) => result
+                .map_err(|e| Error::Upstream(format!("upstream h1 handshake: {e}")))?,
+            Err(_) => {
+                return Ok((StatusCode::GATEWAY_TIMEOUT, "upstream timed out").into_response());
+            }
+        }
+    };
     // The conn task must outlive header receipt (so the body can
     // stream back) but must not outlive the body, otherwise an
     // aborted client request leaks a yamux substream. We hand its
     // AbortHandle to DeadlineBody below; on body drop / body
     // completion, abort fires (no-op for an already-finished task).
-    let conn_handle = tokio::spawn(async move {
+    let conn_handle = operation.spawn(async move {
         if let Err(e) = conn.with_upgrades().await {
             tracing::debug!(error = %e, "upstream conn ended");
         }
@@ -753,18 +852,19 @@ async fn proxy_http(
 
     let upstream_req = axum::http::Request::from_parts(parts, body);
     let send_fut = sender.send_request(upstream_req);
-    let res = match deadline {
-        Some(dl) => match tokio::time::timeout_at(dl, send_fut).await {
+    let res = tokio::select! {
+        _ = cancellation.cancelled() => {
+            conn_abort.abort();
+            return Ok(not_found_response(&HeaderMap::new()));
+        }
+        timed = tokio::time::timeout_at(deadline, send_fut) => match timed {
             Ok(r) => r.map_err(|e| Error::Upstream(format!("send_request: {e}")))?,
             Err(_) => {
                 conn_abort.abort();
-                tracing::warn!("proxy_http exceeded deadline before response headers");
+                tracing::warn!("proxy_http exceeded authorization/request deadline before response headers");
                 return Ok((StatusCode::GATEWAY_TIMEOUT, "upstream timed out").into_response());
             }
-        },
-        None => send_fut
-            .await
-            .map_err(|e| Error::Upstream(format!("send_request: {e}")))?,
+        }
     };
 
     let (parts, body) = res.into_parts();
@@ -783,16 +883,12 @@ async fn proxy_http(
     // When no deadline is configured we let the body stream
     // unwrapped; the conn task exits naturally when the upstream
     // half-closes the substream.
-    let response_body = match deadline {
-        Some(dl) => Body::new(DeadlineBody::new(bounded, dl, conn_abort)),
-        None => {
-            // Detach the abort handle so the no-deadline path keeps
-            // the conn task alive for the full streaming response
-            // exactly as before. `_` drops the unused handle.
-            let _ = conn_abort;
-            bounded
-        }
-    };
+    let response_body = Body::new(DeadlineBody::new(
+        bounded,
+        deadline,
+        opts.authorization.cancellation.clone(),
+        conn_abort,
+    ));
     builder
         .body(response_body)
         .map_err(|e| Error::Anyhow(anyhow::anyhow!("response: {e}")))
@@ -822,10 +918,10 @@ fn strip_inbound_headers(headers: &mut HeaderMap) {
 }
 
 /// Same hop-by-hop filter applied to a response HeaderMap on its way
-/// back to the client. Set-Cookie is intentionally NOT stripped: if
-/// the upstream tenant content wants to set its own cookies we let
-/// it (they will be host-only on the tenant's subdomain, not
-/// reachable to the auth surface).
+/// back to the client. Tenant cookies remain available, but Domain
+/// cookies and the gateway's reserved auth/CSRF names are stripped so
+/// one assigned devserver cannot plant cookies on sibling tenant hosts
+/// or overwrite the proxy's own authority state.
 fn strip_response_headers(
     headers: &HeaderMap,
 ) -> Vec<(axum::http::HeaderName, axum::http::HeaderValue)> {
@@ -834,8 +930,33 @@ fn strip_response_headers(
         .iter()
         .filter(|(k, _)| !is_hop_by_hop(k))
         .filter(|(k, _)| !connection_listed.iter().any(|h| h == *k))
+        .filter(|(k, v)| *k != header::SET_COOKIE || safe_upstream_set_cookie(v))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect()
+}
+
+fn safe_upstream_set_cookie(value: &HeaderValue) -> bool {
+    let Ok(raw) = value.to_str() else {
+        return false;
+    };
+    let mut segments = raw.split(';');
+    let Some(cookie_pair) = segments.next() else {
+        return false;
+    };
+    let Some((name, _)) = cookie_pair.split_once('=') else {
+        return false;
+    };
+    let name = name.trim();
+    if name.eq_ignore_ascii_case(COOKIE_NAME) || name.eq_ignore_ascii_case(CSRF_COOKIE_NAME) {
+        return false;
+    }
+    !segments.any(|attribute| {
+        attribute
+            .split_once('=')
+            .map_or(attribute, |(name, _)| name)
+            .trim()
+            .eq_ignore_ascii_case("domain")
+    })
 }
 
 /// Bidirectional WebSocket pump.
@@ -848,13 +969,19 @@ fn strip_response_headers(
 /// is cut. Every non-error teardown announces itself with a real WS
 /// Close frame to each half -- an abrupt FIN leaves browsers without a
 /// prompt `onclose` and the peer devserver with a dangling substream.
+struct BridgePolicy {
+    assertion: HeaderValue,
+    idle_timeout: std::time::Duration,
+    cancellation: tokio_util::sync::CancellationToken,
+    expires_at: tokio::time::Instant,
+}
+
 async fn bridge_ws(
     client: WebSocket,
     handle: TunnelHandle,
     path_and_query: &str,
     forwarded: &ForwardedHeaders,
-    assertion: Option<HeaderValue>,
-    idle_timeout: std::time::Duration,
+    policy: BridgePolicy,
 ) -> anyhow::Result<()> {
     let stream = handle.open().await?;
     let io = stream.compat();
@@ -865,7 +992,7 @@ async fn bridge_ws(
         .into_client_request()
         .map_err(|e| anyhow::anyhow!("build ws request: {e}"))?;
     apply_forwarded(request.headers_mut(), forwarded);
-    apply_gateway_assertion(request.headers_mut(), assertion);
+    apply_gateway_assertion(request.headers_mut(), policy.assertion);
 
     let (upstream, _resp) = tokio_tungstenite::client_async(request, io)
         .await
@@ -874,12 +1001,12 @@ async fn bridge_ws(
     let (mut up_tx, mut up_rx) = upstream.split();
     let (mut cl_tx, mut cl_rx) = client.split();
 
-    let mut idle_deadline = tokio::time::Instant::now() + idle_timeout;
+    let mut idle_deadline = tokio::time::Instant::now() + policy.idle_timeout;
     loop {
         tokio::select! {
             msg = cl_rx.next() => match msg {
                 Some(Ok(msg)) => {
-                    idle_deadline = tokio::time::Instant::now() + idle_timeout;
+                    idle_deadline = tokio::time::Instant::now() + policy.idle_timeout;
                     let stop = matches!(msg, Message::Close(_));
                     up_tx.send(client_to_upstream(msg)).await?;
                     if stop {
@@ -900,7 +1027,7 @@ async fn bridge_ws(
             },
             msg = up_rx.next() => match msg {
                 Some(Ok(msg)) => {
-                    idle_deadline = tokio::time::Instant::now() + idle_timeout;
+                    idle_deadline = tokio::time::Instant::now() + policy.idle_timeout;
                     let stop = matches!(msg, TgMessage::Close(_));
                     if let Some(translated) = upstream_to_client(msg) {
                         cl_tx.send(translated).await?;
@@ -944,6 +1071,36 @@ async fn bridge_ws(
                     .send(TgMessage::Close(Some(TgCloseFrame {
                         code: TgCloseCode::Away,
                         reason: TgUtf8Bytes::from_static("idle timeout"),
+                    })))
+                    .await;
+                break;
+            }
+            _ = policy.cancellation.cancelled() => {
+                let _ = cl_tx
+                    .send(Message::Close(Some(CloseFrame {
+                        code: 1008,
+                        reason: "session revoked".into(),
+                    })))
+                    .await;
+                let _ = up_tx
+                    .send(TgMessage::Close(Some(TgCloseFrame {
+                        code: TgCloseCode::Policy,
+                        reason: TgUtf8Bytes::from_static("session revoked"),
+                    })))
+                    .await;
+                break;
+            }
+            _ = tokio::time::sleep_until(policy.expires_at) => {
+                let _ = cl_tx
+                    .send(Message::Close(Some(CloseFrame {
+                        code: 1008,
+                        reason: "session expired".into(),
+                    })))
+                    .await;
+                let _ = up_tx
+                    .send(TgMessage::Close(Some(TgCloseFrame {
+                        code: TgCloseCode::Policy,
+                        reason: TgUtf8Bytes::from_static("session expired"),
                     })))
                     .await;
                 break;
@@ -996,28 +1153,16 @@ const X_FORWARDED_HOST: &str = "x-forwarded-host";
 /// forward those values; we re-derive `host` from the inbound `Host`
 /// header devserver-proxy itself routed on, and `proto` from
 /// `cfg.forwarded_proto` (configured to match the terminator that
-/// fronts this listener). The inbound XFF chain is preserved because
-/// dropping it would break legitimate multi-hop observability for
-/// operators; nginx is expected to either strip or normalize it on
-/// untrusted ingress.
+/// fronts this listener). Inbound XFF is equally client-controlled and is
+/// discarded; without an explicit trusted-edge peer allowlist, only the
+/// socket peer is safe to forward.
 pub(crate) fn forwarded_headers(parts: &Parts, proto: &str) -> ForwardedHeaders {
     let peer_ip = parts
         .extensions
         .get::<ConnectInfo<SocketAddr>>()
         .map(|ConnectInfo(addr)| addr.ip().to_string());
 
-    let existing_xff = parts
-        .headers
-        .get(X_FORWARDED_FOR)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_string);
-
-    let xff = match (existing_xff, peer_ip) {
-        (Some(chain), Some(p)) => Some(format!("{chain}, {p}")),
-        (Some(chain), None) => Some(chain),
-        (None, Some(p)) => Some(p),
-        (None, None) => None,
-    };
+    let xff = peer_ip;
 
     let host = parts
         .headers
@@ -1053,25 +1198,27 @@ fn gateway_assertion_value(
     caller: &GatewayCaller,
     aud: &str,
     devserver_id: &str,
-) -> Option<HeaderValue> {
-    let key = key?;
-    let claims = gateway_assertion::claims(caller.sub.to_string(), &caller.role, aud, devserver_id)
-        .with_identity(caller.identity.name.clone(), caller.identity.email.clone());
-    let signed = match gateway_assertion::sign(key, &claims) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!(error = ?e, "failed to sign gateway assertion");
-            return None;
-        }
-    };
-    HeaderValue::from_str(&signed).ok()
+) -> Result<HeaderValue> {
+    let key = key.ok_or_else(|| {
+        Error::Anyhow(anyhow::anyhow!(
+            "live tunnel registration has no gateway assertion key"
+        ))
+    })?;
+    let claims = gateway_assertion::claims(
+        caller.sub.to_string(),
+        caller.owner_user_id.to_string(),
+        aud,
+        devserver_id,
+    );
+    let signed = gateway_assertion::sign(key, &claims)
+        .map_err(|e| Error::Anyhow(anyhow::anyhow!("sign gateway assertion: {e}")))?;
+    HeaderValue::from_str(&signed)
+        .map_err(|e| Error::Anyhow(anyhow::anyhow!("encode gateway assertion header: {e}")))
 }
 
-fn apply_gateway_assertion(headers: &mut HeaderMap, assertion: Option<HeaderValue>) {
+fn apply_gateway_assertion(headers: &mut HeaderMap, assertion: HeaderValue) {
     headers.remove(gateway_assertion::HEADER_NAME);
-    if let Some(value) = assertion {
-        headers.insert(gateway_assertion::HEADER_NAME, value);
-    }
+    headers.insert(gateway_assertion::HEADER_NAME, assertion);
 }
 
 // ---------------------------------------------------------------
@@ -1189,6 +1336,72 @@ mod tests {
     use super::*;
 
     #[test]
+    fn entry_content_type_requires_one_exact_raw_value() {
+        let mut headers = HeaderMap::new();
+        headers.append(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static(ENTRY_FORM_CONTENT_TYPE),
+        );
+        assert!(exact_entry_content_type(&headers));
+
+        headers.append(
+            header::CONTENT_TYPE,
+            HeaderValue::from_bytes(&[0xff]).expect("opaque header value"),
+        );
+        assert!(!exact_entry_content_type(&headers));
+    }
+
+    #[test]
+    fn duplicate_connection_fields_strip_every_named_hop_header() {
+        let first = HeaderName::from_static("x-first-hop");
+        let second = HeaderName::from_static("x-second-hop");
+        let mut request = HeaderMap::new();
+        request.append(header::CONNECTION, HeaderValue::from_static("x-first-hop"));
+        request.append(header::CONNECTION, HeaderValue::from_static("x-second-hop"));
+        request.insert(first.clone(), HeaderValue::from_static("secret"));
+        request.insert(second.clone(), HeaderValue::from_static("secret"));
+        strip_inbound_headers(&mut request);
+        assert!(!request.contains_key(&first));
+        assert!(!request.contains_key(&second));
+
+        let mut response = HeaderMap::new();
+        response.append(header::CONNECTION, HeaderValue::from_static("x-first-hop"));
+        response.append(header::CONNECTION, HeaderValue::from_static("x-second-hop"));
+        response.insert(first.clone(), HeaderValue::from_static("secret"));
+        response.insert(second.clone(), HeaderValue::from_static("secret"));
+        let stripped = strip_response_headers(&response);
+        assert!(!stripped.iter().any(|(name, _)| name == first));
+        assert!(!stripped.iter().any(|(name, _)| name == second));
+    }
+
+    #[test]
+    fn upstream_cookies_cannot_cross_tenants_or_clobber_gateway_authority() {
+        let mut headers = HeaderMap::new();
+        headers.append(
+            header::SET_COOKIE,
+            HeaderValue::from_static("theme=dark; Path=/; SameSite=Lax"),
+        );
+        for blocked in [
+            "wide=attacker; Domain=p1.usr.chan.app; Path=/",
+            "wide=attacker; dOmAiN = p1.usr.chan.app; Path=/",
+            "wide=attacker;  DOMAIN=p1.usr.chan.app",
+            "devserver_gate=attacker; Path=/",
+            "devserver_csrf=attacker; Path=/",
+            "DevServer_Gate=attacker; Path=/",
+        ] {
+            headers.append(header::SET_COOKIE, HeaderValue::from_static(blocked));
+        }
+
+        let stripped = strip_response_headers(&headers);
+        let cookies = stripped
+            .iter()
+            .filter(|(name, _)| name == header::SET_COOKIE)
+            .map(|(_, value)| value.to_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(cookies, ["theme=dark; Path=/; SameSite=Lax"]);
+    }
+
+    #[test]
     fn is_management_path_matches_devserver_api() {
         assert!(is_management_path("/api/devserver"));
         assert!(is_management_path("/api/devserver/workspaces"));
@@ -1218,34 +1431,6 @@ mod tests {
             forward_path(&u("/blog/path?a=1&t=secret&b=2")),
             "/blog/path?a=1&t=secret&b=2"
         );
-    }
-
-    #[test]
-    fn strip_entry_token_query_drops_t_param_for_clean_redirect() {
-        assert_eq!(strip_entry_token_query("/blog/?t=abc"), "/blog/");
-        assert_eq!(
-            strip_entry_token_query("/blog/?t=abc&keep=1"),
-            "/blog/?keep=1"
-        );
-        assert_eq!(
-            strip_entry_token_query("/blog/path?a=1&t=secret&b=2"),
-            "/blog/path?a=1&b=2"
-        );
-    }
-
-    #[test]
-    fn entry_token_param_extracts() {
-        let u = |s: &str| s.parse::<Uri>().unwrap();
-        assert_eq!(
-            entry_token_param(&u("/x/?t=abc.def.ghi")).as_deref(),
-            Some("abc.def.ghi")
-        );
-        assert_eq!(
-            entry_token_param(&u("/x/?a=1&t=tok&b=2")).as_deref(),
-            Some("tok")
-        );
-        assert_eq!(entry_token_param(&u("/x/")), None);
-        assert_eq!(entry_token_param(&u("/x/?t=")), None);
     }
 
     #[test]
@@ -1295,14 +1480,13 @@ mod tests {
     }
 
     #[test]
-    fn has_gate_credential_detects_token_or_cookie() {
+    fn has_gate_credential_detects_only_opaque_cookie() {
         let u = |s: &str| s.parse::<Uri>().unwrap();
         let empty = HeaderMap::new();
         // Naked root: no token, no cookie -> bounce to dashboard.
         assert!(!has_gate_credential(&u("/"), &empty));
-        // `?t=` entry token -> authenticated open.
-        assert!(has_gate_credential(&u("/?t=abc.def.ghi"), &empty));
-        // An empty `t=` is not a credential.
+        // URL query bearers never count as gateway credentials.
+        assert!(!has_gate_credential(&u("/?t=abc.def.ghi"), &empty));
         assert!(!has_gate_credential(&u("/?t="), &empty));
         // A `devserver_gate` session cookie -> authenticated open.
         let mut h = HeaderMap::new();
@@ -1338,5 +1522,80 @@ mod tests {
         // No upgrade headers.
         let h = HeaderMap::new();
         assert!(!is_websocket_upgrade(&h));
+    }
+
+    #[test]
+    fn exact_origin_requires_one_exact_non_null_value() {
+        let mut headers = HeaderMap::new();
+        assert!(!exact_origin_matches(&headers, "https://id.chan.app"));
+        headers.append(header::ORIGIN, HeaderValue::from_static("null"));
+        assert!(!exact_origin_matches(&headers, "https://id.chan.app"));
+        headers.clear();
+        headers.append(
+            header::ORIGIN,
+            HeaderValue::from_static("https://id.chan.app"),
+        );
+        assert!(exact_origin_matches(&headers, "https://id.chan.app"));
+        headers.append(
+            header::ORIGIN,
+            HeaderValue::from_static("https://id.chan.app"),
+        );
+        assert!(!exact_origin_matches(&headers, "https://id.chan.app"));
+        headers.clear();
+        headers.append(
+            header::ORIGIN,
+            HeaderValue::from_static("https://ID.chan.app"),
+        );
+        assert!(!exact_origin_matches(&headers, "https://id.chan.app"));
+    }
+
+    #[test]
+    fn websocket_origin_requires_one_exact_canonical_value() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://alice.devserver.chan.app"),
+        );
+        assert!(websocket_origin_matches(
+            &headers,
+            "https",
+            "alice.devserver.chan.app"
+        ));
+
+        for origin in [
+            "null",
+            "http://alice.devserver.chan.app",
+            "https://bob.devserver.chan.app",
+            "https://alice.devserver.chan.app:7002",
+            "https://alice.devserver.chan.app/path",
+            "HTTPS://alice.devserver.chan.app",
+        ] {
+            headers.insert(header::ORIGIN, HeaderValue::from_str(origin).unwrap());
+            assert!(!websocket_origin_matches(
+                &headers,
+                "https",
+                "alice.devserver.chan.app"
+            ));
+        }
+
+        headers.clear();
+        assert!(!websocket_origin_matches(
+            &headers,
+            "https",
+            "alice.devserver.chan.app"
+        ));
+        headers.append(
+            header::ORIGIN,
+            HeaderValue::from_static("https://alice.devserver.chan.app"),
+        );
+        headers.append(
+            header::ORIGIN,
+            HeaderValue::from_static("https://alice.devserver.chan.app"),
+        );
+        assert!(!websocket_origin_matches(
+            &headers,
+            "https",
+            "alice.devserver.chan.app"
+        ));
     }
 }

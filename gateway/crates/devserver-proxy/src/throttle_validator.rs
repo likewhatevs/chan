@@ -58,15 +58,19 @@ impl<V: Validator> ThrottlingValidator<V> {
 #[async_trait]
 impl<V: Validator> Validator for ThrottlingValidator<V> {
     async fn validate(&self, token: &str) -> Result<Validated, ServerError> {
-        let fp = TokenBucket::fingerprint(token);
-        if !self.bucket.try_admit_fp(fp, std::time::Instant::now()) {
-            tracing::warn!(
-                fingerprint = %format!("{fp:016x}"),
-                "tunnel validate throttled"
-            );
-            return Err(ServerError::InvalidToken);
-        }
+        self.admit_token(token)?;
         self.inner.validate(token).await
+    }
+
+    async fn validate_registration(
+        &self,
+        token: &str,
+        registration_id: uuid::Uuid,
+    ) -> Result<Validated, ServerError> {
+        self.admit_token(token)?;
+        self.inner
+            .validate_registration(token, registration_id)
+            .await
     }
 
     // Not throttled here: the announce fires once per ACCEPTED
@@ -76,6 +80,20 @@ impl<V: Validator> Validator for ThrottlingValidator<V> {
     // defense-in-depth throttle on the shared endpoint.
     async fn announce_devserver_name(&self, token: &str, name: &str) {
         self.inner.announce_devserver_name(token, name).await;
+    }
+}
+
+impl<V: Validator> ThrottlingValidator<V> {
+    fn admit_token(&self, token: &str) -> Result<(), ServerError> {
+        let fp = TokenBucket::fingerprint(token);
+        if !self.bucket.try_admit_fp(fp, std::time::Instant::now()) {
+            tracing::warn!(
+                fingerprint = %format!("{fp:016x}"),
+                "tunnel validate throttled"
+            );
+            return Err(ServerError::InvalidToken);
+        }
+        Ok(())
     }
 }
 
@@ -100,6 +118,8 @@ mod tests {
                 devserver_id: "ds-test".into(),
                 scopes: vec!["tunnel".into()],
                 gateway_assertion_key: None,
+                admission_lease: None,
+                admission_lease_expires_at: None,
             })
         }
     }

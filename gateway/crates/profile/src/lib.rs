@@ -11,6 +11,7 @@ pub mod db;
 pub mod error;
 pub mod http;
 pub mod models;
+pub mod revocation;
 pub mod sweeper;
 
 pub use config::Config;

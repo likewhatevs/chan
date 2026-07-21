@@ -116,7 +116,7 @@ impl From<chan_tunnel_proto::IoFrameError> for ServerError {
 /// `Hello.workspace` is an ignored placeholder label. The validator
 /// derives `devserver_id` from the PAT (the gateway uses the PAT's
 /// SHA-256), so token rotation yields a fresh devserver.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Validated {
     pub user_id: uuid::Uuid,
     pub username: String,
@@ -126,6 +126,34 @@ pub struct Validated {
     /// Per-tunnel key used by devserver-proxy to sign caller assertions
     /// for requests forwarded through this registration.
     pub gateway_assertion_key: Option<chan_tunnel_proto::gateway_assertion::AssertionKey>,
+    /// Opaque identity-signed authority for this exact registration.
+    /// Controller-backed deployments require it; local deployments do not.
+    pub admission_lease: Option<String>,
+    pub admission_lease_expires_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl std::fmt::Debug for Validated {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Validated")
+            .field("user_id", &self.user_id)
+            .field("username", &self.username)
+            .field("devserver_id", &self.devserver_id)
+            .field("scopes", &self.scopes)
+            .field(
+                "gateway_assertion_key",
+                &self.gateway_assertion_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "admission_lease",
+                &self.admission_lease.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "admission_lease_expires_at",
+                &self.admission_lease_expires_at,
+            )
+            .finish()
+    }
 }
 
 /// Token validation hook. Implemented by the consumer (e.g. an
@@ -148,6 +176,17 @@ pub struct Validated {
 #[async_trait]
 pub trait Validator: Send + Sync + 'static {
     async fn validate(&self, token: &str) -> Result<Validated, ServerError>;
+
+    /// Contextual validation for a specific registration. Production
+    /// identity clients override this to mint a registration-bound lease;
+    /// local validators inherit the ordinary validation behavior.
+    async fn validate_registration(
+        &self,
+        token: &str,
+        _registration_id: uuid::Uuid,
+    ) -> Result<Validated, ServerError> {
+        self.validate(token).await
+    }
 
     /// Report the display name the client announced in its `Hello`,
     /// once the registration is accepted. The token is passed again
@@ -177,6 +216,17 @@ pub trait RegistrationAdmission: Send + Sync + 'static {
         hello: &Hello,
         validated: &Validated,
     ) -> Result<RegistrationPermit, ServerError>;
+
+    async fn admit_registration(
+        &self,
+        hello: &Hello,
+        validated: &Validated,
+        registration_id: uuid::Uuid,
+    ) -> Result<RegistrationPermit, ServerError> {
+        let mut permit = self.admit(hello, validated).await?;
+        permit.registration_id = registration_id;
+        Ok(permit)
+    }
 
     /// Synchronous fence checked immediately before and after the registry
     /// insert. Controller-backed implementations invalidate an epoch when
@@ -311,6 +361,7 @@ where
         prefix: make_prefix(&validated.username, &validated.devserver_id),
         user: validated.username.clone(),
         workspace: validated.devserver_id.clone(),
+        owner_user_id: validated.user_id.to_string(),
     });
     write_frame(&mut socket, &ack).await?;
 
@@ -322,6 +373,7 @@ async fn handshake_validated_with_admission<S>(
     mut socket: S,
     validated: Validated,
     admission: &dyn RegistrationAdmission,
+    registration_id: uuid::Uuid,
 ) -> Result<
     (
         Hello,
@@ -360,21 +412,25 @@ where
         return Err(ServerError::Handshake(message));
     }
 
-    let permit =
-        match tokio::time::timeout(VALIDATE_TIMEOUT, admission.admit(&hello, &validated)).await {
-            Ok(Ok(permit)) => permit,
-            Ok(Err(error)) => {
-                let (code, message) = refusal_for(&error);
-                write_refusal(&mut socket, code, &message).await;
-                return Err(error);
-            }
-            Err(_) => {
-                let error = ServerError::ControlUnavailable;
-                let (code, message) = refusal_for(&error);
-                write_refusal(&mut socket, code, &message).await;
-                return Err(error);
-            }
-        };
+    let permit = match tokio::time::timeout(
+        VALIDATE_TIMEOUT,
+        admission.admit_registration(&hello, &validated, registration_id),
+    )
+    .await
+    {
+        Ok(Ok(permit)) => permit,
+        Ok(Err(error)) => {
+            let (code, message) = refusal_for(&error);
+            write_refusal(&mut socket, code, &message).await;
+            return Err(error);
+        }
+        Err(_) => {
+            let error = ServerError::ControlUnavailable;
+            let (code, message) = refusal_for(&error);
+            write_refusal(&mut socket, code, &message).await;
+            return Err(error);
+        }
+    };
 
     if !admission.permit_is_current(permit) {
         let error = ServerError::ControlUnavailable;
@@ -389,6 +445,7 @@ where
         prefix: make_prefix(&validated.username, &validated.devserver_id),
         user: validated.username.clone(),
         workspace: validated.devserver_id.clone(),
+        owner_user_id: validated.user_id.to_string(),
     });
     if let Err(error) = write_frame(&mut socket, &ack).await {
         admission.cancel(permit).await;
@@ -476,5 +533,23 @@ mod tests {
         });
         assert_eq!(code, chan_tunnel_proto::error_code::TOO_MANY_WORKSPACES);
         assert_eq!(message, "user alice reached the fleet-wide devserver limit");
+    }
+
+    #[test]
+    fn validated_debug_redacts_both_tunnel_authorities() {
+        let lease = "lease-sentinel-must-never-appear";
+        let validated = Validated {
+            user_id: uuid::Uuid::new_v4(),
+            username: "alice".into(),
+            devserver_id: "devserver".into(),
+            scopes: vec!["tunnel:connect".into()],
+            gateway_assertion_key: Some(*b"assertion-key-sentinel-32-bytes!"),
+            admission_lease: Some(lease.into()),
+            admission_lease_expires_at: None,
+        };
+        let debug = format!("{validated:?}");
+        assert!(debug.contains("REDACTED"));
+        assert!(!debug.contains(lease));
+        assert!(!debug.contains("assertion-key-sentinel"));
     }
 }

@@ -83,10 +83,7 @@ http-body-util = "0.1"
 h2 = "0.4"
 bytes = "1"
 base64 = "0.22"
-# HS256 mint + verify for the devserver-gate handoff. identity-service
-# mints; devserver-proxy verifies and mints its own session cookies.
-# Shared secret (DEVSERVER_GATE_SECRET) via env.
-jsonwebtoken = { version = "9", default-features = false }
+ed25519-dalek = "2.1"
 chrono = { version = "0.4", features = ["serde"] }
 mime_guess = "2"
 oauth2 = { version = "4.4", default-features = false, features = ["reqwest", "rustls-tls"] }

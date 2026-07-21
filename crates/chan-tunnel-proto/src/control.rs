@@ -74,6 +74,8 @@ pub struct HelloAckOk {
     pub prefix: String,
     pub user: String,
     pub workspace: String,
+    /// Immutable owner id resolved from the validated tunnel PAT.
+    pub owner_user_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -189,6 +191,7 @@ mod wire_tests {
             prefix: "/notes".into(),
             user: "alice".into(),
             workspace: "notes".into(),
+            owner_user_id: "11111111-1111-4111-8111-111111111111".into(),
         });
         assert_eq!(
             serde_json::to_value(&ack).unwrap(),
@@ -198,6 +201,7 @@ mod wire_tests {
                 "prefix": "/notes",
                 "user": "alice",
                 "workspace": "notes",
+                "owner_user_id": "11111111-1111-4111-8111-111111111111",
             })
         );
     }

@@ -9,7 +9,7 @@ Build, package, and deploy infrastructure for chan, one directory per concern. T
 | `packaging/linux/` | CLI Linux artifacts: musl tarball, deb, rpm, Arch. |
 | `packaging/distros/` | Fedora COPR, Ubuntu Launchpad, and Arch AUR source packaging. |
 | `packaging/desktop/` | macOS DMG packaging (`build-dmg.sh` + `dmg_settings.py`). |
-| `packaging/sdme/` | chan-desktop Linux bundle build infra (script + `.sdme`). |
+| `packaging/sdme/` | chan-desktop Linux build images and the single-trust-domain chan-devserver image. |
 | `packaging/gateway/` | Gateway packaging, scripts, dev stack, and sdme. |
 
 The gateway Cargo workspace itself stays at `gateway/`; only its packaging and scripts live here under `packaging/gateway/`. Repo hooks and one-shot asset generators stay at `scripts/` (`install-hooks`, `pre-push`, `gen-app-icon.py`, `gen-nsis-images.py`). Per-crate cargo-deb / cargo-generate-rpm metadata stays in each crate's `Cargo.toml`.

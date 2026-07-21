@@ -9,20 +9,20 @@
 # Topology: everything on host loopback, one process per service.
 # Identity, profile, the OAuth stub, and the controller bind
 # 127.0.0.1. The three proxies share one public port and one tunnel
-# port on their own loopback aliases (p1=127.0.0.2, p2=127.0.0.3,
+# inner ports on their own loopback aliases (p1=127.0.0.2, p2=127.0.0.3,
 # p3=127.0.0.4) because the controller's origin template pins one
-# port for the whole fleet. `localtest.me` wildcard DNS plus curl
+# port for the whole fleet. Per-run CA-backed TLS edges front identity and
+# every proxy public/tunnel listener. `localtest.me` wildcard DNS plus curl
 # --resolve stand in for public DNS: every node host is pinned to its
 # proxy's alias, so a request can be aimed at any node for any host.
 #
-# Two TCP shims (node tcp-shim.mjs, spawned like any service) model
+# TCP and TLS shims (spawned like any service) model
 # the edge pieces the fleet needs:
 #   - one control relay per proxy (127.0.0.1:1784{2,3,4}) in front of
 #     the controller's h2c listener; killing relay-p2 drops exactly
 #     p2's control stream for the disconnect scenario,
-#   - one round-robin ingress shim on 127.0.0.1:$TUNNEL_PORT that
-#     distributes tunnel dials across the three nodes, standing in
-#     for the shared-apex edge.
+#   - one round-robin ingress shim that preserves TLS and distributes tunnel
+#     dials across three node TLS terminators, each forwarding h2c to its proxy.
 #
 # The devservers run host-local rather than in sdme zone containers:
 # on this host the kernel firewall drops container->host TCP (see
@@ -68,10 +68,14 @@ E2E_KEEP="${E2E_KEEP:-}"
 # Fixed loopback ports; override only on collision. The proxies share
 # PROXY_PORT/TUNNEL_PORT on their per-node aliases; the ingress shim
 # owns TUNNEL_PORT on 127.0.0.1.
-ID_PORT="${E2E_ID_PORT:-17800}"
+ID_INNER_PORT="${E2E_ID_INNER_PORT:-17800}"
+ID_PORT="${E2E_ID_PORT:-17900}"
+ID_INTERNAL_PORT="${E2E_ID_INTERNAL_PORT:-17804}"
 PROFILE_PORT="${E2E_PROFILE_PORT:-17801}"
-PROXY_PORT="${E2E_PROXY_PORT:-17802}"
-TUNNEL_PORT="${E2E_TUNNEL_PORT:-17810}"
+PROXY_INNER_PORT="${E2E_PROXY_INNER_PORT:-17802}"
+PROXY_PORT="${E2E_PROXY_PORT:-17902}"
+TUNNEL_INNER_PORT="${E2E_TUNNEL_INNER_PORT:-17810}"
+TUNNEL_PORT="${E2E_TUNNEL_PORT:-17910}"
 OAUTH_PORT="${E2E_OAUTH_PORT:-17830}"
 CTL_ADMIN_PORT="${E2E_CTL_ADMIN_PORT:-17840}"
 CTL_PROXY_PORT="${E2E_CTL_PROXY_PORT:-17841}"
@@ -95,8 +99,8 @@ node_relay_port() { # node_relay_port <proxy-id> -> control relay listen port
     *) return 1 ;;
     esac
 }
-node_tunnel_url() { printf 'http://%s:%s/v1/tunnel' "$(node_ip "$1")" "$TUNNEL_PORT"; }
-SHIM_TUNNEL_URL="http://127.0.0.1:$TUNNEL_PORT/v1/tunnel"
+node_tunnel_url() { printf 'https://%s:%s/v1/tunnel' "$(node_ip "$1")" "$TUNNEL_PORT"; }
+SHIM_TUNNEL_URL="https://127.0.0.1:$TUNNEL_PORT/v1/tunnel"
 
 # Headless Chrome for the consent-flow asserts (the puppeteer cache
 # layout, overridable).
@@ -106,17 +110,29 @@ CAROL_EMAIL="e2e-carol@example.com"
 DAVE_EMAIL="e2e-dave@example.com"
 
 DOMAIN=localtest.me
-ID_HOST="id.$DOMAIN:$ID_PORT"
+ID_NAME="id.$DOMAIN"
+ID_HOST="$ID_NAME:$ID_PORT"
 APEX="devserver.$DOMAIN"
-APEX_ORIGIN="http://$APEX:$PROXY_PORT"
-TUNNEL_ORIGIN="http://$APEX:$TUNNEL_PORT"
+APEX_ORIGIN="https://$APEX:$PROXY_PORT"
+TUNNEL_ORIGIN="https://$APEX:$TUNNEL_PORT"
 
-# Per-run shared secrets (the stack is torn down with the run).
-GATE_SECRET="e2e-gate-secret-0123456789abcdef0123456789abcdef"
+# Per-run credentials (the stack is torn down with the run). Every controller
+# scope and proxy identity is deliberately distinct.
 TOK_PROFILE="e2e-profile-bearer"
 TOK_INTERNAL="e2e-internal-bearer"
-TOK_ADMIN="e2e-admin-bearer"
-TOK_PROXY="e2e-proxy-bearer"
+TOK_PROFILE_ADMIN="e2e-profile-admin-0000000000000001"
+TOK_IDENTITY_ADMIN="e2e-identity-admin-000000000000001"
+TOK_CONTROL_OPERATOR="e2e-control-operator-00000000000001"
+TOK_CONTROL_IDENTITY="e2e-control-identity-00000000000001"
+TOK_CONTROL_PROFILE="e2e-control-profile-000000000000001"
+proxy_token() { # proxy_token <proxy-id>
+    case "$1" in
+    p1) printf 'e2e-proxy-p1-00000000000000000001' ;;
+    p2) printf 'e2e-proxy-p2-00000000000000000002' ;;
+    p3) printf 'e2e-proxy-p3-00000000000000000003' ;;
+    *) return 1 ;;
+    esac
+}
 # The fleet-wide cap under test, enforced by the controller: two
 # devservers of one user register, a third is refused.
 MAX_DEVSERVERS=2
@@ -168,8 +184,30 @@ need openssl
 need basenc
 need sha256sum
 
+mapfile -t ADMISSION_KEYS < <("$REPO/packaging/gateway/scripts/generate-admission-keypair.py")
+mapfile -t ENTRY_KEYS < <("$REPO/packaging/gateway/scripts/generate-admission-keypair.py")
+[ "${#ADMISSION_KEYS[@]}" = 2 ] && [ "${#ENTRY_KEYS[@]}" = 2 ] || {
+    log "Ed25519 key generation failed"
+    exit 2
+}
+ADMISSION_SIGNING_KEY="${ADMISSION_KEYS[0]}"
+ADMISSION_VERIFYING_KEY="${ADMISSION_KEYS[1]}"
+ENTRY_SIGNING_KEY="${ENTRY_KEYS[0]}"
+ENTRY_VERIFYING_KEY="${ENTRY_KEYS[1]}"
+
 mkdir -p "$WORK" "$LOGS"
 : > "$ASSERT_LOG"
+TLS_DIR="$WORK/tls"
+mkdir -p "$TLS_DIR"
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+    -subj '/CN=chan gateway-zone e2e CA' \
+    -keyout "$TLS_DIR/ca.key" -out "$TLS_DIR/ca.crt" >/dev/null 2>&1 || exit 2
+openssl req -newkey rsa:2048 -nodes -subj "/CN=$DOMAIN" \
+    -addext "subjectAltName=DNS:id.$DOMAIN,DNS:$APEX,DNS:*.$APEX,DNS:*.p1.$APEX,DNS:*.p2.$APEX,DNS:*.p3.$APEX,IP:127.0.0.1,IP:127.0.0.2,IP:127.0.0.3,IP:127.0.0.4" \
+    -keyout "$TLS_DIR/edge.key" -out "$TLS_DIR/edge.csr" >/dev/null 2>&1 || exit 2
+openssl x509 -req -days 1 -sha256 -copy_extensions copy \
+    -in "$TLS_DIR/edge.csr" -CA "$TLS_DIR/ca.crt" -CAkey "$TLS_DIR/ca.key" \
+    -CAcreateserial -out "$TLS_DIR/edge.crt" >/dev/null 2>&1 || exit 2
 
 # Kill leftovers from a previous run (idempotency): every process we
 # spawn records a pidfile under $WORK/pids.
@@ -192,7 +230,8 @@ free_port() { # free_port <port>
         kill "$pid" 2>/dev/null && log "freed port $1 (killed stray pid $pid)"
     done
 }
-for p in "$ID_PORT" "$PROFILE_PORT" "$PROXY_PORT" "$TUNNEL_PORT" "$OAUTH_PORT" \
+for p in "$ID_INNER_PORT" "$ID_PORT" "$ID_INTERNAL_PORT" "$PROFILE_PORT" \
+    "$PROXY_INNER_PORT" "$PROXY_PORT" "$TUNNEL_INNER_PORT" "$TUNNEL_PORT" "$OAUTH_PORT" \
     "$CTL_ADMIN_PORT" "$CTL_PROXY_PORT" 17842 17843 17844 "${DS_PORTS[@]}"; do
     free_port "$p"
 done
@@ -247,6 +286,36 @@ net.createServer((client) => {
 }).listen(Number(lport), lip);
 EOF
 
+# TLS edge: terminate one externally reachable listener onto a loopback-only
+# service port. Public HTTP and tunnel h2c listeners have different protocol
+# contracts, so their ALPN sets must not overlap: forwarding negotiated h2 into
+# an HTTP/1-only public listener produces an immediate protocol EOF. A per-run
+# CA keeps every client verification-on.
+cat > "$WORK/tls-shim.mjs" <<'EOF'
+import fs from "node:fs";
+import net from "node:net";
+import tls from "node:tls";
+const [listen, target, certFile, keyFile, protocol] = process.argv.slice(2);
+if (!(["http1", "h2"].includes(protocol))) {
+    throw new Error("usage: tls-shim.mjs LISTEN TARGET CERT KEY http1|h2");
+}
+const [lip, lport] = listen.split(":");
+const [tip, tport] = target.split(":");
+tls.createServer({
+    cert: fs.readFileSync(certFile),
+    key: fs.readFileSync(keyFile),
+    ALPNProtocols: protocol === "h2" ? ["h2"] : ["http/1.1"],
+}, (client) => {
+    const up = net.connect(Number(tport), tip);
+    client.on("error", () => up.destroy());
+    client.on("close", () => up.destroy());
+    up.on("error", () => client.destroy());
+    up.on("close", () => client.destroy());
+    client.pipe(up);
+    up.pipe(client);
+}).listen(Number(lport), lip);
+EOF
+
 # ---------------------------------------------------------------
 # Binaries (cargo-build on demand; warm target = cheap no-op)
 # ---------------------------------------------------------------
@@ -275,9 +344,15 @@ done
 log "resetting schema $E2E_SCHEMA"
 sql "$E2E_DATABASE_URL" \
     "DROP SCHEMA IF EXISTS $E2E_SCHEMA CASCADE; CREATE SCHEMA $E2E_SCHEMA;" || exit 2
-# Services reach the schema via search_path in the URL options; both
-# identity and profile run their migrations into it on boot.
+# Services reach the schema via search_path in the URL options. One explicit
+# migration-only identity invocation owns all DDL; app processes run external.
 DB_URL="$E2E_DATABASE_URL?options=-csearch_path%3D$E2E_SCHEMA"
+env DATABASE_URL="$DB_URL" CHAN_GATEWAY_MIGRATIONS=only \
+    "$GW_BIN/identity-service" > "$LOGS/migrate.log" 2>&1 || {
+    log "migration-only identity failed; last log lines:"
+    tail -20 "$LOGS/migrate.log" || true
+    exit 2
+}
 
 # ---------------------------------------------------------------
 # Services
@@ -296,7 +371,8 @@ spawn() { # spawn <name> <cmd...>
 wait_http() { # wait_http <name> <url> [tries]
     local name="$1" url="$2" tries="${3:-50}"
     for _ in $(seq "$tries"); do
-        if curl -fsS -o /dev/null --max-time 2 "$url"; then return 0; fi
+        if curl --noproxy '*' --cacert "$TLS_DIR/ca.crt" -fsS -o /dev/null \
+            --max-time 2 "$url"; then return 0; fi
         sleep 0.2
     done
     log "$name did not answer at $url; last log lines:"
@@ -311,7 +387,8 @@ wait_http() { # wait_http <name> <url> [tries]
 wait_ready() { # wait_ready <name> <url> [host] [tries]
     local name="$1" url="$2" host="${3:-}" tries="${4:-240}"
     for _ in $(seq "$tries"); do
-        if curl -fsS -o /dev/null --max-time 2 ${host:+-H "Host: $host"} "$url" 2>/dev/null; then return 0; fi
+        if curl --noproxy '*' --cacert "$TLS_DIR/ca.crt" -fsS -o /dev/null --max-time 2 \
+            ${host:+-H "Host: $host"} "$url" 2>/dev/null; then return 0; fi
         sleep 0.4
     done
     log "$name did not become ready at $url; last log lines:"
@@ -326,23 +403,29 @@ spawn stub-oauth node "$REPO/scripts/e2e/stub-oauth.mjs" "$OAUTH_PORT" "$ALICE_E
 spawn profile env \
     BIND_ADDR="127.0.0.1:$PROFILE_PORT" \
     DATABASE_URL="$DB_URL" \
+    CHAN_GATEWAY_MIGRATIONS=external \
     PROFILE_AUTH_TOKEN="$TOK_PROFILE" \
-    DEVSERVER_ADMIN_TOKEN="$TOK_ADMIN" \
+    PROFILE_ADMIN_TOKEN="$TOK_PROFILE_ADMIN" \
+    DEVSERVER_PROFILE_ADMIN_TOKEN="$TOK_CONTROL_PROFILE" \
     DEVSERVER_ADMIN_URL="http://127.0.0.1:$CTL_ADMIN_PORT" \
     RUST_LOG=info \
     "$GW_BIN/profile-service"
 
 spawn identity env \
-    BIND_ADDR="127.0.0.1:$ID_PORT" \
-    BASE_URL="http://$ID_HOST" \
+    BIND_ADDR="127.0.0.1:$ID_INNER_PORT" \
+    INTERNAL_BIND_ADDR="127.0.0.1:$ID_INTERNAL_PORT" \
+    BASE_URL="https://$ID_HOST" \
     DATABASE_URL="$DB_URL" \
+    CHAN_GATEWAY_MIGRATIONS=external \
     PROFILE_SERVICE_URL="http://127.0.0.1:$PROFILE_PORT" \
     PROFILE_AUTH_TOKEN="$TOK_PROFILE" \
     IDENTITY_INTERNAL_TOKEN="$TOK_INTERNAL" \
-    IDENTITY_ADMIN_TOKEN="$TOK_ADMIN" \
-    DEVSERVER_GATE_SECRET="$GATE_SECRET" \
-    DEVSERVER_ADMIN_TOKEN="$TOK_ADMIN" \
+    IDENTITY_ADMIN_TOKEN="$TOK_IDENTITY_ADMIN" \
+    DEVSERVER_IDENTITY_ADMIN_TOKEN="$TOK_CONTROL_IDENTITY" \
     DEVSERVER_ADMIN_URL="http://127.0.0.1:$CTL_ADMIN_PORT" \
+    DEVSERVER_ADMISSION_SIGNING_KEY="$ADMISSION_SIGNING_KEY" \
+    DEVSERVER_ADMISSION_VERIFYING_KEYS="$ADMISSION_VERIFYING_KEY" \
+    DEVSERVER_ENTRY_SIGNING_KEY="$ENTRY_SIGNING_KEY" \
     DEVSERVER_PROXY_ORIGIN="$APEX_ORIGIN" \
     DEVSERVER_TUNNEL_ORIGIN="$TUNNEL_ORIGIN" \
     GITHUB_CLIENT_ID=e2e-dummy \
@@ -357,9 +440,12 @@ spawn_controller() {
     spawn controller env \
         BIND_ADDR="127.0.0.1:$CTL_ADMIN_PORT" \
         PROXY_BIND_ADDR="127.0.0.1:$CTL_PROXY_PORT" \
-        DEVSERVER_ADMIN_TOKEN="$TOK_ADMIN" \
-        DEVSERVER_PROXY_TOKEN="$TOK_PROXY" \
-        DEVSERVER_PROXY_BASE_URL_TEMPLATE="http://{proxy_id}.$APEX:$PROXY_PORT" \
+        DEVSERVER_OPERATOR_ADMIN_TOKENS="$TOK_CONTROL_OPERATOR" \
+        DEVSERVER_IDENTITY_ADMIN_TOKENS="$TOK_CONTROL_IDENTITY" \
+        DEVSERVER_PROFILE_ADMIN_TOKENS="$TOK_CONTROL_PROFILE" \
+        DEVSERVER_PROXY_CREDENTIALS="p1=$(proxy_token p1);p2=$(proxy_token p2);p3=$(proxy_token p3)" \
+        DEVSERVER_ADMISSION_VERIFYING_KEYS="$ADMISSION_VERIFYING_KEY" \
+        DEVSERVER_PROXY_BASE_URL_TEMPLATE="https://{proxy_id}.$APEX:$PROXY_PORT" \
         MAX_DEVSERVERS_PER_USER="$MAX_DEVSERVERS" \
         RUST_LOG=info \
         "$GW_BIN/devserver-control-service"
@@ -374,8 +460,8 @@ for id in "${PROXY_IDS[@]}"; do
         "127.0.0.1:$(node_relay_port "$id")" "127.0.0.1:$CTL_PROXY_PORT"
 done
 
-# The shared-apex ingress edge: tunnel dials to 127.0.0.1 round-robin
-# across the three nodes.
+# The shared-apex ingress edge preserves TLS and distributes connections across
+# the three node TLS listeners.
 spawn ingress-shim node "$WORK/tcp-shim.mjs" \
     "127.0.0.1:$TUNNEL_PORT" \
     "127.0.0.2:$TUNNEL_PORT" "127.0.0.3:$TUNNEL_PORT" "127.0.0.4:$TUNNEL_PORT"
@@ -384,18 +470,19 @@ spawn_proxy() { # spawn_proxy <proxy-id>
     local id="$1" ip
     ip="$(node_ip "$id")"
     spawn "proxy-$id" env \
-        BIND_ADDR="$ip:$PROXY_PORT" \
-        TUNNEL_BIND_ADDR="$ip:$TUNNEL_PORT" \
-        IDENTITY_URL="http://127.0.0.1:$ID_PORT" \
+        BIND_ADDR="$ip:$PROXY_INNER_PORT" \
+        TUNNEL_BIND_ADDR="$ip:$TUNNEL_INNER_PORT" \
+        IDENTITY_URL="http://127.0.0.1:$ID_INTERNAL_PORT" \
         IDENTITY_INTERNAL_TOKEN="$TOK_INTERNAL" \
-        DEVSERVER_GATE_SECRET="$GATE_SECRET" \
-        DASHBOARD_URL="http://$ID_HOST/workspaces" \
+        IDENTITY_PUBLIC_ORIGIN="https://$ID_HOST" \
+        DEVSERVER_ENTRY_VERIFYING_KEYS="$ENTRY_VERIFYING_KEY" \
+        DASHBOARD_URL="https://$ID_HOST/workspaces" \
         DEVSERVER_TUNNEL_ORIGIN="$TUNNEL_ORIGIN" \
-        DEVSERVER_PROXY_BASE_URL="http://$id.$APEX:$PROXY_PORT" \
+        DEVSERVER_PROXY_BASE_URL="https://$id.$APEX:$PROXY_PORT" \
         DEVSERVER_CONTROL_URL="http://127.0.0.1:$(node_relay_port "$id")" \
-        DEVSERVER_PROXY_TOKEN="$TOK_PROXY" \
+        DEVSERVER_PROXY_TOKEN="$(proxy_token "$id")" \
         DEVSERVER_PROXY_ID="$id" \
-        FORWARDED_PROTO=http \
+        FORWARDED_PROTO=https \
         RUST_LOG=info \
         "$GW_BIN/devserver-proxy-service"
 }
@@ -403,14 +490,27 @@ for id in "${PROXY_IDS[@]}"; do
     spawn_proxy "$id"
 done
 
+spawn identity-edge node "$WORK/tls-shim.mjs" \
+    "127.0.0.1:$ID_PORT" "127.0.0.1:$ID_INNER_PORT" \
+    "$TLS_DIR/edge.crt" "$TLS_DIR/edge.key" http1
+for id in "${PROXY_IDS[@]}"; do
+    ip="$(node_ip "$id")"
+    spawn "public-edge-$id" node "$WORK/tls-shim.mjs" \
+        "$ip:$PROXY_PORT" "$ip:$PROXY_INNER_PORT" \
+        "$TLS_DIR/edge.crt" "$TLS_DIR/edge.key" http1
+    spawn "tunnel-edge-$id" node "$WORK/tls-shim.mjs" \
+        "$ip:$TUNNEL_PORT" "$ip:$TUNNEL_INNER_PORT" \
+        "$TLS_DIR/edge.crt" "$TLS_DIR/edge.key" h2
+done
+
 wait_http profile "http://127.0.0.1:$PROFILE_PORT/healthz" || exit 2
-wait_http identity "http://127.0.0.1:$ID_PORT/healthz" || exit 2
+wait_http identity "http://127.0.0.1:$ID_INNER_PORT/healthz" || exit 2
 # Controller readiness intentionally waits the full convergence
 # window: the fleet reports ready only after every proxy's snapshot
 # has sat complete for 30s. Proxies report ready on FleetReady.
 wait_ready controller "http://127.0.0.1:$CTL_ADMIN_PORT/readyz" || exit 2
 for id in "${PROXY_IDS[@]}"; do
-    wait_ready "proxy-$id" "http://$(node_ip "$id"):$PROXY_PORT/readyz" "$APEX" || exit 2
+    wait_ready "proxy-$id" "https://$(node_ip "$id"):$PROXY_PORT/readyz" "$APEX" || exit 2
 done
 
 # healthz answering is not enough: a stray listener could serve it
@@ -425,8 +525,9 @@ require_alive() { # require_alive <name>
         exit 2
     fi
 }
-for svc in stub-oauth profile identity controller relay-p1 relay-p2 relay-p3 \
-    ingress-shim proxy-p1 proxy-p2 proxy-p3; do
+for svc in stub-oauth profile identity identity-edge controller relay-p1 relay-p2 relay-p3 \
+    ingress-shim proxy-p1 proxy-p2 proxy-p3 public-edge-p1 public-edge-p2 public-edge-p3 \
+    tunnel-edge-p1 tunnel-edge-p2 tunnel-edge-p3; do
     require_alive "$svc"
 done
 log "stack is up (controller ready, p1-p3 at FleetReady)"
@@ -446,7 +547,8 @@ log "stack is up (controller ready, p1-p3 at FleetReady)"
 admin_mint() { # admin_mint <email> <label> -> "secret dsid"
     local out secret dsid
     out="$("$GW_BIN/chan-gateway-admin" \
-        --identity-url "http://127.0.0.1:$ID_PORT" --token "$TOK_ADMIN" --json \
+        --identity-url "http://127.0.0.1:$ID_INTERNAL_PORT" \
+        --identity-token "$TOK_IDENTITY_ADMIN" --json \
         token create "$1" \
         --scope tunnel --scope desktop.connect --label "$2" \
         2>> "$LOGS/admin-mint.log")" || return 1
@@ -454,6 +556,15 @@ admin_mint() { # admin_mint <email> <label> -> "secret dsid"
     case "$secret" in chan_pat_*) ;; *) return 1 ;; esac
     dsid="$(printf %s "$secret" | sha256sum | awk '{print $1}')"
     echo "$secret $dsid"
+}
+
+mint_into() { # mint_into <email> <label> <pat-var> <devserver-id-var>
+    local email="$1" label="$2" pat_var="$3" dsid_var="$4" row pat dsid
+    row="$(admin_mint "$email" "$label")" || return 1
+    read -r pat dsid <<< "$row"
+    [[ "$pat" == chan_pat_* && "$dsid" =~ ^[0-9a-f]{64}$ ]] || return 1
+    printf -v "$pat_var" '%s' "$pat"
+    printf -v "$dsid_var" '%s' "$dsid"
 }
 
 # The browser phase signs in through the stub OAuth with this email;
@@ -473,8 +584,8 @@ seed_user() { # seed_user <email> -> "id username"
         "SET search_path TO $E2E_SCHEMA; SELECT username FROM users WHERE id = '$id';")"
 }
 read -r ALICE_ID ALICE_USER <<< "$(seed_user "$ALICE_EMAIL")"
-read -r _ CAROL_USER <<< "$(seed_user "$CAROL_EMAIL")"
-read -r _ DAVE_USER <<< "$(seed_user "$DAVE_EMAIL")"
+read -r CAROL_ID CAROL_USER <<< "$(seed_user "$CAROL_EMAIL")"
+read -r DAVE_ID DAVE_USER <<< "$(seed_user "$DAVE_EMAIL")"
 log "seeded users alice=$ALICE_USER carol=$CAROL_USER dave=$DAVE_USER"
 
 # The mint IS an assertion (v0.68 item 8: admin token create end to
@@ -482,13 +593,13 @@ log "seeded users alice=$ALICE_USER carol=$CAROL_USER dave=$DAVE_USER"
 # dial, route, and gate. Alice gets A/B (live) + C (cap probe); carol
 # gets D (p3) + E (shared ingress); dave gets F (shared ingress) + G
 # (admission probe for the failure scenarios).
-if read -r PAT_A DS_A <<< "$(admin_mint "$ALICE_EMAIL" e2e-a)" &&
-    read -r PAT_B DS_B <<< "$(admin_mint "$ALICE_EMAIL" e2e-b)" &&
-    read -r PAT_C DS_C <<< "$(admin_mint "$ALICE_EMAIL" e2e-c)" &&
-    read -r PAT_D DS_D <<< "$(admin_mint "$CAROL_EMAIL" e2e-d)" &&
-    read -r PAT_E DS_E <<< "$(admin_mint "$CAROL_EMAIL" e2e-e)" &&
-    read -r PAT_F DS_F <<< "$(admin_mint "$DAVE_EMAIL" e2e-f)" &&
-    read -r PAT_G DS_G <<< "$(admin_mint "$DAVE_EMAIL" e2e-g)"; then
+if mint_into "$ALICE_EMAIL" e2e-a PAT_A DS_A &&
+    mint_into "$ALICE_EMAIL" e2e-b PAT_B DS_B &&
+    mint_into "$ALICE_EMAIL" e2e-c PAT_C DS_C &&
+    mint_into "$CAROL_EMAIL" e2e-d PAT_D DS_D &&
+    mint_into "$CAROL_EMAIL" e2e-e PAT_E DS_E &&
+    mint_into "$DAVE_EMAIL" e2e-f PAT_F DS_F &&
+    mint_into "$DAVE_EMAIL" e2e-g PAT_G DS_G; then
     assert_pass "admin mint: token create provisioned 7 PATs via /admin/v1/tokens"
 else
     assert_fail "admin mint: chan-gateway-admin token create failed (logs/admin-mint.log)"
@@ -496,8 +607,8 @@ fi
 # Guard probes: the surface refuses a wrong bearer outright and
 # answers an unknown email with the same 404 the CLI narrates.
 guard_status="$(curl -sS -o /dev/null -w '%{http_code}' \
-    -X POST "http://127.0.0.1:$ID_PORT/admin/v1/tokens" \
-    -H "authorization: Bearer wrong-$TOK_ADMIN" \
+    -X POST "http://127.0.0.1:$ID_INTERNAL_PORT/admin/v1/tokens" \
+    -H "authorization: Bearer wrong-$TOK_IDENTITY_ADMIN" \
     -H "content-type: application/json" \
     -d "{\"email\":\"$ALICE_EMAIL\"}")"
 if [ "$guard_status" = "401" ]; then
@@ -506,8 +617,8 @@ else
     assert_fail "admin mint: wrong bearer expected 401, got $guard_status"
 fi
 unknown_status="$(curl -sS -o /dev/null -w '%{http_code}' \
-    -X POST "http://127.0.0.1:$ID_PORT/admin/v1/tokens" \
-    -H "authorization: Bearer $TOK_ADMIN" \
+    -X POST "http://127.0.0.1:$ID_INTERNAL_PORT/admin/v1/tokens" \
+    -H "authorization: Bearer $TOK_IDENTITY_ADMIN" \
     -H "content-type: application/json" \
     -d '{"email":"e2e-nobody@example.com"}')"
 if [ "$unknown_status" = "404" ]; then
@@ -532,8 +643,8 @@ sql "$E2E_DATABASE_URL" "SET search_path TO $E2E_SCHEMA;
     INSERT INTO devservers (owner_user_id, devserver_id, label)
     VALUES ('$BOB_ID', '$DS_BOB', 'bob-box');
     INSERT INTO devserver_grants
-        (owner_user_id, devserver_id, grantee_email, grantee_user_id, role, accepted_at)
-    VALUES ('$BOB_ID', '$DS_BOB', '$ALICE_EMAIL', '$ALICE_ID', 'editor', now());" || exit 2
+        (owner_user_id, devserver_id, grantee_email, grantee_user_id, accepted_at)
+    VALUES ('$BOB_ID', '$DS_BOB', '$ALICE_EMAIL', '$ALICE_ID', now());" || exit 2
 log "seeded bob ($BOB_USER) sharing $(disc "$DS_BOB") with alice"
 
 # ---------------------------------------------------------------
@@ -541,7 +652,7 @@ log "seeded bob ($BOB_USER) sharing $(disc "$DS_BOB") with alice"
 # ---------------------------------------------------------------
 
 admin_read() { # admin_read <path> -> controller admin JSON (fails on 503)
-    curl -fsS -H "Authorization: Bearer $TOK_ADMIN" "http://127.0.0.1:$CTL_ADMIN_PORT$1"
+    curl -fsS -H "Authorization: Bearer $TOK_CONTROL_OPERATOR" "http://127.0.0.1:$CTL_ADMIN_PORT$1"
 }
 
 jrows() { # jrows <field...>: one line per JSON array row, fields space-separated
@@ -552,7 +663,7 @@ jrows() { # jrows <field...>: one line per JSON array row, fields space-separate
 }
 
 admin_tunnels() { # admin_tunnels -> JSON list of alice's live tunnels
-    admin_read "/admin/v1/users/$ALICE_USER/tunnels"
+    admin_read "/admin/v1/owners/$ALICE_ID/tunnels"
 }
 
 tunnel_count() { admin_tunnels | grep -o '"devserver_id"' | wc -l; }
@@ -618,6 +729,7 @@ spawn_devserver() { # spawn_devserver <name> <port> <pat> <tunnel-url>
     spawn "ds-$name" env \
         CHAN_HOME="$WORK/home-$name" \
         CHAN_TUNNEL_TOKEN="$pat" \
+        SSL_CERT_FILE="$TLS_DIR/ca.crt" \
         "$CHAN_BIN" devserver --service=none \
         --bind 127.0.0.1 --port "$port" \
         --tunnel-url="$turl" \
@@ -636,9 +748,9 @@ proxies_json="$(admin_read /admin/v1/proxies)" || {
     exit 1
 }
 fleet_shape="$(printf %s "$proxies_json" | jrows proxy_id status tunnel_count proxy_base_url | sort)"
-expected_shape="p1 active 0 http://p1.$APEX:$PROXY_PORT
-p2 active 0 http://p2.$APEX:$PROXY_PORT
-p3 active 0 http://p3.$APEX:$PROXY_PORT"
+expected_shape="p1 active 0 https://p1.$APEX:$PROXY_PORT
+p2 active 0 https://p2.$APEX:$PROXY_PORT
+p3 active 0 https://p3.$APEX:$PROXY_PORT"
 if [ "$fleet_shape" = "$expected_shape" ]; then
     assert_pass "fleet: /admin/v1/proxies shows three active rows with empty snapshots"
 else
@@ -660,9 +772,9 @@ fi
 # tunnel, with the node base URL identity mints entry origins from.
 ownership="$(admin_read /admin/v1/tunnels | jrows devserver_id user proxy_id proxy_base_url | sort)"
 expected_ownership="$(printf '%s\n' \
-    "$DS_A $ALICE_USER p1 http://p1.$APEX:$PROXY_PORT" \
-    "$DS_B $ALICE_USER p2 http://p2.$APEX:$PROXY_PORT" \
-    "$DS_D $CAROL_USER p3 http://p3.$APEX:$PROXY_PORT" | sort)"
+    "$DS_A $ALICE_USER p1 https://p1.$APEX:$PROXY_PORT" \
+    "$DS_B $ALICE_USER p2 https://p2.$APEX:$PROXY_PORT" \
+    "$DS_D $CAROL_USER p3 https://p3.$APEX:$PROXY_PORT" | sort)"
 if [ "$ownership" = "$expected_ownership" ]; then
     assert_pass "tunnels: aggregate rows carry the owning proxy_id and proxy_base_url"
 else
@@ -712,52 +824,75 @@ fi
 curl_node() { # curl_node <proxy-id> <host> <args...>
     local id="$1" host="$2"
     shift 2
-    curl -sS --resolve "$host:$PROXY_PORT:$(node_ip "$id")" "$@"
+    curl --noproxy '*' --cacert "$TLS_DIR/ca.crt" -sS \
+        --resolve "$host:$PROXY_PORT:$(node_ip "$id")" "$@"
 }
 
 entry_for() { # entry_for <pat> <json-body> -> desktop entry response body
-    curl -sS -X POST "http://127.0.0.1:$ID_PORT/desktop/v1/devserver/entry" \
+    curl -sS -X POST "http://127.0.0.1:$ID_INNER_PORT/desktop/v1/devserver/entry" \
         -H "Authorization: Bearer $1" \
         -H "content-type: application/json" \
         -d "$2"
 }
 
 json_get() { # json_get <key> (reads object on stdin)
-    node -e 'let d="";process.stdin.on("data",c=>c&&(d+=c)).on("end",()=>{try{const v=JSON.parse(d)[process.argv[1]];console.log(v===undefined?"":v)}catch{console.log("")}})' "$1"
+    node -e 'let d="";process.stdin.on("data",c=>c&&(d+=c)).on("end",()=>{try{const v=JSON.parse(d)[process.argv[1]];process.stdout.write(v===undefined?"":String(v))}catch{}})' "$1"
+}
+
+post_entry_exchange() { # post_entry_exchange <body> <node> <host> <headers-file>
+    local body="$1" node="$2" host="$3" headers="$4" url credential
+    url="$(printf %s "$body" | json_get entry_exchange_url)"
+    credential="$(printf %s "$body" | json_get entry_credential)"
+    [ -n "$url" ] && [ -n "$credential" ] || return 2
+    case "$url" in
+    "https://$host:$PROXY_PORT/_chan/entry") ;;
+    *) return 3 ;;
+    esac
+    case "$url" in *\?* | *"$credential"*) return 4 ;; esac
+    curl_node "$node" "$host" -o /dev/null -w '%{http_code}' -D "$headers" \
+        -X POST \
+        -H "Origin: https://$ID_HOST" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        --data-urlencode "credential=$credential" \
+        "$url"
 }
 
 # A: desktop entry with an explicit devserver_id mints on the owning
 # node's disc host, and the entry URL routes through that node's
-# tunnel (303 cookie mint, then a devserver-served response behind
-# it). The gate cookie is minted with `Secure`, which curl refuses to
-# replay over plain http, so the harness captures Set-Cookie itself
-# and sends it as an explicit Cookie header (we are testing routing,
-# not browser cookie policy).
-check_entry_routes() { # check_entry_routes <name> <pat> <user> <dsid>
-    local name="$1" pat="$2" user="$3" dsid="$4"
-    local body entry_url node host hdrs cookie code
-    body="$(entry_for "$pat" "{\"devserver_id\":\"$dsid\"}")"
-    entry_url="$(printf %s "$body" | json_get entry_url)"
+# tunnel (303 cookie mint, then a devserver-served response behind it). The
+# harness captures Set-Cookie explicitly so each isolation probe controls the
+# exact cookie presented instead of relying on a shared curl jar.
+check_entry_routes() { # check_entry_routes <name> <pat> <user> <owner-id> <dsid>
+    local name="$1" pat="$2" user="$3" owner_id="$4" dsid="$5"
+    local body exchange_url node host hdrs cookie csrf code location location_ok=0
+    body="$(entry_for "$pat" "{\"owner_user_id\":\"$owner_id\",\"devserver_id\":\"$dsid\"}")"
+    exchange_url="$(printf %s "$body" | json_get entry_exchange_url)"
     node="$(tunnel_field "$dsid" proxy_id)"
     host="$user--$(disc "$dsid").$node.$APEX"
-    if [ -z "$entry_url" ] || [ -z "$node" ]; then
-        assert_fail "entry($name): no entry_url ($body) or no aggregate row for $dsid"
+    if [ -z "$exchange_url" ] || [ -z "$node" ]; then
+        assert_fail "entry($name): no exchange URL ($body) or no aggregate row for $dsid"
     fi
-    case "$entry_url" in
-    "http://$host:$PROXY_PORT/"*) assert_pass "entry($name): minted on node host $host" ;;
-    *) assert_fail "entry($name): expected node host $host, got $entry_url" ;;
+    case "$exchange_url" in
+    "https://$host:$PROXY_PORT/_chan/entry") assert_pass "entry($name): minted on node host $host" ;;
+    *) assert_fail "entry($name): expected node exchange host $host, got $exchange_url" ;;
     esac
     hdrs="$WORK/hdrs-$name.txt"
-    code="$(curl_node "$node" "$host" -o /dev/null -w '%{http_code}' -D "$hdrs" "$entry_url")"
+    code="$(post_entry_exchange "$body" "$node" "$host" "$hdrs")" || \
+        assert_fail "entry($name): malformed desktop entry response or exchange URL"
     cookie="$(sed -n 's/^[Ss]et-[Cc]ookie: \(devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
+    csrf="$(sed -n 's/^[Ss]et-[Cc]ookie: \(devserver_csrf=[^;]*\).*/\1/p' "$hdrs" | head -1)"
+    location="$(sed -n 's/^[Ll]ocation: //p' "$hdrs" | tr -d '\r' | head -1)"
     printf %s "$cookie" > "$WORK/cookie-$name.txt"
-    if [ "$code" = "303" ] && [ -n "$cookie" ]; then
-        assert_pass "entry($name): entry token 303s and mints the gate cookie"
+    case "$location" in /*) case "$location" in //*) ;; *) location_ok=1 ;; esac ;; esac
+    if [ "$code" = "303" ] && [ -n "$cookie" ] && [ -n "$csrf" ] \
+        && [[ "$cookie" != *.* ]] && [[ "$csrf" != *.* ]] && [ "$location_ok" = 1 ] \
+        && [[ "$location" != *credential* ]] && [[ "$location" != *"$(printf %s "$body" | json_get entry_credential)"* ]]; then
+        assert_pass "entry($name): POST exchange mints opaque session/CSRF cookies with a clean relative Location"
     else
-        assert_fail "entry($name): expected 303 + devserver_gate cookie, got $code"
+        assert_fail "entry($name): expected opaque 303 session and CSRF cookies with clean relative Location, got $code"
     fi
     code="$(curl_node "$node" "$host" -o "$WORK/root-$name.html" -w '%{http_code}' \
-        -H "Cookie: $cookie" "http://$host:$PROXY_PORT/")"
+        -H "Cookie: $cookie" "https://$host:$PROXY_PORT/")"
     # 200 = launcher SPA served through the tunnel. A chan binary
     # built without the web bundles answers with its own "bundle not
     # built" banner instead; both are devserver-generated responses,
@@ -773,12 +908,88 @@ check_entry_routes() { # check_entry_routes <name> <pat> <user> <dsid>
     fi
 }
 
+# Exercise the browser-facing exchange boundary adversarially with one fresh
+# credential. Every rejection happens before consumption; the valid POST then
+# succeeds exactly once and its replay is indistinguishable from an unknown
+# credential.
+check_entry_exchange_boundaries() {
+    local body url credential node host code oversized hdrs
+    body="$(entry_for "$PAT_A" "{\"owner_user_id\":\"$ALICE_ID\",\"devserver_id\":\"$DS_A\"}")"
+    url="$(printf %s "$body" | json_get entry_exchange_url)"
+    credential="$(printf %s "$body" | json_get entry_credential)"
+    node="$(tunnel_field "$DS_A" proxy_id)"
+    host="$ALICE_USER--$(disc "$DS_A").$node.$APEX"
+    [ "$url" = "https://$host:$PROXY_PORT/_chan/entry" ] && [ -n "$credential" ] || \
+        assert_fail "entry boundary: identity returned a malformed exchange handoff"
+
+    code="$(curl_node "$node" "$host" -o /dev/null -w '%{http_code}' \
+        "https://$host:$PROXY_PORT/api/health?t=$credential")"
+    [ "$code" = 404 ] && assert_pass "entry boundary: URL query credentials never authenticate" || \
+        assert_fail "entry boundary: query credential expected 404, got $code"
+
+    code="$(curl_node "$node" "$host" -o /dev/null -w '%{http_code}' \
+        -H "Origin: https://$ID_HOST" "$url")"
+    [ "$code" = 404 ] && assert_pass "entry boundary: exchange is POST-only" || \
+        assert_fail "entry boundary: GET expected 404, got $code"
+
+    code="$(curl_node "$node" "$host" -o /dev/null -w '%{http_code}' -X POST \
+        -H 'Origin: http://attacker.invalid' \
+        -H 'Content-Type: application/x-www-form-urlencoded' \
+        --data-urlencode "credential=$credential" "$url")"
+    [ "$code" = 403 ] && assert_pass "entry boundary: wrong Origin is forbidden" || \
+        assert_fail "entry boundary: wrong Origin expected 403, got $code"
+
+    code="$(curl_node "$node" "$host" -o /dev/null -w '%{http_code}' -X POST \
+        -H "Origin: https://$ID_HOST" -H 'Origin: http://attacker.invalid' \
+        -H 'Content-Type: application/x-www-form-urlencoded' \
+        --data-urlencode "credential=$credential" "$url")"
+    [ "$code" = 403 ] && assert_pass "entry boundary: duplicate Origin headers are forbidden" || \
+        assert_fail "entry boundary: duplicate Origin expected 403, got $code"
+
+    code="$(curl_node "$node" "$host" -o /dev/null -w '%{http_code}' -X POST \
+        -H "Origin: https://$ID_HOST" -H 'Content-Type: text/plain' \
+        --data-raw "credential=$credential" "$url")"
+    [ "$code" = 415 ] && assert_pass "entry boundary: non-form content type is rejected" || \
+        assert_fail "entry boundary: text/plain expected 415, got $code"
+
+    code="$(curl_node "$node" "$host" -o /dev/null -w '%{http_code}' -X POST \
+        -H "Origin: https://$ID_HOST" \
+        -H 'Content-Type: application/x-www-form-urlencoded' \
+        -H 'Content-Type: application/x-www-form-urlencoded' \
+        --data-urlencode "credential=$credential" "$url")"
+    [ "$code" = 415 ] && assert_pass "entry boundary: duplicate Content-Type headers are rejected" || \
+        assert_fail "entry boundary: duplicate Content-Type expected 415, got $code"
+
+    code="$(curl_node "$node" "$host" -o /dev/null -w '%{http_code}' -X POST \
+        -H "Origin: https://$ID_HOST" \
+        -H 'Content-Type: application/x-www-form-urlencoded' \
+        --data-urlencode "credential=$credential" --data-urlencode "credential=$credential" "$url")"
+    [ "$code" = 400 ] && assert_pass "entry boundary: duplicate credential fields are rejected" || \
+        assert_fail "entry boundary: duplicate credential expected 400, got $code"
+
+    oversized="$(printf 'x%.0s' {1..8193})"
+    code="$(curl_node "$node" "$host" -o /dev/null -w '%{http_code}' -X POST \
+        -H "Origin: https://$ID_HOST" \
+        -H 'Content-Type: application/x-www-form-urlencoded' \
+        --data-raw "credential=$oversized" "$url")"
+    [ "$code" = 413 ] && assert_pass "entry boundary: form bodies over 8192 bytes are rejected" || \
+        assert_fail "entry boundary: oversized body expected 413, got $code"
+
+    hdrs="$WORK/hdrs-entry-boundary.txt"
+    code="$(post_entry_exchange "$body" "$node" "$host" "$hdrs")"
+    [ "$code" = 303 ] || assert_fail "entry boundary: valid exchange expected 303, got $code"
+    code="$(post_entry_exchange "$body" "$node" "$host" "$hdrs")"
+    [ "$code" = 404 ] && assert_pass "entry boundary: credential succeeds once and replay is 404" || \
+        assert_fail "entry boundary: replay expected 404, got $code"
+}
+
 # The core suite (sections A-I). Skipped when a single scenario is
 # requested; the bring-up and its asserts above always run.
 if [ "$RUN_CORE" = 1 ]; then
 
-check_entry_routes a "$PAT_A" "$ALICE_USER" "$DS_A"
-check_entry_routes b "$PAT_B" "$ALICE_USER" "$DS_B"
+check_entry_routes a "$PAT_A" "$ALICE_USER" "$ALICE_ID" "$DS_A"
+check_entry_routes b "$PAT_B" "$ALICE_USER" "$ALICE_ID" "$DS_B"
+check_entry_exchange_boundaries
 
 NODE_A="$(tunnel_field "$DS_A" proxy_id)"
 NODE_B="$(tunnel_field "$DS_B" proxy_id)"
@@ -789,7 +1000,7 @@ HOST_B="$ALICE_USER--$(disc "$DS_B").$NODE_B.$APEX"
 # (drv/aud isolation), same 404 shape as unknown.
 COOKIE_A="$(cat "$WORK/cookie-a.txt" 2>/dev/null || true)"
 if [ -n "$COOKIE_A" ]; then
-    code="$(curl_node "$NODE_B" "$HOST_B" -o /dev/null -w '%{http_code}' -H "Cookie: $COOKIE_A" "http://$HOST_B:$PROXY_PORT/x/")"
+    code="$(curl_node "$NODE_B" "$HOST_B" -o /dev/null -w '%{http_code}' -H "Cookie: $COOKIE_A" "https://$HOST_B:$PROXY_PORT/x/")"
     if [ "$code" = "404" ]; then
         assert_pass "isolation: devserver A's cookie is 404 on B's disc host"
     else
@@ -801,7 +1012,7 @@ fi
 
 # C: unknown disc (well-formed, not live) is 404 on the node host.
 HOST_U="$ALICE_USER--000000000000.$NODE_A.$APEX"
-code="$(curl_node "$NODE_A" "$HOST_U" -o /dev/null -w '%{http_code}' "http://$HOST_U:$PROXY_PORT/x/")"
+code="$(curl_node "$NODE_A" "$HOST_U" -o /dev/null -w '%{http_code}' "https://$HOST_U:$PROXY_PORT/x/")"
 if [ "$code" = "404" ]; then
     assert_pass "routing: unknown disc host is 404"
 else
@@ -812,21 +1023,21 @@ fi
 # bare user host is no longer a routing surface (tenant traffic lives
 # on node hosts only): both are 404 on a node listener. The naked
 # disc root still bounces to the dashboard.
-code="$(curl_node p1 "$APEX" -o /dev/null -w '%{http_code}' "http://$APEX:$PROXY_PORT/x/")"
+code="$(curl_node p1 "$APEX" -o /dev/null -w '%{http_code}' "https://$APEX:$PROXY_PORT/x/")"
 if [ "$code" = "404" ]; then
     assert_pass "routing: apex host carries no tenant surface (404)"
 else
     assert_fail "routing: apex host expected 404, got $code"
 fi
 HOST_BARE="$ALICE_USER.$APEX"
-code="$(curl_node p1 "$HOST_BARE" -o /dev/null -w '%{http_code}' "http://$HOST_BARE:$PROXY_PORT/x/")"
+code="$(curl_node p1 "$HOST_BARE" -o /dev/null -w '%{http_code}' "https://$HOST_BARE:$PROXY_PORT/x/")"
 if [ "$code" = "404" ]; then
     assert_pass "routing: bare user host without a node label is 404"
 else
     assert_fail "routing: bare user host expected 404, got $code"
 fi
-loc="$(curl_node "$NODE_A" "$HOST_A" -o /dev/null -w '%{redirect_url}' "http://$HOST_A:$PROXY_PORT/")"
-if [ "$loc" = "http://$ID_HOST/workspaces" ]; then
+loc="$(curl_node "$NODE_A" "$HOST_A" -o /dev/null -w '%{redirect_url}' "https://$HOST_A:$PROXY_PORT/")"
+if [ "$loc" = "https://$ID_HOST/workspaces" ]; then
     assert_pass "routing: naked root on $HOST_A bounces to the dashboard"
 else
     assert_fail "routing: naked root on $HOST_A expected dashboard, got '$loc'"
@@ -837,7 +1048,7 @@ fi
 # names p1 and only p1's listener routes it. The full 3x3 form of
 # this check is the matrix scenario.
 if [ -n "$COOKIE_A" ]; then
-    code="$(curl_node "$NODE_B" "$HOST_A" -o /dev/null -w '%{http_code}' -H "Cookie: $COOKIE_A" "http://$HOST_A:$PROXY_PORT/x/")"
+    code="$(curl_node "$NODE_B" "$HOST_A" -o /dev/null -w '%{http_code}' -H "Cookie: $COOKIE_A" "https://$HOST_A:$PROXY_PORT/x/")"
     if [ "$code" = "404" ]; then
         assert_pass "routing: A's node host is 404 on a non-owning node"
     else
@@ -847,10 +1058,37 @@ else
     assert_fail "routing: no cookie captured for the cross-node check"
 fi
 
+# Controller-routed revocation is exact: invalidate A's opaque session on p1
+# without disturbing B's session on p2, with every connected proxy confirming.
+COOKIE_B="$(cat "$WORK/cookie-b.txt" 2>/dev/null || true)"
+revoke_code="$(curl -sS -o "$WORK/session-revoke.json" -w '%{http_code}' \
+    -X POST "http://127.0.0.1:$CTL_ADMIN_PORT/admin/v1/sessions/revoke" \
+    -H "Authorization: Bearer $TOK_CONTROL_OPERATOR" \
+    -H "Content-Type: application/json" \
+    -d "{\"scope\":\"exact\",\"subject_user_id\":\"$ALICE_ID\",\"owner_user_id\":\"$ALICE_ID\",\"devserver_id\":\"$DS_A\"}")"
+revoked="$(json_get revoked < "$WORK/session-revoke.json")"
+confirmed="$(json_get proxies_confirmed < "$WORK/session-revoke.json")"
+if [ "$revoke_code" = "200" ] && [ "$revoked" = "2" ] && [ "$confirmed" = "3" ]; then
+    assert_pass "sessions: exact revoke confirmed by all three proxies"
+else
+    assert_fail "sessions: exact revoke expected 200/revoked=2/confirmed=3, got $revoke_code: $(cat "$WORK/session-revoke.json")"
+fi
+code_a="$(curl_node "$NODE_A" "$HOST_A" -o /dev/null -w '%{http_code}' \
+    -H "Cookie: $COOKIE_A" "https://$HOST_A:$PROXY_PORT/api/health")"
+code_b="$(curl_node "$NODE_B" "$HOST_B" -o /dev/null -w '%{http_code}' \
+    -H "Cookie: $COOKIE_B" "https://$HOST_B:$PROXY_PORT/api/health")"
+if [ "$code_a" = "404" ] && [ "$code_b" = "200" ]; then
+    assert_pass "sessions: revoked A is 404 while unrelated B remains admitted"
+else
+    assert_fail "sessions: exact revoke isolation expected A=404 B=200, got A=$code_a B=$code_b"
+fi
+
 # F: share landing `?d=` while signed out stashes and bounces to login.
-code_loc="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' \
-    "http://127.0.0.1:$ID_PORT/s/$ALICE_USER?d=$(disc "$DS_A")" -H "Host: $ID_HOST")"
-if [ "$code_loc" = "303 http://127.0.0.1:$ID_PORT/" ]; then
+code_loc="$(curl --noproxy '*' --cacert "$TLS_DIR/ca.crt" -sS \
+    --resolve "$ID_NAME:$ID_PORT:127.0.0.1" \
+    -o /dev/null -w '%{http_code} %{redirect_url}' \
+    "https://$ID_HOST/s/$ALICE_USER?d=$(disc "$DS_A")")"
+if [ "$code_loc" = "303 https://$ID_HOST/" ]; then
     assert_pass "share: unauthenticated /s/{owner}?d= bounces to login"
 else
     assert_fail "share: expected 303 to /, got '$code_loc'"
@@ -879,11 +1117,11 @@ if [ -f "$WORK/pids/ds-c.pid" ]; then
     kill "$(cat "$WORK/pids/ds-c.pid")" 2>/dev/null || true
     rm -f "$WORK/pids/ds-c.pid"
 fi
-curl -fsS -X POST -H "Authorization: Bearer $TOK_ADMIN" \
-    "http://127.0.0.1:$CTL_ADMIN_PORT/admin/v1/users/$ALICE_USER/tunnels/kill" >/dev/null
+curl -fsS -X POST -H "Authorization: Bearer $TOK_CONTROL_OPERATOR" \
+    "http://127.0.0.1:$CTL_ADMIN_PORT/admin/v1/owners/$ALICE_ID/tunnels/kill" >/dev/null
 if wait_tunnels 2 150; then
     assert_pass "reconnect: both devservers re-registered after admin kill"
-    check_entry_routes a-reconnect "$PAT_A" "$ALICE_USER" "$DS_A"
+    check_entry_routes a-reconnect "$PAT_A" "$ALICE_USER" "$ALICE_ID" "$DS_A"
 else
     assert_fail "reconnect: devservers did not re-register: $(admin_tunnels)"
 fi
@@ -903,11 +1141,11 @@ frag_get() { # frag_get <url> <key> -> percent-decoded value
         "$1" "$2"
 }
 
-roster_row() { # roster_row <roster-json> <dsid> -> "owner online role"
+roster_row() { # roster_row <roster-json> <dsid> -> "owner online"
     printf %s "$1" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
         const id=process.argv[1];
         try{const r=JSON.parse(d).devservers.find(x=>x.devserver_id===id);
-            console.log(r?`${r.owner} ${r.online} ${r.role}`:"")}catch{console.log("")}})' \
+            console.log(r?`${r.owner} ${r.online}`:"")}catch{console.log("")}})' \
         "$2"
 }
 
@@ -916,7 +1154,7 @@ if [ -x "$CHROME_BIN" ]; then
     # Run from a copy inside the work dir: ESM resolves node_modules
     # (puppeteer-core) relative to the script's own location.
     cp "$REPO/scripts/e2e/gateway-zone-browser.mjs" "$WORK/"
-    browser_json="$(CHROME_BIN="$CHROME_BIN" ID_ORIGIN="http://$ID_HOST" \
+    browser_json="$(CHROME_BIN="$CHROME_BIN" ID_ORIGIN="https://$ID_HOST" \
         AUTH_PATH="$AUTH_PATH" \
         node "$WORK/gateway-zone-browser.mjs" 2> "$LOGS/browser.log")" || browser_json=""
     if [ -z "$browser_json" ]; then
@@ -950,10 +1188,10 @@ if [ -x "$CHROME_BIN" ]; then
     # Redeem the one-time code: 200 exactly once, 410 on replay.
     code="$(frag_get "$handoff" code)"
     redeem1="$(curl -sS -o "$WORK/redeem.json" -w '%{http_code}' \
-        -X POST "http://127.0.0.1:$ID_PORT/desktop/authorize/redeem" \
+        -X POST "http://127.0.0.1:$ID_INNER_PORT/desktop/authorize/redeem" \
         -H "content-type: application/json" -d "{\"code\":\"$code\"}")"
     redeem2="$(curl -sS -o /dev/null -w '%{http_code}' \
-        -X POST "http://127.0.0.1:$ID_PORT/desktop/authorize/redeem" \
+        -X POST "http://127.0.0.1:$ID_INNER_PORT/desktop/authorize/redeem" \
         -H "content-type: application/json" -d "{\"code\":\"$code\"}")"
     if [ "$redeem1" = "200" ] && [ "$redeem2" = "410" ]; then
         assert_pass "redeem: one-time code answers 200 once, 410 on replay"
@@ -965,22 +1203,22 @@ if [ -x "$CHROME_BIN" ]; then
     # The redeemed account PAT reads the roster: own live rows plus
     # bob's claimed share.
     roster_json="$(curl -sS -H "Authorization: Bearer $browser_pat" \
-        "http://127.0.0.1:$ID_PORT/desktop/v1/devservers")"
+        "http://127.0.0.1:$ID_INNER_PORT/desktop/v1/devservers")"
     row_a="$(roster_row "$roster_json" "$DS_A")"
-    if [ "$row_a" = "$ALICE_USER true owner" ]; then
+    if [ "$row_a" = "$ALICE_USER true" ]; then
         assert_pass "roster: redeemed PAT lists devserver A online (owner row)"
     else
         assert_fail "roster: devserver A row wrong: '$row_a' in: $roster_json"
     fi
     row_b="$(roster_row "$roster_json" "$DS_B")"
-    if [ "$row_b" = "$ALICE_USER true owner" ]; then
+    if [ "$row_b" = "$ALICE_USER true" ]; then
         assert_pass "roster: redeemed PAT lists devserver B online (owner row)"
     else
         assert_fail "roster: devserver B row wrong: '$row_b' in: $roster_json"
     fi
     row_bob="$(roster_row "$roster_json" "$DS_BOB")"
-    if [ "$row_bob" = "$BOB_USER false editor" ]; then
-        assert_pass "roster: bob's claimed share listed (offline, editor)"
+    if [ "$row_bob" = "$BOB_USER false" ]; then
+        assert_pass "roster: bob's claimed binary grant listed (offline)"
     else
         assert_fail "roster: bob share row wrong: '$row_bob' in: $roster_json"
     fi
@@ -988,20 +1226,21 @@ if [ -x "$CHROME_BIN" ]; then
     # Entry mint targeted from the roster row, then the two-hop
     # routing check (the same shape check_entry_routes uses).
     entry_owner="${row_a%% *}"
-    entry_body="$(entry_for "$browser_pat" "{\"owner\":\"$entry_owner\",\"devserver_id\":\"$DS_A\"}")"
-    entry_url="$(printf %s "$entry_body" | json_get entry_url)"
+    entry_body="$(entry_for "$browser_pat" "{\"owner\":\"$entry_owner\",\"owner_user_id\":\"$ALICE_ID\",\"devserver_id\":\"$DS_A\"}")"
+    entry_url="$(printf %s "$entry_body" | json_get entry_exchange_url)"
     if [ -z "$entry_url" ]; then
         assert_fail "redeem: desktop entry with the redeemed PAT failed: $entry_body"
     fi
     # Same two-hop shape as check_entry_routes: capture the Secure
     # cookie ourselves and replay it explicitly.
     hdrs="$WORK/hdrs-browser.txt"
-    hop1="$(curl_node "$NODE_A" "$HOST_A" -o /dev/null -w '%{http_code}' -D "$hdrs" "$entry_url")"
+    hop1="$(post_entry_exchange "$entry_body" "$NODE_A" "$HOST_A" "$hdrs")" || \
+        assert_fail "redeem: malformed entry exchange response"
     bcookie="$(sed -n 's/^[Ss]et-[Cc]ookie: \(devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
     hop2=""
     if [ "$hop1" = "303" ] && [ -n "$bcookie" ]; then
         hop2="$(curl_node "$NODE_A" "$HOST_A" -o "$WORK/root-browser.html" -w '%{http_code}' \
-            -H "Cookie: $bcookie" "http://$HOST_A:$PROXY_PORT/")"
+            -H "Cookie: $bcookie" "https://$HOST_A:$PROXY_PORT/")"
     fi
     if [ "$hop2" = "200" ] ||
         { [ -n "$hop2" ] && grep -qi "bundle not built" "$WORK/root-browser.html"; }; then
@@ -1058,8 +1297,10 @@ scenario_sweeper() {
         spawn profile env \
             BIND_ADDR="127.0.0.1:$PROFILE_PORT" \
             DATABASE_URL="$DB_URL" \
+            CHAN_GATEWAY_MIGRATIONS=external \
             PROFILE_AUTH_TOKEN="$TOK_PROFILE" \
-            DEVSERVER_ADMIN_TOKEN="$TOK_ADMIN" \
+            PROFILE_ADMIN_TOKEN="$TOK_PROFILE_ADMIN" \
+            DEVSERVER_PROFILE_ADMIN_TOKEN="$TOK_CONTROL_PROFILE" \
             DEVSERVER_ADMIN_URL="http://127.0.0.1:$CTL_ADMIN_PORT" \
             ${1:+DEVSERVER_RETENTION_MINUTES="$1"} \
             RUST_LOG=info \
@@ -1097,8 +1338,8 @@ scenario_sweeper() {
     sweeper_sql "
         INSERT INTO devservers (owner_user_id, devserver_id, label, created_at)
         VALUES ('$ALICE_ID', '$stale_id', 'stale-e2e', now() - interval '10 minutes');
-        INSERT INTO devserver_grants (owner_user_id, devserver_id, grantee_email, role)
-        VALUES ('$ALICE_ID', '$stale_id', 'e2e-swept@example.com', 'viewer');" || {
+        INSERT INTO devserver_grants (owner_user_id, devserver_id, grantee_email)
+        VALUES ('$ALICE_ID', '$stale_id', 'e2e-swept@example.com');" || {
         assert_fail "sweeper: stale-row seed failed"
     }
 
@@ -1227,13 +1468,14 @@ scenario_watchdog() {
     if [ -z "$node" ]; then
         assert_fail "watchdog: devserver A has no aggregate row"
     fi
-    body="$(entry_for "$PAT_A" "{\"devserver_id\":\"$DS_A\"}")"
-    entry_url="$(printf %s "$body" | json_get entry_url)"
+    body="$(entry_for "$PAT_A" "{\"owner_user_id\":\"$ALICE_ID\",\"devserver_id\":\"$DS_A\"}")"
+    entry_url="$(printf %s "$body" | json_get entry_exchange_url)"
     if [ -z "$entry_url" ]; then
         assert_fail "watchdog: no entry_url minted for devserver A: $body"
     fi
     hdrs="$WORK/hdrs-watchdog.txt"
-    curl_node "$node" "$host" -o /dev/null -D "$hdrs" "$entry_url" >/dev/null
+    post_entry_exchange "$body" "$node" "$host" "$hdrs" >/dev/null || \
+        assert_fail "watchdog: entry exchange failed"
     cookie="$(sed -n 's/^[Ss]et-[Cc]ookie: \(devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
     if [ -z "$cookie" ]; then
         assert_fail "watchdog: no gate cookie minted for devserver A"
@@ -1244,7 +1486,7 @@ scenario_watchdog() {
     # path the launcher green dot rides even while a held socket is dead.
     local fresh
     fresh="$(curl_node "$node" "$host" -o /dev/null -w '%{http_code}' -H "Cookie: $cookie" \
-        "http://$host:$PROXY_PORT/")"
+        "https://$host:$PROXY_PORT/")"
     case "$fresh" in
     200 | 404) assert_pass "watchdog: a fresh dial routes to the devserver ($fresh)" ;;
     *) assert_fail "watchdog: fresh dial did not reach the devserver (got $fresh)" ;;
@@ -1365,18 +1607,18 @@ PROBE
 # pinned in tests/desktop_entry.rs). Leaves the stack as found
 # (devserver A redialed and online).
 scenario_roster() {
-    rrow() { # rrow <roster-json> <dsid> -> "owner online role"
+    rrow() { # rrow <roster-json> <dsid> -> "owner online"
         printf %s "$1" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
             const id=process.argv[1];
             try{const r=JSON.parse(d).devservers.find(x=>x.devserver_id===id);
-                console.log(r?`${r.owner} ${r.online} ${r.role}`:"")}catch{console.log("")}})' \
+                console.log(r?`${r.owner} ${r.online}`:"")}catch{console.log("")}})' \
             "$2"
     }
     roster_get() { # roster_get <outfile> [etag] -> http code; headers to $WORK/roster-hdrs.txt
         curl -sS -o "$1" -w '%{http_code}' -D "$WORK/roster-hdrs.txt" \
             ${2:+-H "If-None-Match: $2"} \
             -H "Authorization: Bearer $ROSTER_PAT" \
-            "http://127.0.0.1:$ID_PORT/desktop/v1/devservers"
+            "http://127.0.0.1:$ID_INNER_PORT/desktop/v1/devservers"
     }
     roster_etag() { # the header line is CRLF; strip the CR or the echoed If-None-Match breaks
         tr -d '\r' < "$WORK/roster-hdrs.txt" | sed -n 's/^[Ee][Tt]ag: //p' | head -1
@@ -1384,7 +1626,8 @@ scenario_roster() {
 
     local out account_dsid
     out="$("$GW_BIN/chan-gateway-admin" \
-        --identity-url "http://127.0.0.1:$ID_PORT" --token "$TOK_ADMIN" --json \
+        --identity-url "http://127.0.0.1:$ID_INTERNAL_PORT" \
+        --identity-token "$TOK_IDENTITY_ADMIN" --json \
         token create "$ALICE_EMAIL" \
         --scope desktop.account --label roster-e2e \
         2>> "$LOGS/admin-mint.log")" || out=""
@@ -1404,7 +1647,7 @@ scenario_roster() {
     local code
     code="$(curl -sS -o /dev/null -w '%{http_code}' \
         -H "Authorization: Bearer $PAT_A" \
-        "http://127.0.0.1:$ID_PORT/desktop/v1/devservers")"
+        "http://127.0.0.1:$ID_INNER_PORT/desktop/v1/devservers")"
     if [ "$code" = "401" ]; then
         assert_pass "roster: tunnel/connect PAT is 401 on the roster"
     else
@@ -1419,18 +1662,18 @@ scenario_roster() {
     else
         assert_fail "roster: expected 200, got $code: $roster_json"
     fi
-    if [ "$(rrow "$roster_json" "$DS_A")" = "$ALICE_USER true owner" ]; then
+    if [ "$(rrow "$roster_json" "$DS_A")" = "$ALICE_USER true" ]; then
         assert_pass "roster: own live devserver A is online (owner row)"
     else
         assert_fail "roster: devserver A row wrong in: $roster_json"
     fi
-    if [ "$(rrow "$roster_json" "$DS_C")" = "$ALICE_USER false owner" ]; then
+    if [ "$(rrow "$roster_json" "$DS_C")" = "$ALICE_USER false" ]; then
         assert_pass "roster: own registered-but-dark devserver C is offline"
     else
         assert_fail "roster: devserver C row wrong in: $roster_json"
     fi
-    if [ "$(rrow "$roster_json" "$DS_BOB")" = "$BOB_USER false editor" ]; then
-        assert_pass "roster: bob's claimed share listed (offline, editor)"
+    if [ "$(rrow "$roster_json" "$DS_BOB")" = "$BOB_USER false" ]; then
+        assert_pass "roster: bob's claimed binary grant listed (offline)"
     else
         assert_fail "roster: bob share row wrong: '$row_bob' in: $roster_json"
     fi
@@ -1464,7 +1707,7 @@ scenario_roster() {
     for _ in $(seq 75); do
         code="$(roster_get "$WORK/roster2.json")"
         if [ "$code" = "200" ] &&
-            [ "$(rrow "$(cat "$WORK/roster2.json")" "$DS_A")" = "$ALICE_USER false owner" ]; then
+            [ "$(rrow "$(cat "$WORK/roster2.json")" "$DS_A")" = "$ALICE_USER false" ]; then
             flipped=1
             break
         fi
@@ -1489,7 +1732,7 @@ scenario_roster() {
     for _ in $(seq 150); do
         code="$(roster_get "$WORK/roster3.json")"
         if [ "$code" = "200" ] &&
-            [ "$(rrow "$(cat "$WORK/roster3.json")" "$DS_A")" = "$ALICE_USER true owner" ]; then
+            [ "$(rrow "$(cat "$WORK/roster3.json")" "$DS_A")" = "$ALICE_USER true" ]; then
             back=1
             break
         fi
@@ -1506,18 +1749,19 @@ scenario_roster() {
     # shared row is registered but dark, so it answers the
     # devserver_offline reason.
     local entry_body entry_url node hdrs cookie hop1 hop2 host
-    entry_body="$(entry_for "$ROSTER_PAT" "{\"owner\":\"$ALICE_USER\",\"devserver_id\":\"$DS_A\"}")"
-    entry_url="$(printf %s "$entry_body" | json_get entry_url)"
+    entry_body="$(entry_for "$ROSTER_PAT" "{\"owner\":\"$ALICE_USER\",\"owner_user_id\":\"$ALICE_ID\",\"devserver_id\":\"$DS_A\"}")"
+    entry_url="$(printf %s "$entry_body" | json_get entry_exchange_url)"
     node="$(tunnel_field "$DS_A" proxy_id)"
     host="$ALICE_USER--$(disc "$DS_A").$node.$APEX"
     if [ -n "$entry_url" ]; then
         hdrs="$WORK/hdrs-roster-entry.txt"
-        hop1="$(curl_node "$node" "$host" -o /dev/null -w '%{http_code}' -D "$hdrs" "$entry_url")"
+        hop1="$(post_entry_exchange "$entry_body" "$node" "$host" "$hdrs")" || \
+            assert_fail "roster: malformed own entry exchange"
         cookie="$(sed -n 's/^[Ss]et-[Cc]ookie: \(devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
         hop2=""
         if [ "$hop1" = "303" ] && [ -n "$cookie" ]; then
             hop2="$(curl_node "$node" "$host" -o "$WORK/root-roster.html" -w '%{http_code}' \
-                -H "Cookie: $cookie" "http://$host:$PROXY_PORT/")"
+                -H "Cookie: $cookie" "https://$host:$PROXY_PORT/")"
         fi
         if [ "$hop2" = "200" ] ||
             { [ -n "$hop2" ] && grep -qi "bundle not built" "$WORK/root-roster.html"; }; then
@@ -1529,7 +1773,7 @@ scenario_roster() {
         assert_fail "roster: entry mint for the own devserver failed: $entry_body"
     fi
     local shared_body shared_reason
-    shared_body="$(entry_for "$ROSTER_PAT" "{\"owner\":\"$BOB_USER\",\"devserver_id\":\"$DS_BOB\"}")"
+    shared_body="$(entry_for "$ROSTER_PAT" "{\"owner\":\"$BOB_USER\",\"owner_user_id\":\"$BOB_ID\",\"devserver_id\":\"$DS_BOB\"}")"
     shared_reason="$(printf %s "$shared_body" | json_get reason)"
     if [ "$shared_reason" = "devserver_offline" ]; then
         assert_pass "roster: shared-row entry answers devserver_offline (box dark)"
@@ -1554,13 +1798,14 @@ scenario_upload() {
     local host node body entry_url hdrs gate csrf cookies
     node="$(tunnel_field "$DS_A" proxy_id)"
     host="$ALICE_USER--$(disc "$DS_A").$node.$APEX"
-    body="$(entry_for "$PAT_A" "{\"devserver_id\":\"$DS_A\"}")"
-    entry_url="$(printf %s "$body" | json_get entry_url)"
+    body="$(entry_for "$PAT_A" "{\"owner_user_id\":\"$ALICE_ID\",\"devserver_id\":\"$DS_A\"}")"
+    entry_url="$(printf %s "$body" | json_get entry_exchange_url)"
     if [ -z "$entry_url" ]; then
         assert_fail "upload: no entry_url minted for devserver A: $body"
     fi
     hdrs="$WORK/hdrs-upload.txt"
-    curl_node "$node" "$host" -o /dev/null -D "$hdrs" "$entry_url" >/dev/null
+    post_entry_exchange "$body" "$node" "$host" "$hdrs" >/dev/null || \
+        assert_fail "upload: entry exchange failed"
     gate="$(sed -n 's/^[Ss]et-[Cc]ookie: \(devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
     csrf="$(sed -n 's/^[Ss]et-[Cc]ookie: devserver_csrf=\([^;]*\).*/\1/p' "$hdrs" | head -1)"
     if [ -n "$gate" ] && [ -n "$csrf" ]; then
@@ -1579,7 +1824,7 @@ scenario_upload() {
     rm -rf "$ws_dir"
     mkdir -p "$ws_dir"
     add_body="$(curl_node "$node" "$host" -X POST \
-        "http://$host:$PROXY_PORT/api/library/workspaces" \
+        "https://$host:$PROXY_PORT/api/library/workspaces" \
         -H "Cookie: $cookies" -H "x-chan-csrf: $csrf" \
         -H "content-type: application/json" \
         -d "{\"path\":\"$ws_dir\"}")"
@@ -1598,7 +1843,7 @@ scenario_upload() {
     payload="$WORK/upload-payload.txt"
     printf 'tunneled upload payload\n' > "$payload"
     code="$(curl_node "$node" "$host" -o "$WORK/upload-noheader.txt" -w '%{http_code}' \
-        -X POST "http://$host:$PROXY_PORT/$prefix/api/files/upload" \
+        -X POST "https://$host:$PROXY_PORT/$prefix/api/files/upload" \
         -H "Cookie: $cookies" \
         -F "file=@$payload" -F "dir=")"
     if [ "$code" = "403" ] && grep -q '^forbidden$' "$WORK/upload-noheader.txt"; then
@@ -1611,7 +1856,7 @@ scenario_upload() {
     # the devserver writes the file into the workspace root.
     local uploaded_path
     code="$(curl_node "$node" "$host" -o "$WORK/upload-ok.json" -w '%{http_code}' \
-        -X POST "http://$host:$PROXY_PORT/$prefix/api/files/upload" \
+        -X POST "https://$host:$PROXY_PORT/$prefix/api/files/upload" \
         -H "Cookie: $cookies" -H "x-chan-csrf: $csrf" \
         -F "file=@$payload" -F "dir=")"
     uploaded_path="$(json_get path < "$WORK/upload-ok.json")"
@@ -1629,7 +1874,7 @@ scenario_upload() {
     # Leave the stack as found: unregister the scratch workspace (the
     # DELETE unmounts first; it is a mutation, so it carries the mirror).
     code="$(curl_node "$node" "$host" -o /dev/null -w '%{http_code}' \
-        -X DELETE "http://$host:$PROXY_PORT/api/library/workspaces/$ws_id" \
+        -X DELETE "https://$host:$PROXY_PORT/api/library/workspaces/$ws_id" \
         -H "Cookie: $cookies" -H "x-chan-csrf: $csrf")"
     if [ "$code" = "204" ] || [ "$code" = "200" ]; then
         assert_pass "upload: scratch workspace removed (stack left as found)"
@@ -1643,7 +1888,7 @@ scenario_upload() {
 # reopens any listed record lacking a native window, so a close only sticks
 # when the DELETE lands and the record leaves the registry; this pins that
 # proxy leg end to end (desktop/src-tauri/src/devserver.rs sends these):
-#   session: GET entry_url -> devserver_gate + devserver_csrf cookies
+#   session: POST entry exchange -> opaque devserver_gate + csrf cookies
 #   mint:    POST /api/library/windows          (Cookie + X-Chan-CSRF)
 #   discard: DELETE /api/library/windows/{id}   (Cookie + X-Chan-CSRF)
 #   verify:  GET /api/library/windows           (record gone)
@@ -1651,13 +1896,14 @@ scenario_windowclose() {
     local host node body entry_url hdrs gate csrf cookie code
     node="$(tunnel_field "$DS_A" proxy_id)"
     host="$ALICE_USER--$(disc "$DS_A").$node.$APEX"
-    body="$(entry_for "$PAT_A" "{\"devserver_id\":\"$DS_A\"}")"
-    entry_url="$(printf %s "$body" | json_get entry_url)"
+    body="$(entry_for "$PAT_A" "{\"owner_user_id\":\"$ALICE_ID\",\"devserver_id\":\"$DS_A\"}")"
+    entry_url="$(printf %s "$body" | json_get entry_exchange_url)"
     if [ -z "$entry_url" ]; then
         assert_fail "windowclose: no entry_url minted for devserver A: $body"
     fi
     hdrs="$WORK/hdrs-windowclose.txt"
-    code="$(curl_node "$node" "$host" -o /dev/null -w '%{http_code}' -D "$hdrs" "$entry_url")"
+    code="$(post_entry_exchange "$body" "$node" "$host" "$hdrs")" || \
+        assert_fail "windowclose: entry exchange failed"
     gate="$(sed -n 's/^[Ss]et-[Cc]ookie: devserver_gate=\([^;]*\).*/\1/p' "$hdrs" | head -1)"
     csrf="$(sed -n 's/^[Ss]et-[Cc]ookie: devserver_csrf=\([^;]*\).*/\1/p' "$hdrs" | head -1)"
     if [ "$code" = "303" ] && [ -n "$gate" ] && [ -n "$csrf" ]; then
@@ -1673,7 +1919,7 @@ scenario_windowclose() {
     code="$(curl_node "$node" "$host" -o "$WORK/windowclose-mint.json" -w '%{http_code}' \
         -X POST -H "Cookie: $cookie" -H "X-Chan-CSRF: $csrf" \
         -H "content-type: application/json" -d '{"kind":"terminal"}' \
-        "http://$host:$PROXY_PORT/api/library/windows")"
+        "https://$host:$PROXY_PORT/api/library/windows")"
     wid="$(json_get window_id < "$WORK/windowclose-mint.json")"
     if { [ "$code" = "200" ] || [ "$code" = "201" ]; } && [ -n "$wid" ]; then
         assert_pass "windowclose: window minted through the proxy ($wid)"
@@ -1681,7 +1927,7 @@ scenario_windowclose() {
         assert_fail "windowclose: mint expected 2xx + window_id, got $code: $(head -c 200 "$WORK/windowclose-mint.json")"
     fi
     curl_node "$node" "$host" -o "$WORK/windowclose-list0.json" -s \
-        -H "Cookie: $cookie" "http://$host:$PROXY_PORT/api/library/windows"
+        -H "Cookie: $cookie" "https://$host:$PROXY_PORT/api/library/windows"
     if grep -q "\"$wid\"" "$WORK/windowclose-list0.json"; then
         assert_pass "windowclose: minted record is in the windows list"
     else
@@ -1693,14 +1939,14 @@ scenario_windowclose() {
     # header below is what makes the close land.
     code="$(curl_node "$node" "$host" -o "$WORK/windowclose-nocsrf.txt" -w '%{http_code}' \
         -X DELETE -H "Cookie: $cookie" \
-        "http://$host:$PROXY_PORT/api/library/windows/$wid")"
+        "https://$host:$PROXY_PORT/api/library/windows/$wid")"
     if [ "$code" = "403" ] && grep -q '^forbidden$' "$WORK/windowclose-nocsrf.txt"; then
         assert_pass "windowclose: DELETE without the csrf mirror is the proxy's 403 forbidden"
     else
         assert_fail "windowclose: unmirrored DELETE expected 403 forbidden, got $code: $(head -c 120 "$WORK/windowclose-nocsrf.txt")"
     fi
     curl_node "$node" "$host" -o "$WORK/windowclose-list1.json" -s \
-        -H "Cookie: $cookie" "http://$host:$PROXY_PORT/api/library/windows"
+        -H "Cookie: $cookie" "https://$host:$PROXY_PORT/api/library/windows"
     if grep -q "\"$wid\"" "$WORK/windowclose-list1.json"; then
         assert_pass "windowclose: the refused DELETE left the record in place"
     else
@@ -1712,14 +1958,14 @@ scenario_windowclose() {
     # nothing to reopen, so the window stays closed.
     code="$(curl_node "$node" "$host" -o "$WORK/windowclose-del.txt" -w '%{http_code}' \
         -X DELETE -H "Cookie: $cookie" -H "X-Chan-CSRF: $csrf" \
-        "http://$host:$PROXY_PORT/api/library/windows/$wid")"
+        "https://$host:$PROXY_PORT/api/library/windows/$wid")"
     if [ "$code" = "200" ] || [ "$code" = "204" ]; then
         assert_pass "windowclose: csrf-mirrored DELETE answers $code"
     else
         assert_fail "windowclose: DELETE expected 2xx, got $code: $(head -c 200 "$WORK/windowclose-del.txt")"
     fi
     curl_node "$node" "$host" -o "$WORK/windowclose-list2.json" -s \
-        -H "Cookie: $cookie" "http://$host:$PROXY_PORT/api/library/windows"
+        -H "Cookie: $cookie" "https://$host:$PROXY_PORT/api/library/windows"
     if grep -q "\"$wid\"" "$WORK/windowclose-list2.json"; then
         assert_fail "windowclose: record still present after DELETE: $(head -c 200 "$WORK/windowclose-list2.json")"
     else
@@ -1737,24 +1983,31 @@ scenario_windowclose() {
 # capture these BEFORE breaking something, because the aggregate row
 # they derive from may legitimately be gone afterwards.
 mint_gate_cookie() {
-    local pat="$1" user="$2" dsid="$3" body entry_url hdrs
+    local pat="$1" user="$2" dsid="$3" body entry_url hdrs owner_id
     MC_NODE=""
     MC_HOST=""
     MC_COOKIE=""
-    body="$(entry_for "$pat" "{\"devserver_id\":\"$dsid\"}")"
-    entry_url="$(printf %s "$body" | json_get entry_url)"
+    case "$user" in
+    "$ALICE_USER") owner_id="$ALICE_ID" ;;
+    "$CAROL_USER") owner_id="$CAROL_ID" ;;
+    "$DAVE_USER") owner_id="$DAVE_ID" ;;
+    *) return 1 ;;
+    esac
+    body="$(entry_for "$pat" "{\"owner_user_id\":\"$owner_id\",\"devserver_id\":\"$dsid\"}")"
+    entry_url="$(printf %s "$body" | json_get entry_exchange_url)"
     MC_NODE="$(tunnel_field "$dsid" proxy_id)"
     [ -n "$entry_url" ] && [ -n "$MC_NODE" ] || return 1
     MC_HOST="$user--$(disc "$dsid").$MC_NODE.$APEX"
     hdrs="$WORK/hdrs-mc-$(disc "$dsid").txt"
-    curl_node "$MC_NODE" "$MC_HOST" -o /dev/null -D "$hdrs" "$entry_url" >/dev/null
+    post_entry_exchange "$body" "$MC_NODE" "$MC_HOST" "$hdrs" >/dev/null || return 1
     MC_COOKIE="$(sed -n 's/^[Ss]et-[Cc]ookie: \(devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
     [ -n "$MC_COOKIE" ]
 }
 
 node_readyz() { # node_readyz <proxy-id> -> http code of the node's /readyz
-    curl -sS -o /dev/null -w '%{http_code}' --max-time 2 -H "Host: $APEX" \
-        "http://$(node_ip "$1"):$PROXY_PORT/readyz" 2>/dev/null || true
+    curl --noproxy '*' --cacert "$TLS_DIR/ca.crt" -sS -o /dev/null -w '%{http_code}' \
+        --max-time 2 -H "Host: $APEX" \
+        "https://$(node_ip "$1"):$PROXY_PORT/readyz" 2>/dev/null || true
 }
 
 # Scenario: the 3x3 node matrix plus aggregate admin completeness.
@@ -1780,7 +2033,7 @@ scenario_matrix() {
         expected=""
         for id in "${PROXY_IDS[@]}"; do
             codes+="$(curl_node "$id" "$host" -o /dev/null -w '%{http_code}' \
-                -H "Cookie: $cookie" "http://$host:$PROXY_PORT/api/health") "
+                -H "Cookie: $cookie" "https://$host:$PROXY_PORT/api/health") "
             if [ "$id" = "$owner" ]; then expected+="200 "; else expected+="404 "; fi
         done
         codes="${codes% }"
@@ -1814,7 +2067,7 @@ scenario_matrix() {
     fi
     local alice_n carol_n
     alice_n="$(tunnel_count)"
-    carol_n="$(admin_read "/admin/v1/users/$CAROL_USER/tunnels" | grep -o '"devserver_id"' | wc -l)"
+    carol_n="$(admin_read "/admin/v1/owners/$CAROL_ID/tunnels" | grep -o '"devserver_id"' | wc -l)"
     if [ "$alice_n" = "2" ] && [ "$carol_n" = "1" ]; then
         assert_pass "matrix: per-user reads stay complete across nodes (alice=2 carol=1)"
     else
@@ -1871,14 +2124,14 @@ scenario_sharedingress() {
         assert_fail "sharedingress: ownership drifted after acceptance"
     fi
 
-    check_entry_routes sh-e "$PAT_E" "$CAROL_USER" "$DS_E"
-    check_entry_routes sh-f "$PAT_F" "$DAVE_USER" "$DS_F"
+    check_entry_routes sh-e "$PAT_E" "$CAROL_USER" "$CAROL_ID" "$DS_E"
+    check_entry_routes sh-f "$PAT_F" "$DAVE_USER" "$DAVE_ID" "$DS_F"
 
     # E's node host on F's node is 404: distribution did not make
     # every node serve every tunnel.
     local host_e code
     host_e="$CAROL_USER--$(disc "$DS_E").$ne.$APEX"
-    code="$(curl_node "$nf" "$host_e" -o /dev/null -w '%{http_code}' "http://$host_e:$PROXY_PORT/api/health")"
+    code="$(curl_node "$nf" "$host_e" -o /dev/null -w '%{http_code}' "https://$host_e:$PROXY_PORT/api/health")"
     if [ "$code" = "404" ]; then
         assert_pass "sharedingress: E's host is 404 on F's node"
     else
@@ -1889,16 +2142,16 @@ scenario_sharedingress() {
     # fleet is untouched.
     local kcode
     kcode="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
-        -H "Authorization: Bearer $TOK_ADMIN" \
-        "http://127.0.0.1:$CTL_ADMIN_PORT/admin/v1/tunnels/$CAROL_USER/$DS_E/kill")"
+        -H "Authorization: Bearer $TOK_CONTROL_OPERATOR" \
+        "http://127.0.0.1:$CTL_ADMIN_PORT/admin/v1/tunnels/$CAROL_ID/$DS_E/kill")"
     if [ "$kcode" = "204" ]; then
         assert_pass "sharedingress: exact kill of E confirmed (204)"
     else
         assert_fail "sharedingress: exact kill of E expected 204, got $kcode"
     fi
     kcode="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
-        -H "Authorization: Bearer $TOK_ADMIN" \
-        "http://127.0.0.1:$CTL_ADMIN_PORT/admin/v1/tunnels/$DAVE_USER/$DS_F/kill")"
+        -H "Authorization: Bearer $TOK_CONTROL_OPERATOR" \
+        "http://127.0.0.1:$CTL_ADMIN_PORT/admin/v1/tunnels/$DAVE_ID/$DS_F/kill")"
     if [ "$kcode" = "204" ]; then
         assert_pass "sharedingress: exact kill of F confirmed (204)"
     else
@@ -1907,7 +2160,7 @@ scenario_sharedingress() {
     # The 204 confirms the eviction on the owning process, so E's host
     # stops routing immediately; the redialing client cannot beat this
     # probe because it first has to rebuild its tunnel.
-    code="$(curl_node "$ne" "$host_e" -o /dev/null -w '%{http_code}' "http://$host_e:$PROXY_PORT/api/health")"
+    code="$(curl_node "$ne" "$host_e" -o /dev/null -w '%{http_code}' "https://$host_e:$PROXY_PORT/api/health")"
     if [ "$code" = "404" ]; then
         assert_pass "sharedingress: the kill evicted E on its owning node"
     else
@@ -1950,7 +2203,8 @@ scenario_movenode() {
     # are 401 there), so mint one for dave first.
     local out move_pat
     out="$("$GW_BIN/chan-gateway-admin" \
-        --identity-url "http://127.0.0.1:$ID_PORT" --token "$TOK_ADMIN" --json \
+        --identity-url "http://127.0.0.1:$ID_INTERNAL_PORT" \
+        --identity-token "$TOK_IDENTITY_ADMIN" --json \
         token create "$DAVE_EMAIL" \
         --scope desktop.account --label movenode-e2e \
         2>> "$LOGS/admin-mint.log")" || out=""
@@ -1968,11 +2222,11 @@ scenario_movenode() {
     }
     move_roster() {
         curl -sS -H "Authorization: Bearer $move_pat" \
-            "http://127.0.0.1:$ID_PORT/desktop/v1/devservers"
+            "http://127.0.0.1:$ID_INNER_PORT/desktop/v1/devservers"
     }
     local want_p1 want_p2
-    want_p1="true http://$DAVE_USER--$(disc "$DS_G").p1.$APEX:$PROXY_PORT"
-    want_p2="true http://$DAVE_USER--$(disc "$DS_G").p2.$APEX:$PROXY_PORT"
+    want_p1="true https://$DAVE_USER--$(disc "$DS_G").p1.$APEX:$PROXY_PORT"
+    want_p2="true https://$DAVE_USER--$(disc "$DS_G").p2.$APEX:$PROXY_PORT"
 
     # Phase 1: G registers through p1 and everything names p1.
     spawn_devserver g "${DS_PORTS[6]}" "$PAT_G" "$(node_tunnel_url p1)"
@@ -1983,7 +2237,7 @@ scenario_movenode() {
         sleep 0.4
     done
     if [ "$node" = "p1" ] &&
-        [ "$(tunnel_field "$DS_G" proxy_base_url)" = "http://p1.$APEX:$PROXY_PORT" ]; then
+        [ "$(tunnel_field "$DS_G" proxy_base_url)" = "https://p1.$APEX:$PROXY_PORT" ]; then
         assert_pass "movenode: G registered through p1 with p1's base URL"
     else
         assert_fail "movenode: G did not register on p1 (node='$node')"
@@ -2001,7 +2255,7 @@ scenario_movenode() {
         assert_fail "movenode: entry minted on '$MC_NODE', expected p1"
     fi
     code="$(curl_node p1 "$MC_HOST" -o /dev/null -w '%{http_code}' \
-        -H "Cookie: $MC_COOKIE" "http://$MC_HOST:$PROXY_PORT/api/health")"
+        -H "Cookie: $MC_COOKIE" "https://$MC_HOST:$PROXY_PORT/api/health")"
     if [ "$code" = "200" ]; then
         assert_pass "movenode: G answers 200 on p1"
     else
@@ -2027,7 +2281,7 @@ scenario_movenode() {
         sleep 0.4
     done
     if [ "$flipped" = 1 ] &&
-        [ "$(tunnel_field "$DS_G" proxy_base_url)" = "http://p2.$APEX:$PROXY_PORT" ]; then
+        [ "$(tunnel_field "$DS_G" proxy_base_url)" = "https://p2.$APEX:$PROXY_PORT" ]; then
         assert_pass "movenode: ownership moved to p2 on the redial"
     else
         assert_fail "movenode: ownership never moved to p2"
@@ -2047,21 +2301,21 @@ scenario_movenode() {
         assert_fail "movenode: post-move entry minted on '$MC_NODE', expected p2"
     fi
     code="$(curl_node p2 "$MC_HOST" -o /dev/null -w '%{http_code}' \
-        -H "Cookie: $MC_COOKIE" "http://$MC_HOST:$PROXY_PORT/api/health")"
+        -H "Cookie: $MC_COOKIE" "https://$MC_HOST:$PROXY_PORT/api/health")"
     if [ "$code" = "200" ]; then
         assert_pass "movenode: the data path moved to p2 (200)"
     else
         assert_fail "movenode: G on p2 expected 200, got $code"
     fi
     code="$(curl_node p1 "$MC_HOST" -o /dev/null -w '%{http_code}' \
-        -H "Cookie: $MC_COOKIE" "http://$MC_HOST:$PROXY_PORT/api/health")"
+        -H "Cookie: $MC_COOKIE" "https://$MC_HOST:$PROXY_PORT/api/health")"
     if [ "$code" = "404" ]; then
         assert_pass "movenode: p2's node host is 404 on p1"
     else
         assert_fail "movenode: G's new host on p1 expected 404, got $code"
     fi
     code="$(curl_node p1 "$host_p1" -o /dev/null -w '%{http_code}' \
-        -H "Cookie: $cookie_p1" "http://$host_p1:$PROXY_PORT/api/health")"
+        -H "Cookie: $cookie_p1" "https://$host_p1:$PROXY_PORT/api/health")"
     if [ "$code" = "404" ]; then
         assert_pass "movenode: p1 no longer serves the moved devserver (404)"
     else
@@ -2088,7 +2342,7 @@ scenario_movenode() {
         assert_fail "movenode: the p2 registration did not survive the retired side's teardown"
     fi
     code="$(curl_node p2 "$MC_HOST" -o /dev/null -w '%{http_code}' \
-        -H "Cookie: $MC_COOKIE" "http://$MC_HOST:$PROXY_PORT/api/health")"
+        -H "Cookie: $MC_COOKIE" "https://$MC_HOST:$PROXY_PORT/api/health")"
     if [ "$code" = "200" ]; then
         assert_pass "movenode: the replacement still routes after the late disconnect"
     else
@@ -2152,7 +2406,7 @@ scenario_ctlrestart() {
         [ "$code" = "503" ] && saw_readyz_503=1
         if [ "$saw_tunnels_503" = 0 ]; then
             tcode="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 \
-                -H "Authorization: Bearer $TOK_ADMIN" \
+                -H "Authorization: Bearer $TOK_CONTROL_OPERATOR" \
                 "http://127.0.0.1:$CTL_ADMIN_PORT/admin/v1/tunnels" 2>/dev/null || true)"
             [ "$tcode" = "503" ] && saw_tunnels_503=1
         fi
@@ -2160,7 +2414,7 @@ scenario_ctlrestart() {
         # never depends on the controller.
         if [ "$i" = 20 ] && [ -z "$mid" ]; then
             mid="$(curl_node "$node_a" "$host_a" -o /dev/null -w '%{http_code}' \
-                -H "Cookie: $cookie_a" "http://$host_a:$PROXY_PORT/api/health")"
+                -H "Cookie: $cookie_a" "https://$host_a:$PROXY_PORT/api/health")"
         fi
         [ "$code" = "200" ] && break
         sleep 0.4
@@ -2203,7 +2457,7 @@ scenario_ctlrestart() {
     else
         assert_fail "ctlrestart: proxy rows wrong after restart: $per_node"
     fi
-    check_entry_routes ctlrestart-a "$PAT_A" "$ALICE_USER" "$DS_A"
+    check_entry_routes ctlrestart-a "$PAT_A" "$ALICE_USER" "$ALICE_ID" "$DS_A"
 }
 
 # Scenario: one proxy's control stream drops. Killing relay-p2
@@ -2281,7 +2535,7 @@ scenario_proxydown() {
 
     # Inside grace the data path is untouched.
     code="$(curl_node p2 "$host_b" -o /dev/null -w '%{http_code}' \
-        -H "Cookie: $cookie_b" "http://$host_b:$PROXY_PORT/api/health")"
+        -H "Cookie: $cookie_b" "https://$host_b:$PROXY_PORT/api/health")"
     if [ "$code" = "200" ]; then
         assert_pass "proxydown: p2 traffic survives inside the grace window"
     else
@@ -2292,7 +2546,7 @@ scenario_proxydown() {
     local evicted=0
     for _ in $(seq 175); do
         code="$(curl_node p2 "$host_b" -o /dev/null -w '%{http_code}' \
-            -H "Cookie: $cookie_b" "http://$host_b:$PROXY_PORT/api/health")"
+            -H "Cookie: $cookie_b" "https://$host_b:$PROXY_PORT/api/health")"
         [ "$code" = "404" ] && {
             evicted=1
             break
@@ -2308,7 +2562,7 @@ scenario_proxydown() {
     # Heal: the relay returns, p2 rejoins, B redials and is admitted.
     spawn "relay-p2" node "$WORK/tcp-shim.mjs" \
         "127.0.0.1:$(node_relay_port p2)" "127.0.0.1:$CTL_PROXY_PORT"
-    if wait_ready proxy-p2 "http://$(node_ip p2):$PROXY_PORT/readyz" "$APEX"; then
+    if wait_ready proxy-p2 "https://$(node_ip p2):$PROXY_PORT/readyz" "$APEX"; then
         assert_pass "proxydown: p2 rejoined the fleet after the relay healed"
     else
         assert_fail "proxydown: p2 did not rejoin after the relay healed"
@@ -2325,6 +2579,22 @@ scenario_proxydown() {
         assert_pass "proxydown: B re-registered on p2; the fleet is whole again"
     else
         assert_fail "proxydown: B did not re-register on p2"
+    fi
+    code="$(curl_node p2 "$host_b" -o /dev/null -w '%{http_code}' \
+        -H "Cookie: $cookie_b" "https://$host_b:$PROXY_PORT/api/health")"
+    if [ "$code" = "404" ]; then
+        assert_pass "proxydown: pre-partition opaque session stays revoked after B returns"
+    else
+        assert_fail "proxydown: pre-partition session revived after recovery (got $code)"
+    fi
+    mint_gate_cookie "$PAT_B" "$ALICE_USER" "$DS_B" || \
+        assert_fail "proxydown: could not mint a fresh post-recovery session"
+    code="$(curl_node p2 "$MC_HOST" -o /dev/null -w '%{http_code}' \
+        -H "Cookie: $MC_COOKIE" "https://$MC_HOST:$PROXY_PORT/api/health")"
+    if [ "$code" = "200" ]; then
+        assert_pass "proxydown: fresh post-recovery session is admitted"
+    else
+        assert_fail "proxydown: fresh post-recovery session expected 200, got $code"
     fi
 }
 
@@ -2371,8 +2641,8 @@ scenario_ctloutage() {
     spawn_devserver g "${DS_PORTS[6]}" "$PAT_G" "$(node_tunnel_url p1)"
     sleep 6
     local ebody
-    ebody="$(entry_for "$PAT_A" "{\"devserver_id\":\"$DS_A\"}")"
-    if [ -z "$(printf %s "$ebody" | json_get entry_url)" ]; then
+    ebody="$(entry_for "$PAT_A" "{\"owner_user_id\":\"$ALICE_ID\",\"devserver_id\":\"$DS_A\"}")"
+    if [ -z "$(printf %s "$ebody" | json_get entry_exchange_url)" ]; then
         assert_pass "ctloutage: identity mints no entry without fleet state"
     else
         assert_fail "ctloutage: identity minted an entry during the outage: $ebody"
@@ -2380,7 +2650,7 @@ scenario_ctloutage() {
 
     # Existing traffic survives inside the grace window.
     code="$(curl_node "$node_a" "$host_a" -o /dev/null -w '%{http_code}' \
-        -H "Cookie: $cookie_a" "http://$host_a:$PROXY_PORT/api/health")"
+        -H "Cookie: $cookie_a" "https://$host_a:$PROXY_PORT/api/health")"
     if [ "$code" = "200" ]; then
         assert_pass "ctloutage: existing traffic survives inside grace"
     else
@@ -2391,7 +2661,7 @@ scenario_ctloutage() {
     local evicted=0
     for _ in $(seq 175); do
         code="$(curl_node "$node_a" "$host_a" -o /dev/null -w '%{http_code}' \
-            -H "Cookie: $cookie_a" "http://$host_a:$PROXY_PORT/api/health")"
+            -H "Cookie: $cookie_a" "https://$host_a:$PROXY_PORT/api/health")"
         [ "$code" = "404" ] && {
             evicted=1
             break
@@ -2437,7 +2707,7 @@ $owners"
     else
         assert_fail "ctloutage: G registered during the outage"
     fi
-    check_entry_routes ctloutage-a "$PAT_A" "$ALICE_USER" "$DS_A"
+    check_entry_routes ctloutage-a "$PAT_A" "$ALICE_USER" "$ALICE_ID" "$DS_A"
 }
 
 run_scenarios() { # run_scenarios <all|name>

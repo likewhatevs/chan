@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Generate /etc/chan-gateway/{domain,profile,identity,devserver-control,
-# devserver-proxy,admin}.env on a host where the .debs are already
+# Generate /etc/chan-gateway/{domain,migrate,profile,identity,
+# devserver-control,devserver-proxy,admin}.env on a host where the .debs are already
 # installed.
 #
 # Usage:
@@ -9,22 +9,33 @@
 # Prompts for the values that aren't safely defaultable (Postgres
 # password, base domain, OAuth credentials). Generates the shared
 # secrets (PROFILE_AUTH_TOKEN, IDENTITY_INTERNAL_TOKEN,
-# DEVSERVER_GATE_SECRET, DEVSERVER_PROXY_TOKEN, and one admin token
-# wired as PROFILE_ADMIN_TOKEN / DEVSERVER_ADMIN_TOKEN /
-# CHAN_ADMIN_TOKEN) and threads them across the files where they must
+# admission/entry keypairs, the proxy credential, and
+# distinct profile, identity, controller-operator, and controller-client tokens)
+# and threads them across the files where they must
 # match. Backs up any existing env files before overwriting.
 
 set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd -P)
 
 if [[ $EUID -ne 0 ]]; then
     echo "error: run as root (sudo $0)" >&2
     exit 1
 fi
 
-if ! getent passwd chan-gateway >/dev/null; then
-    echo "error: chan-gateway user is missing. Install the .debs first." >&2
-    exit 1
-fi
+SERVICE_USERS=(
+    chan-gateway-profile
+    chan-gateway-identity
+    chan-gateway-migrate
+    chan-gateway-devserver-control
+    chan-gateway-devserver-proxy
+)
+for service_user in "${SERVICE_USERS[@]}"; do
+    if ! getent passwd "$service_user" >/dev/null; then
+        echo "error: $service_user is missing. Install all service .debs first." >&2
+        exit 1
+    fi
+done
 
 read -rp "Postgres user [chan]: " PG_USER
 PG_USER=${PG_USER:-chan}
@@ -93,29 +104,70 @@ emit_provider_env() {
 
 # URL-encode the password so special characters don't break DATABASE_URL.
 PG_PASS_ENC=$(python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$PG_PASS")
-DATABASE_URL="postgres://${PG_USER}:${PG_PASS_ENC}@127.0.0.1/${PG_DB}"
+MIGRATION_DATABASE_URL="postgres://${PG_USER}:${PG_PASS_ENC}@127.0.0.1/${PG_DB}"
 
-# Shared secrets. The admin token is one value wired into three vars
-# that must match: profile's PROFILE_ADMIN_TOKEN, devserver-control's
-# DEVSERVER_ADMIN_TOKEN (also presented by identity and profile), and
-# the operator's CHAN_ADMIN_TOKEN. IDENTITY_INTERNAL_TOKEN and
-# DEVSERVER_GATE_SECRET are each shared by exactly two services
-# (identity <-> devserver-proxy). DEVSERVER_PROXY_TOKEN authenticates
-# proxy control sessions and is shared by devserver-control and every
-# proxy node.
+# Runtime services receive separate, randomly generated login roles that have
+# DML access but cannot create database objects. The owner URL is written only
+# to migrate.env and used here to create/rotate the application roles.
+IDENTITY_DATABASE_PASSWORD=$(openssl rand -hex 32)
+PROFILE_DATABASE_PASSWORD=$(openssl rand -hex 32)
+IDENTITY_DATABASE_URL="postgres://chan_gateway_identity:${IDENTITY_DATABASE_PASSWORD}@127.0.0.1/${PG_DB}"
+PROFILE_DATABASE_URL="postgres://chan_gateway_profile:${PROFILE_DATABASE_PASSWORD}@127.0.0.1/${PG_DB}"
+DATABASE_URL=$MIGRATION_DATABASE_URL \
+IDENTITY_DATABASE_PASSWORD=$IDENTITY_DATABASE_PASSWORD \
+PROFILE_DATABASE_PASSWORD=$PROFILE_DATABASE_PASSWORD \
+    "$SCRIPT_DIR/prepare-database-roles.sh"
+
+# IDENTITY_INTERNAL_TOKEN is shared only by identity and devserver-proxy.
+# DEVSERVER_PROXY_TOKEN authenticates this
+# proxy node; the controller stores it only under the provisioned proxy id.
 PROFILE_AUTH_TOKEN=$(openssl rand -hex 32)
 IDENTITY_INTERNAL_TOKEN=$(openssl rand -hex 32)
-DEVSERVER_GATE_SECRET=$(openssl rand -hex 32)
 DEVSERVER_PROXY_TOKEN=$(openssl rand -hex 32)
-ADMIN_TOKEN=$(openssl rand -hex 32)
 
-install -d -m 0750 -o root -g chan-gateway /etc/chan-gateway
+# Never reuse a bearer across an inbound API or controller authorization scope.
+GENERATED_ADMIN_TOKENS=()
+generate_unique_admin_token() {
+    local candidate existing collision
+    while :; do
+        candidate=$(openssl rand -hex 32)
+        collision=false
+        for existing in "${GENERATED_ADMIN_TOKENS[@]:-}"; do
+            if [[ $candidate == "$existing" ]]; then
+                collision=true
+                break
+            fi
+        done
+        [[ $collision == false ]] || continue
+        GENERATED_ADMIN_TOKENS+=("$candidate")
+        UNIQUE_ADMIN_TOKEN=$candidate
+        return
+    done
+}
+generate_unique_admin_token; PROFILE_ADMIN_TOKEN=$UNIQUE_ADMIN_TOKEN
+generate_unique_admin_token; IDENTITY_ADMIN_TOKEN=$UNIQUE_ADMIN_TOKEN
+generate_unique_admin_token; DEVSERVER_OPERATOR_ADMIN_TOKEN=$UNIQUE_ADMIN_TOKEN
+generate_unique_admin_token; DEVSERVER_IDENTITY_ADMIN_TOKEN=$UNIQUE_ADMIN_TOKEN
+generate_unique_admin_token; DEVSERVER_PROFILE_ADMIN_TOKEN=$UNIQUE_ADMIN_TOKEN
+
+mapfile -t ADMISSION_KEYS < <("$SCRIPT_DIR/generate-admission-keypair.py")
+[[ ${#ADMISSION_KEYS[@]} -eq 2 ]] || { echo "admission key generation failed" >&2; exit 1; }
+DEVSERVER_ADMISSION_SIGNING_KEY=${ADMISSION_KEYS[0]}
+DEVSERVER_ADMISSION_VERIFYING_KEY=${ADMISSION_KEYS[1]}
+mapfile -t ENTRY_KEYS < <("$SCRIPT_DIR/generate-admission-keypair.py")
+[[ ${#ENTRY_KEYS[@]} -eq 2 ]] || { echo "entry key generation failed" >&2; exit 1; }
+DEVSERVER_ENTRY_SIGNING_KEY=${ENTRY_KEYS[0]}
+DEVSERVER_ENTRY_VERIFYING_KEYS=${ENTRY_KEYS[1]}
+
+install -d -m 0751 -o root -g root /etc/chan-gateway
 
 write_env() {
-    local path=$1 content=$2 backup
+    local path=$1 owner=$2 mode=$3 content=$4 backup
     if [[ -f "$path" ]]; then
         backup="${path}.bak.$(date +%Y%m%d-%H%M%S)"
         cp -p "$path" "$backup"
+        chown root:root "$backup"
+        chmod 0600 "$backup"
         echo "backed up $path -> $backup"
     fi
     # Write via a redirect, not `install /dev/stdin`: GNU install fails
@@ -123,12 +175,12 @@ write_env() {
     # the destination already exists (and the .debs ship these as
     # conf-files, so it always does). Set owner/mode explicitly after.
     printf '%s\n' "$content" > "$path"
-    chown root:chan-gateway "$path"
-    chmod 0640 "$path"
+    chown "root:$owner" "$path"
+    chmod "$mode" "$path"
     echo "wrote $path"
 }
 
-write_env /etc/chan-gateway/domain.env "$(cat <<EOF
+write_env /etc/chan-gateway/domain.env root 0644 "$(cat <<EOF
 # Generated by configure.sh on $(date -Iseconds).
 # Explicit public origins. No service derives deployment hostnames.
 BASE_URL=${ID_URL}
@@ -139,14 +191,29 @@ DASHBOARD_URL=${ID_URL}/workspaces
 EOF
 )"
 
-write_env /etc/chan-gateway/profile.env "$(cat <<EOF
+write_env /etc/chan-gateway/migrate.env chan-gateway-migrate 0640 "$(cat <<EOF
+# Generated by configure.sh on $(date -Iseconds).
+# Database-owner credentials belong only to this one-shot service.
+DATABASE_URL=${MIGRATION_DATABASE_URL}
+IDENTITY_DATABASE_PASSWORD=${IDENTITY_DATABASE_PASSWORD}
+PROFILE_DATABASE_PASSWORD=${PROFILE_DATABASE_PASSWORD}
+CHAN_GATEWAY_MIGRATIONS=only
+EXPECTED_SQLX_MIGRATION=15
+DATABASE_ROLE_POLICY_VERSION=1
+EOF
+)"
+
+write_env /etc/chan-gateway/profile.env chan-gateway-profile 0640 "$(cat <<EOF
 # Generated by configure.sh on $(date -Iseconds).
 BIND_ADDR=127.0.0.1:7001
-DATABASE_URL=${DATABASE_URL}
+DATABASE_URL=${PROFILE_DATABASE_URL}
+CHAN_GATEWAY_MIGRATIONS=external
+EXPECTED_SQLX_MIGRATION=15
+DATABASE_ROLE_POLICY_VERSION=1
 PROFILE_AUTH_TOKEN=${PROFILE_AUTH_TOKEN}
-PROFILE_ADMIN_TOKEN=${ADMIN_TOKEN}
+PROFILE_ADMIN_TOKEN=${PROFILE_ADMIN_TOKEN}
 DEVSERVER_ADMIN_URL=http://127.0.0.1:7003
-DEVSERVER_ADMIN_TOKEN=${ADMIN_TOKEN}
+DEVSERVER_PROFILE_ADMIN_TOKEN=${DEVSERVER_PROFILE_ADMIN_TOKEN}
 EOF
 )"
 
@@ -158,52 +225,65 @@ PROVIDER_ENV=$(
     }
 )
 
-write_env /etc/chan-gateway/identity.env "$(cat <<EOF
+write_env /etc/chan-gateway/identity.env chan-gateway-identity 0640 "$(cat <<EOF
 # Generated by configure.sh on $(date -Iseconds).
 BIND_ADDR=127.0.0.1:7000
-DATABASE_URL=${DATABASE_URL}
+INTERNAL_BIND_ADDR=127.0.0.1:7004
+DATABASE_URL=${IDENTITY_DATABASE_URL}
+CHAN_GATEWAY_MIGRATIONS=external
+EXPECTED_SQLX_MIGRATION=15
+DATABASE_ROLE_POLICY_VERSION=1
 COOKIE_SECURE=true
 PROFILE_SERVICE_URL=http://127.0.0.1:7001
 PROFILE_AUTH_TOKEN=${PROFILE_AUTH_TOKEN}
 IDENTITY_INTERNAL_TOKEN=${IDENTITY_INTERNAL_TOKEN}
-DEVSERVER_GATE_SECRET=${DEVSERVER_GATE_SECRET}
+DEVSERVER_ADMISSION_SIGNING_KEY=${DEVSERVER_ADMISSION_SIGNING_KEY}
+DEVSERVER_ADMISSION_VERIFYING_KEYS=${DEVSERVER_ADMISSION_VERIFYING_KEY}
+DEVSERVER_ENTRY_SIGNING_KEY=${DEVSERVER_ENTRY_SIGNING_KEY}
+IDENTITY_ADMIN_TOKEN=${IDENTITY_ADMIN_TOKEN}
 DEVSERVER_ADMIN_URL=http://127.0.0.1:7003
-DEVSERVER_ADMIN_TOKEN=${ADMIN_TOKEN}
+DEVSERVER_IDENTITY_ADMIN_TOKEN=${DEVSERVER_IDENTITY_ADMIN_TOKEN}
 ${PROVIDER_ENV}
 EOF
 )"
 
-write_env /etc/chan-gateway/devserver-control.env "$(cat <<EOF
+write_env /etc/chan-gateway/devserver-control.env chan-gateway-devserver-control 0640 "$(cat <<EOF
 # Generated by configure.sh on $(date -Iseconds).
 BIND_ADDR=127.0.0.1:7003
 PROXY_BIND_ADDR=127.0.0.1:7101
-DEVSERVER_ADMIN_TOKEN=${ADMIN_TOKEN}
-DEVSERVER_PROXY_TOKEN=${DEVSERVER_PROXY_TOKEN}
+DEVSERVER_OPERATOR_ADMIN_TOKENS=${DEVSERVER_OPERATOR_ADMIN_TOKEN}
+DEVSERVER_IDENTITY_ADMIN_TOKENS=${DEVSERVER_IDENTITY_ADMIN_TOKEN}
+DEVSERVER_PROFILE_ADMIN_TOKENS=${DEVSERVER_PROFILE_ADMIN_TOKEN}
+DEVSERVER_PROXY_CREDENTIALS=${PROXY_ID}=${DEVSERVER_PROXY_TOKEN}
+DEVSERVER_ADMISSION_VERIFYING_KEYS=${DEVSERVER_ADMISSION_VERIFYING_KEY}
 DEVSERVER_PROXY_BASE_URL_TEMPLATE=${PROXY_BASE_URL_TEMPLATE}
-MAX_DEVSERVERS_PER_USER=0
+MAX_DEVSERVERS_PER_USER=100
 EOF
 )"
 
-write_env /etc/chan-gateway/devserver-proxy.env "$(cat <<EOF
+write_env /etc/chan-gateway/devserver-proxy.env chan-gateway-devserver-proxy 0640 "$(cat <<EOF
 # Generated by configure.sh on $(date -Iseconds).
 # devserver-proxy holds no database; DEVSERVER_PROXY_BASE_URL comes from
 # domain.env.
 BIND_ADDR=127.0.0.1:7002
 TUNNEL_BIND_ADDR=127.0.0.1:7100
-IDENTITY_URL=http://127.0.0.1:7000
+IDENTITY_URL=http://127.0.0.1:7004
 IDENTITY_INTERNAL_TOKEN=${IDENTITY_INTERNAL_TOKEN}
-DEVSERVER_GATE_SECRET=${DEVSERVER_GATE_SECRET}
+DEVSERVER_ENTRY_VERIFYING_KEYS=${DEVSERVER_ENTRY_VERIFYING_KEYS}
+IDENTITY_PUBLIC_ORIGIN=${ID_URL}
 DEVSERVER_CONTROL_URL=http://127.0.0.1:7101
 DEVSERVER_PROXY_TOKEN=${DEVSERVER_PROXY_TOKEN}
 DEVSERVER_PROXY_ID=${PROXY_ID}
 EOF
 )"
 
-write_env /etc/chan-gateway/admin.env "$(cat <<EOF
+write_env /etc/chan-gateway/admin.env root 0600 "$(cat <<EOF
 # Generated by configure.sh on $(date -Iseconds).
 CHAN_ADMIN_PROFILE_URL=http://127.0.0.1:7001
 CHAN_ADMIN_WORKSPACE_URL=http://127.0.0.1:7003
-CHAN_ADMIN_TOKEN=${ADMIN_TOKEN}
+CHAN_ADMIN_PROFILE_TOKEN=${PROFILE_ADMIN_TOKEN}
+CHAN_ADMIN_IDENTITY_TOKEN=${IDENTITY_ADMIN_TOKEN}
+CHAN_ADMIN_OPERATOR_TOKEN=${DEVSERVER_OPERATOR_ADMIN_TOKEN}
 EOF
 )"
 
@@ -213,7 +293,10 @@ echo "Done. Verify each enabled OAuth app's Authorization callback URL is:"
 [[ -n "$GOOG_ID" ]] && echo "    ${ID_URL}/auth/google/callback"
 [[ -n "$GL_ID"   ]] && echo "    ${ID_URL}/auth/gitlab/callback"
 echo
-echo "Then enable + start the services:"
+echo "Then stop database clients, run the owner-only migration/reconcile unit,"
+echo "and enable + start the services:"
+echo "    systemctl stop chan-gateway-identity chan-gateway-profile"
+echo "    systemctl restart chan-gateway-migrate"
 echo "    systemctl enable --now chan-gateway-profile"
 echo "    systemctl enable --now chan-gateway-identity"
 echo "    systemctl enable --now chan-gateway-devserver-control"

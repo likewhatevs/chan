@@ -217,23 +217,21 @@ pub struct DevserverGrant {
     pub devserver_id: String,
     pub grantee_email: String,
     pub grantee_user_id: Option<Uuid>,
-    pub role: String,
     pub created_at: DateTime<Utc>,
     pub accepted_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateDevserverGrant {
     pub grantee_email: String,
-    pub role: String,
 }
 
-/// Access decision returned by the per-request gate. `role` is one
-/// of `owner`, `editor`, `viewer`; 404 means the caller has no
-/// access (same shape as "unknown devserver", no enumeration leak).
+/// Binary access decision returned by the per-request gate. A grant is
+/// shell-equivalent access to the exact devserver data plane.
 #[derive(Debug, Serialize)]
 pub struct DevserverAccess {
-    pub role: String,
+    pub access: bool,
 }
 
 /// One incoming share: owner's identity flattened so the dashboard
@@ -248,7 +246,6 @@ pub struct IncomingShare {
     pub owner_avatar_url: Option<String>,
     pub devserver_id: String,
     pub label: String,
-    pub role: String,
     pub accepted_at: DateTime<Utc>,
 }
 
@@ -259,6 +256,7 @@ pub struct IncomingShare {
 /// registration.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct OwnedDevserverSummary {
+    pub owner_user_id: Uuid,
     pub devserver_id: String,
     pub label: String,
     pub grant_count: i64,

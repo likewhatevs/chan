@@ -1,6 +1,96 @@
-# chan-gateway v0.74.0 control plane hardening proposal
+# chan-gateway v0.74.0 control plane hardening
 
-Status: proposal, not yet accepted scope. This is the output of an adversarial security review of [distributed-proxy-control-plane.md](distributed-proxy-control-plane.md): three independent reviewers covered the proxy-to-controller protocol, the identity and origin chain to Chan Desktop, and the data plane with operational posture. A follow-up end-to-end tenant-isolation pass traced browser credentials through devserver-proxy, the per-request gateway assertion, chan-server route authorization, workspace and terminal tenants, grant revocation, and username changes. Every critical and high claim was then re-verified against the code before adoption; medium and low claims carry the reviewer's own citations. Branch citations name `v073/ctl` (read via `git show`; steps 1 to 4 are implemented there), unqualified paths are `main`. Steps 5 to 9 are unstarted, so findings touching consumers rest on the design text plus the pre-existing code they name. Grounded on 2026-07-20.
+Status: **accepted, implemented, and green on `v074/ctl`; ready to merge when
+the v0.74.0 integration window opens.** The findings below remain the pinned
+2026-07-20 pre-hardening audit
+record, so their old code paths and threat statements are intentionally not
+rewritten as though they described the remediated tree. The current contract is
+the implementation closure immediately below plus the component design files.
+
+## Implementation closure, 2026-07-21
+
+The mandatory merge set is implemented:
+
+- admission requires an identity-signed, refreshable Ed25519 lease bound to the
+  immutable owner, devserver, registration, and provisioned proxy;
+- proxy and admin credentials are allowlisted and scope-specific, with bounded
+  rotation rings and no cross-scope reuse;
+- duplicate-id displacement, restart rows, frames, strings, snapshots, pending
+  claims, actor work, watchers, and fleet/user capacity are bounded and fail
+  closed;
+- browser handoff is a body-only, 30-second, single-use Ed25519 credential with
+  no PII, followed by a bounded opaque proxy-local session with a one-hour
+  absolute maximum;
+- grant, block, PAT, and account denials reserve durable generation-fenced
+  tunnel/session revocation work in the same database transaction;
+- HTTP and WebSocket operations register revocation guards, enforce exact
+  browser boundaries, and do not acknowledge revoke until matching transports
+  have drained; a timeout remains tombstoned for honest retry;
+- Desktop validates immutable roster and origin bindings, sends exact WebSocket
+  Origin, and reuses/refreshes one opaque session without the old 16-session
+  window churn;
+- systemd and Kubernetes examples split service identities, Secrets, admin
+  scopes, database roles, and migration ownership, and enforce explicit
+  protected transport plus default-deny network policy; and
+- the three-node E2E covers signed admission/entry, ownership isolation,
+  shared access, revoke, controller restart/loss, placement movement, and the
+  complete diagonal/off-node matrix.
+
+### Disposition after implementation
+
+| Class | Position |
+| --- | --- |
+| Merge blockers | A1-A7, A9-A10, A13-A14, and A18-A26 are closed by implementation, deployment constraints, and adversarial tests. |
+| Pre-GA hardening delivered | A8 drain tombstones/observed completion and A16 service credential isolation, database least privilege, and watcher bounds. |
+| Accepted follow-ups | `__Host-` cookie names (A11), transfer/flap damping (A12), richer ownership/kill/revoke alerts and operator retry tooling (A15), response version diagnostics (A17), and stronger quarantine for a consistently lying assigned proxy (remaining A8). |
+
+The accepted follow-ups do not restore portable browser authority, shared fleet
+credentials, unsigned ownership, unbounded revocation, or cleartext multi-host
+assumptions. They improve containment, detection, and operability around an
+already bounded authorization model.
+
+### Final verification evidence
+
+- `TEST_DATABASE_URL=postgres://chan:chan@127.0.0.1:5432/chan_gateway_test
+  cargo test --workspace` passed the complete gateway control, proxy, common,
+  identity, profile, admin, API, database, integration, and doc-test suites.
+- `cargo clippy --workspace --all-targets -- -D warnings` and
+  `cargo fmt --all --check` passed in `gateway/`.
+- Root `make pre-push` passed shellcheck, actionlint, Rust fmt/clippy, every
+  root and Desktop target/test, no-default-features build, gateway build,
+  launcher/workspace/profile builds and checks, 3,154 frontend tests, marketing
+  smokes, and shortcut consistency.
+- The hardened three-proxy core zone passed 45 assertions; the routing matrix
+  passed 15 assertions with every diagonal request 200 and every off-node
+  request 404. The real TLS/h2/sdme path, PostgreSQL 16 role/ACL test,
+  systemd/Kubernetes isolation checks, manifest checks, and packaging syntax
+  checks also passed.
+- `git diff --check` passed.
+
+`npm audit --omit=dev` reports eight moderate advisories and one high advisory
+in the existing Excalidraw/Mermaid parser dependency chain. The high advisory is
+against `lodash-es` template/import-key handling; the affected `template`,
+`unset`, and `omit` paths are neither imported by the parser nor present in the
+built assets. The chain currently has no non-breaking upstream fix. Keep it as
+a dependency-refresh follow-up and continue to re-evaluate reachability; it is
+not introduced by or reachable through the control-plane authorization paths.
+A complete Rust advisory scan remains a release follow-up because `cargo audit`
+is not installed in this environment.
+
+### Honest residual boundary
+
+A fully compromised proxy assigned a tunnel can observe the transient PAT at
+validation time and can mint request assertions for tunnels assigned to that
+node. Signed leases, node-scoped entry verification, scoped credentials, and
+deployment isolation stop that capability from becoming another node's or the
+whole fleet's authority; they do not make the assigned node a trusted execution
+environment. Isolation, deprovisioning, and PAT rotation remain the incident
+response. The singleton controller is also still an availability dependency;
+HA and durable fleet state remain explicit non-goals.
+
+## Historical audit and proposal
+
+This section is the output of an adversarial security review of [distributed-proxy-control-plane.md](distributed-proxy-control-plane.md): three independent reviewers covered the proxy-to-controller protocol, the identity and origin chain to Chan Desktop, and the data plane with operational posture. A follow-up end-to-end tenant-isolation pass traced browser credentials through devserver-proxy, the per-request gateway assertion, chan-server route authorization, workspace and terminal tenants, grant revocation, and username changes. Every critical and high claim was then re-verified against the code before adoption; medium and low claims carry the reviewer's own citations. Branch citations name `v073/ctl` (read via `git show`; steps 1 to 4 are implemented there), unqualified paths are `main`. Steps 5 to 9 were unstarted at review time, so findings touching consumers rest on the design text plus the pre-existing code they name. Grounded on 2026-07-20.
 
 The review's thesis in one sentence: the control protocol authenticates *a fleet* but authorizes *individual proxies, admissions, ownership transfers, and kill confirmations on self-assertion*, while the data path authenticates a browser session without consistently binding immutable ownership, the exact binary grant, revocation state, or browser origin. Shared cleartext bearers plus self-asserted control rows are the control-plane root weakness; mutable username ownership, an ambiguous sharing contract, stateless 24-hour sessions, and unchecked WebSocket origins are the user-data root weaknesses. A1 through A4 and A18 through A21 are load-bearing before broad consumer migration.
 

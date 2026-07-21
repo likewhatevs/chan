@@ -1,6 +1,6 @@
 # Local dev stack
 
-Bootstraps the chan-gateway services (postgres + profile + identity + devserver-control + one to three devserver-proxy nodes) against a workspace `cargo run` build, so you can browse `id.localtest.me:17000` and exercise the dashboard, OAuth flow, and workspace-gate handoff against the real binaries.
+Bootstraps the chan-gateway services (postgres + profile + identity + devserver-control + one to three devserver-proxy nodes) against a workspace `cargo run` build. Public identity, proxy, and tunnel endpoints use a generated local CA; the Rust services remain loopback-only behind small Node TLS forwarders.
 
 `*.localtest.me` resolves to `127.0.0.1` for every subdomain via public DNS, which sidesteps the `/etc/hosts` surgery you would otherwise need to test the wildcard-subdomain shape locally.
 
@@ -9,13 +9,13 @@ Dev port layout (offset by `+10000` from the prod-shaped ports so the runner can
 | Service          | Port    | URL                                            |
 |------------------|---------|------------------------------------------------|
 | profile          | `17001` | http://127.0.0.1:17001                         |
-| identity         | `17000` | http://id.localtest.me:17000                   |
+| identity         | `17000` | https://id.localtest.me:17000                  |
 | devserver-control | `17003` | http://127.0.0.1:17003 (aggregate admin)      |
 |                  | `17101` | h2c proxy control listener                     |
-| devserver-proxy.pN | `17002` | http://pN.devserver.localtest.me:17002 (node) |
-|                  | `17100` | 127.0.0.N:17100 (h2c tunnel)                   |
+| devserver-proxy.pN | `17002` | https://pN.devserver.localtest.me:17002 (node) |
+|                  | `17100` | 127.0.0.N:17100 (TLS tunnel; h2c behind edge)  |
 
-Every proxy node binds the same two ports on its own loopback alias (p1 on `127.0.0.1`, p2 on `127.0.0.2`, p3 on `127.0.0.3`) because the controller's origin template pins one shared port for the whole fleet. A `chan devserver` client dials one node's tunnel listener directly, e.g. `http://127.0.0.2:17100/v1/tunnel` for p2.
+Every proxy node exposes the same two TLS ports on its own loopback alias (p1 on `127.0.0.1`, p2 on `127.0.0.2`, p3 on `127.0.0.3`) because the controller's origin template pins one shared port for the whole fleet. The proxy binaries themselves bind inner `16902`/`16910` loopback ports. A `chan devserver` client dials one node's verified TLS listener, e.g. `https://127.0.0.2:17100/v1/tunnel` for p2.
 
 Browsing a p1 tenant works out of the box because `*.localtest.me` resolves to `127.0.0.1`. Browsing a p2 or p3 tenant origin needs one `/etc/hosts` line per extra node (`127.0.0.2 p2.devserver.localtest.me` plus one line per tenant host you open, or a local wildcard DNS such as dnsmasq), because public DNS resolves those hosts to `127.0.0.1`, where p1 answers and 404s them.
 
@@ -23,7 +23,7 @@ Browsing a p1 tenant works out of the box because `*.localtest.me` resolves to `
 
 1. Postgres reachable at `postgres://chan:chan@127.0.0.1/chan_gateway`. The dev runner uses the same database the integration tests expect (`chan_gateway`); if you do not have that DB yet, `createdb -U chan chan_gateway` against your local pg.
 
-2. A GitHub OAuth dev app (Settings -> Developer settings -> OAuth Apps -> New OAuth App). Use: Homepage URL:       http://id.localtest.me:17000 Authorization callback: http://id.localtest.me:17000/auth/github/callback Copy the Client ID and a freshly-generated Client Secret.
+2. A GitHub OAuth dev app (Settings -> Developer settings -> OAuth Apps -> New OAuth App). Use: Homepage URL: `https://id.localtest.me:17000`; authorization callback: `https://id.localtest.me:17000/auth/github/callback`.
 
 3. Drop the GitHub creds into `packaging/gateway/scripts/dev/.env`:
    ```
@@ -35,7 +35,7 @@ Browsing a p1 tenant works out of the box because `*.localtest.me` resolves to `
    ```
    packaging/gateway/scripts/dev/setup.sh
    ```
-   This writes the service env files into `packaging/gateway/scripts/dev/secrets/` and runs profile-service once to apply migrations. Idempotent; re-run is a no-op unless you pass `--force`.
+   This writes service env files and a local CA under `packaging/gateway/scripts/dev/secrets/`, then applies migrations. Import `secrets/tls/ca.crt` into the browser/profile used for local development before opening the dashboard. Idempotent; `--force` rotates secrets and the CA.
 
 ## Run
 
@@ -47,7 +47,7 @@ Spawns profile, identity, devserver-control, and one devserver-proxy in the fore
 
 Then open:
 
-* http://id.localtest.me:17000 -- dashboard. Sign in with GitHub; GitHub redirects to the callback at `id.localtest.me:17000`, identity-service mints a session cookie (host-only on `id.localtest.me`), and the SPA loads.
+* https://id.localtest.me:17000 -- dashboard. Sign in with GitHub; GitHub redirects to the TLS callback, identity-service mints a Secure host-only session cookie, and the SPA loads.
 
 The Workspaces tab is empty until a `chan devserver` instance registers a workspace (see below).
 
@@ -60,14 +60,14 @@ Both feature flags ship default-off, so the first OAuth sign-in will land on `/?
 #    after the row is upserted) and then 303s to the denied panel.
 #    Pick up your email from the SPA panel or via:
 PT=$(grep PROFILE_ADMIN_TOKEN secrets/profile.env | cut -d= -f2-)
-CHAN_ADMIN_TOKEN="$PT" CHAN_ADMIN_PROFILE_URL=http://127.0.0.1:17001 \
+CHAN_ADMIN_PROFILE_TOKEN="$PT" CHAN_ADMIN_PROFILE_URL=http://127.0.0.1:17001 \
   ../../target/debug/chan-gateway-admin user list
 
 # 2. Grant the two seeded flags on your account, then sign in
 #    again. Workspaces tab + share UI appear.
-CHAN_ADMIN_TOKEN="$PT" CHAN_ADMIN_PROFILE_URL=http://127.0.0.1:17001 \
+CHAN_ADMIN_PROFILE_TOKEN="$PT" CHAN_ADMIN_PROFILE_URL=http://127.0.0.1:17001 \
   ../../target/debug/chan-gateway-admin flag grant oauth_login <your-email>
-CHAN_ADMIN_TOKEN="$PT" CHAN_ADMIN_PROFILE_URL=http://127.0.0.1:17001 \
+CHAN_ADMIN_PROFILE_TOKEN="$PT" CHAN_ADMIN_PROFILE_URL=http://127.0.0.1:17001 \
   ../../target/debug/chan-gateway-admin flag grant share_workspaces <your-email>
 ```
 
@@ -80,18 +80,22 @@ In the `chan` repo (sibling of chan-gateway):
 ```
 # Create a PAT under the Tokens tab on the dashboard, copy it.
 export CHAN_TUNNEL_TOKEN=chan_pat_...
+export SSL_CERT_FILE="$PWD/packaging/gateway/scripts/dev/secrets/tls/ca.crt"
 
 cd ../chan
 cargo run -p chan -- serve <some-workspace-dir> \
-  --tunnel-url=http://devserver.localtest.me:17100/v1/tunnel \
+  --tunnel-url=https://127.0.0.1:17100/v1/tunnel \
   --tunnel-workspace-name=blog
 ```
 
-The `http://` scheme on the URL triggers chan-tunnel-client's h2c path (no TLS); devserver-proxy p1's tunnel listener is bound to `127.0.0.1:17100` and speaks h2c directly. Once connected, the dashboard's Workspaces tab lists the workspace; clicking Open redirects the browser through `/api/workspaces/open` to the owning node's tenant host, `http://<user>--<disc>.p1.devserver.localtest.me:17002/blog/`.
+The client verifies the per-stack CA, then the tunnel TLS edge negotiates only
+h2 and forwards it to proxy p1's loopback h2c listener. Identity and proxy
+public edges negotiate only HTTP/1.1; keeping the ALPN sets disjoint prevents a
+public listener from receiving an h2 preface it does not serve. Once connected,
+clicking Open targets `https://<user>--<disc>.p1.devserver.localtest.me:17002/blog/`.
 
 ## Notes
 
-* No TLS anywhere in this stack. `COOKIE_SECURE=false` is set in the identity env so the session cookie survives `http://`. Do not mirror this config into prod.
-* The workspace-gate JWT redirect uses `DEVSERVER_PUBLIC_SCHEME=http` and `DEVSERVER_PUBLIC_PORT=:17002`, so the URL identity builds points at the dev port. Production sets both to their defaults (`https` and empty).
+* Public DNS names are never accepted over cleartext. Local TLS is terminated only onto loopback listeners; the generated CA is a development trust root, not a production credential.
 * Postgres state persists across runs. To wipe and start fresh: `dropdb chan_gateway && createdb chan_gateway && packaging/gateway/scripts/dev/setup.sh`.
 * Stopping `run.sh` with Ctrl-C is clean. If a service hangs, kill the process group with `kill -INT -- -<pgid>` -- the dev runner publishes its pgid as `packaging/gateway/scripts/dev/.run.pid` for that case.

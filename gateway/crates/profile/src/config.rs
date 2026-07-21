@@ -10,7 +10,7 @@ use url::Url;
 /// compile-time choice or belongs in a future config file. Env-only
 /// so deploys can override per-environment without baking secrets
 /// into images.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     pub bind_addr: SocketAddr,
     pub database_url: String,
@@ -20,18 +20,31 @@ pub struct Config {
     /// devserver-proxy. Optional: when unset, the admin tree returns
     /// 401 for every request, which is the safe default.
     pub admin_token: Option<String>,
-    /// Pre-built admin client for devserver-control. `None` when
-    /// `DEVSERVER_ADMIN_TOKEN` is unset, in which case admin block
-    /// skips the tunnel-kill call (the live substreams stay alive
-    /// until they reconnect and the next validate refuses them) and
-    /// the registry sweeper does not spawn (no live-tunnel source).
-    pub workspace_admin: Option<DevserverControlClient>,
+    /// Scope-specific controller client. Runtime startup fails closed when the
+    /// URL or profile-scoped bearer is absent.
+    pub workspace_admin: DevserverControlClient,
     /// Devserver registry sweeper retention, from
     /// `DEVSERVER_RETENTION_MINUTES`: rows offline longer than this are
     /// deleted. Absent or empty = 15 minutes; `0` = sweeping disabled
     /// (`None`); anything unparseable fails startup -- a typo must not
     /// silently pick a policy that deletes rows.
     pub devserver_retention: Option<std::time::Duration>,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("bind_addr", &self.bind_addr)
+            .field("database_url", &"[REDACTED]")
+            .field("auth_token", &"[REDACTED]")
+            .field(
+                "admin_token",
+                &self.admin_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("workspace_admin", &self.workspace_admin)
+            .field("devserver_retention", &self.devserver_retention)
+            .finish()
+    }
 }
 
 /// Parse `DEVSERVER_RETENTION_MINUTES` (pre-filtered so empty is
@@ -52,6 +65,7 @@ impl Config {
             .unwrap_or_else(|_| "127.0.0.1:7001".to_string())
             .parse()
             .context("BIND_ADDR must be host:port")?;
+        gateway_common::internal_transport::require_protected_listener("BIND_ADDR", bind_addr)?;
 
         let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL is required")?;
         let auth_token =
@@ -64,21 +78,20 @@ impl Config {
             .ok()
             .filter(|s| !s.is_empty());
 
-        // DEVSERVER_ADMIN_URL points at devserver-control's admin
-        // listener (the aggregate `/admin/v1/*` tree, default port
-        // 7003). Unset is OK in lab / one-machine setups: block-user
-        // still works, the live tunnel just lingers until reconnect.
-        let workspace_admin = std::env::var("DEVSERVER_ADMIN_TOKEN")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .map(|tok| -> anyhow::Result<DevserverControlClient> {
-                let url: Url = std::env::var("DEVSERVER_ADMIN_URL")
-                    .context("DEVSERVER_ADMIN_URL is required when DEVSERVER_ADMIN_TOKEN is set")?
-                    .parse()
-                    .context("DEVSERVER_ADMIN_URL must be a URL")?;
-                DevserverControlClient::new(url, tok)
-            })
-            .transpose()?;
+        let admin_url: Url = std::env::var("DEVSERVER_ADMIN_URL")
+            .context("DEVSERVER_ADMIN_URL is required")?
+            .parse()
+            .context("DEVSERVER_ADMIN_URL must be a URL")?;
+        gateway_common::internal_transport::require_protected_http_url(
+            "DEVSERVER_ADMIN_URL",
+            &admin_url,
+        )?;
+        let profile_admin_token = std::env::var("DEVSERVER_PROFILE_ADMIN_TOKEN")
+            .context("DEVSERVER_PROFILE_ADMIN_TOKEN is required")?;
+        if profile_admin_token.is_empty() {
+            anyhow::bail!("DEVSERVER_PROFILE_ADMIN_TOKEN must not be empty");
+        }
+        let workspace_admin = DevserverControlClient::new(admin_url, profile_admin_token)?;
 
         let devserver_retention = parse_retention_minutes(
             std::env::var("DEVSERVER_RETENTION_MINUTES")
@@ -125,5 +138,31 @@ mod tests {
                 "{garbage:?} must bail rather than pick a deletion policy",
             );
         }
+    }
+
+    #[test]
+    fn config_debug_redacts_database_and_bearers() {
+        let cfg = Config {
+            bind_addr: "127.0.0.1:7001".parse().unwrap(),
+            database_url: "postgres://sentinel-db-secret".into(),
+            auth_token: "sentinel-profile-auth".into(),
+            admin_token: Some("sentinel-profile-admin".into()),
+            workspace_admin: DevserverControlClient::new(
+                "http://127.0.0.1:7003".parse().unwrap(),
+                "sentinel-controller-token".into(),
+            )
+            .unwrap(),
+            devserver_retention: None,
+        };
+        let debug = format!("{cfg:?}");
+        for secret in [
+            "sentinel-db-secret",
+            "sentinel-profile-auth",
+            "sentinel-profile-admin",
+            "sentinel-controller-token",
+        ] {
+            assert!(!debug.contains(secret), "Debug leaked {secret}");
+        }
+        assert!(debug.contains("[REDACTED]"));
     }
 }

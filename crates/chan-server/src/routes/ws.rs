@@ -63,22 +63,9 @@ pub async fn ws_upgrade(
     ws: WebSocketUpgrade,
 ) -> Response {
     let local = origin.is_none();
-    // Gateway identity for a tunnel participant: the proxy's per-request
-    // assertion carries the caller's name/email claims; map them into
-    // presence here so the roster renders `Display Name <email>` without
-    // chan-library depending on chan-tunnel-proto. Absent claims (an older
-    // gateway, or a local socket) leave the participant on its generated
-    // default name.
-    let identity = origin.as_ref().and_then(|ext| {
-        let caller = ext.0.caller.as_ref()?;
-        if caller.name.is_none() && caller.email.is_none() {
-            return None;
-        }
-        Some(crate::session_presence::ParticipantIdentity {
-            display_name: caller.name.clone(),
-            email: caller.email.clone(),
-        })
-    });
+    // Gateway assertions deliberately carry immutable authorization only.
+    // Display identity can be layered through a separate lookup path later.
+    let identity = None;
     let rx = state.events_tx.subscribe();
     let last_activity = state.last_activity.clone();
     let shutdown_rx = state.shutdown_rx.clone();

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, patch, post};
@@ -111,6 +111,19 @@ pub fn router(
     api_tokens: ApiTokenService,
     token_throttle: TokenThrottle,
 ) -> Router {
+    let (public, internal) = routers(cfg, store, api_tokens, token_throttle);
+    public.merge(internal)
+}
+
+/// Build physically separate public and internal applications. Production
+/// serves these on distinct listeners; the combined [`router`] remains only
+/// as a test harness convenience for suites that exercise both surfaces.
+pub fn routers(
+    cfg: Arc<Config>,
+    store: PostgresStore,
+    api_tokens: ApiTokenService,
+    token_throttle: TokenThrottle,
+) -> (Router, Router) {
     // Host-only on id.chan.app: no Domain attribute, so the cookie
     // does not propagate to the proxy fleet's tenant origins. The
     // devserver-gate handoff covers the cross-service auth need; see
@@ -154,8 +167,21 @@ pub fn router(
         .route("/admin/v1/tokens", post(admin_tokens_create))
         .route_layer(middleware::from_fn_with_state(state.clone(), admin_auth));
 
-    Router::new()
+    let internal = internal
+        .merge(admin)
+        .with_state(state.clone())
+        .layer(TraceLayer::new_for_http());
+
+    let public = Router::new()
         .route("/healthz", get(healthz))
+        // Never let the SPA fallback make a public probe of the internal
+        // namespace look successful. The real handlers exist only in the
+        // separately served internal router.
+        .route("/internal", axum::routing::any(public_internal_not_found))
+        .route(
+            "/internal/{*path}",
+            axum::routing::any(public_internal_not_found),
+        )
         .route("/.well-known/chan-gateway", get(gateway_discovery))
         .route("/auth/{provider}", get(auth_start))
         .route("/auth/{provider}/callback", get(auth_callback))
@@ -197,16 +223,20 @@ pub fn router(
         )
         .route("/desktop/v1/devserver/entry", post(desktop_devserver_entry))
         .route("/desktop/v1/devservers", get(crate::desktop_roster::roster))
-        .merge(internal)
-        .merge(admin)
         .fallback(static_files::handler)
         .with_state(state)
         .layer(session_layer)
-        .layer(TraceLayer::new_for_http())
+        .layer(TraceLayer::new_for_http());
+
+    (public, internal)
 }
 
 async fn healthz() -> &'static str {
     "ok"
+}
+
+async fn public_internal_not_found() -> StatusCode {
+    StatusCode::NOT_FOUND
 }
 
 #[derive(Debug, Serialize)]
@@ -269,7 +299,7 @@ async fn auth_start(
     State(state): State<AppState>,
     Path(provider): Path<String>,
     session: Session,
-) -> Result<Redirect> {
+) -> Result<Response> {
     let p = state.cfg.provider(&provider).ok_or(Error::NotFound)?;
     let redirect = state.cfg.redirect_uri(p.name());
     let (url, csrf, verifier) = p.authorize_url(&redirect)?;
@@ -284,7 +314,7 @@ async fn auth_start(
         )
         .await
         .map_err(|e| Error::Anyhow(anyhow::anyhow!("session insert: {e}")))?;
-    Ok(Redirect::to(url.as_str()))
+    Ok(Redirect::to(url.as_str()).into_response())
 }
 
 #[derive(Debug, Deserialize)]
@@ -657,10 +687,19 @@ async fn me(State(state): State<AppState>, session: Session) -> Result<Response>
     // delete), and that state still loads from profile-service.
     let devservers = if user.is_blocked() {
         Vec::new()
-    } else if let Some(client) = &state.cfg.workspace_admin {
-        match client.list_user_tunnels(&user.username).await {
+    } else {
+        match state.cfg.workspace_admin.list_owner_tunnels(user.id).await {
             Ok(rows) => rows
                 .into_iter()
+                .filter(|t| {
+                    crate::devserver_authority::verify_tunnel(
+                        &state.cfg.admission_lease_verifier,
+                        t,
+                    )
+                    .is_ok()
+                        && t.owner_user_id == user.id
+                        && t.user == user.username
+                })
                 .map(|t| DevserverView {
                     devserver_id: t.devserver_id,
                     status: "online",
@@ -671,8 +710,6 @@ async fn me(State(state): State<AppState>, session: Session) -> Result<Response>
                 Vec::new()
             }
         }
-    } else {
-        Vec::new()
     };
 
     // Resolve feature flags for this user. Profile unhealthy =>
@@ -737,39 +774,34 @@ async fn providers_list(State(state): State<AppState>) -> Json<ProvidersResponse
 
 async fn delete_profile(State(state): State<AppState>, session: Session) -> Result<StatusCode> {
     let uid = current_user_id(&session).await?;
-    // Look the user up before delete so we can hand devserver-control the
-    // username for the bulk tunnel evict; the row is gone after the
-    // DELETE returns, including via FK cascade. Tolerate "already
-    // gone" (cookie outlived the row) by treating None as a no-op.
-    let username = state
+
+    // Establish denial before acknowledging either synchronous completion or
+    // queued work. The profile transaction blocks new authorization and
+    // revokes every PAT while deliberately retaining the user row.
+    state
         .cfg
         .profile_client
-        .get_user(uid)
-        .await?
-        .map(|u| u.username);
+        .mark_user_pending_delete(uid)
+        .await?;
 
-    // FK cascades clean up identities and api_tokens.
-    state.cfg.profile_client.delete_user(uid).await?;
-
-    // Best-effort: drop every live tunnel the user had open.
-    // The proxy fleet holds those substreams in-process, so the cascade
-    // above doesn't reach them. A failure here logs and continues;
-    // the remote chan devserver will get rejected on its next handshake
-    // anyway because the PAT is now gone.
-    if let (Some(client), Some(name)) = (&state.cfg.workspace_admin, username) {
-        match client.kill_user_tunnels(&name).await {
-            Ok(killed) if killed > 0 => {
-                tracing::info!(user = %name, killed, "evicted tunnels on account delete");
-            }
-            Ok(_) => {}
-            Err(e) => {
-                tracing::warn!(error = ?e, user = %name, "tunnel evict on delete failed");
-            }
-        }
+    // The profile transaction above also reserves a durable AccountDelete
+    // outbox row. This first cut only reduces latency; profile performs the
+    // mandatory post-quiet-period cut and finalization after any restart.
+    let (kill, revoke) = tokio::join!(
+        state.cfg.workspace_admin.kill_owner_tunnels(uid),
+        state.cfg.workspace_admin.revoke_subject_sessions(uid),
+    );
+    if let Err(error) = kill {
+        tracing::warn!(%uid, ?error, "account deletion first tunnel cut failed");
     }
-
-    let _ = session.flush().await;
-    Ok(StatusCode::NO_CONTENT)
+    if let Err(error) = revoke {
+        tracing::warn!(%uid, ?error, "account deletion first session cut failed");
+    }
+    session
+        .flush()
+        .await
+        .map_err(|e| Error::Anyhow(anyhow::anyhow!("session flush: {e}")))?;
+    Ok(StatusCode::ACCEPTED)
 }
 
 #[derive(Debug, Deserialize)]
@@ -821,6 +853,10 @@ async fn update_username(
     // earlier rules already refused.
     if candidate.is_inappropriate() && !is_rustrict_allowed(&candidate) {
         return Err(Error::BadRequest("username not allowed".into()));
+    }
+
+    if candidate != user.username {
+        state.cfg.workspace_admin.kill_owner_tunnels(uid).await?;
     }
 
     let user = state
@@ -960,34 +996,30 @@ async fn tokens_revoke(
 ) -> Result<StatusCode> {
     let user = current_active_user(&state, &session).await?;
     let uid = user.id;
-    if !state
-        .api_tokens
-        .revoke(uid, id, &request_meta(&headers))
-        .await?
-    {
-        return Err(Error::NotFound);
-    }
-    // Best-effort: drop every live tunnel the user has. We can't
+    let meta = request_meta(&headers);
+    state
+        .cfg
+        .profile_client
+        .revoke_user_api_token(uid, id, meta.ip.as_deref(), meta.user_agent.as_deref())
+        .await?;
+    // Drop every live tunnel and browser session the user has. We can't
     // selectively kill the tunnel(s) backed by this specific PAT
     // (chan-tunnel-server doesn't track which token registered which
     // substream), so a revoke pulls down everything the user has
     // open. chan-serve instances using a non-revoked token will
     // reconnect on the next handshake; instances using the revoked
-    // token fail the next validate and stay disconnected. A failure
-    // to reach devserver-control logs and continues; the next handshake
-    // will refuse the token anyway via the DB check.
-    if let Some(client) = &state.cfg.workspace_admin {
-        match client.kill_user_tunnels(&user.username).await {
-            Ok(killed) if killed > 0 => {
-                tracing::info!(user = %user.username, killed, "evicted tunnels on PAT revoke");
-            }
-            Ok(_) => {}
-            Err(e) => {
-                tracing::warn!(error = ?e, user = %user.username, "tunnel evict on revoke failed");
-            }
-        }
+    // token fail the next validate and stay disconnected.
+    let (kill, revoke) = tokio::join!(
+        state.cfg.workspace_admin.kill_owner_tunnels(uid),
+        state.cfg.workspace_admin.revoke_subject_sessions(uid),
+    );
+    if let Err(error) = kill {
+        tracing::warn!(error = ?error, user = %user.username, "PAT first tunnel cut failed");
     }
-    Ok(StatusCode::NO_CONTENT)
+    if let Err(error) = revoke {
+        tracing::warn!(error = ?error, user = %user.username, "PAT first session cut failed");
+    }
+    Ok(StatusCode::ACCEPTED)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1013,9 +1045,9 @@ async fn tokens_audit(
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreateGrantBody {
     grantee_email: String,
-    role: String,
 }
 
 /// Owner creates / promotes a grant on one of their devservers. The
@@ -1034,14 +1066,10 @@ async fn devserver_grants_create(
     if !is_devserver_id_shape(&devserver_id) {
         return Err(Error::BadRequest("invalid devserver id".into()));
     }
-    let role = body.role.trim();
-    if role != "viewer" && role != "editor" {
-        return Err(Error::BadRequest("role must be viewer or editor".into()));
-    }
     let grant = state
         .cfg
         .profile_client
-        .create_devserver_grant(user.id, &devserver_id, body.grantee_email.trim(), role)
+        .create_devserver_grant(user.id, &devserver_id, body.grantee_email.trim())
         .await?;
     Ok((StatusCode::CREATED, Json(grant)))
 }
@@ -1073,12 +1101,16 @@ async fn devserver_grants_delete(
     // Pass the session user as owner_id; profile's DELETE filters on
     // `id = $1 AND owner_user_id = $2`, so a bug here cannot let
     // user A revoke user B's grant; 404 from profile instead.
-    state
+    let pending = state
         .cfg
         .profile_client
         .delete_devserver_grant(user.id, grant_id)
         .await?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok(if pending {
+        StatusCode::ACCEPTED
+    } else {
+        StatusCode::NO_CONTENT
+    })
 }
 
 async fn devservers_owned(
@@ -1135,31 +1167,6 @@ fn is_devserver_id_shape(s: &str) -> bool {
 // Share landing
 // ---------------------------------------------------------------------------
 
-/// Resolve the caller's display identity for an entry-token mint.
-/// Best-effort: entry is load-bearing, identity is cosmetic, so any
-/// profile failure mints without identity fields rather than failing
-/// the entry.
-async fn entry_caller_identity(
-    state: &AppState,
-    caller: Uuid,
-) -> gateway_common::devserver_gate::CallerIdentity {
-    match state.cfg.profile_client.get_user(caller).await {
-        Ok(Some(user)) => gateway_common::devserver_gate::CallerIdentity {
-            name: user.display_name,
-            email: Some(user.email),
-        },
-        Ok(None) => Default::default(),
-        Err(e) => {
-            tracing::warn!(
-                caller = %caller,
-                error = %e,
-                "entry mint: caller profile lookup failed; minting without identity",
-            );
-            Default::default()
-        }
-    }
-}
-
 /// Optional devserver selector on the share landings: a full
 /// devserver id or a hex prefix of one (the 12-hex disc form in
 /// practice).
@@ -1187,7 +1194,7 @@ fn sanitize_disc_selector(raw: &str) -> Option<String> {
 enum EntryTarget {
     Ok {
         devserver_id: String,
-        role: String,
+        proxy_id: String,
         /// Controller-reported base of the proxy node holding the
         /// registration. The entry mint validates it against the
         /// configured proxy namespace and builds the tenant origin
@@ -1201,8 +1208,7 @@ enum EntryTarget {
     Denied,
 }
 
-/// Pick which of the owner's live devservers an entry mint targets,
-/// plus the caller's role on it.
+/// Pick which of the owner's live devservers an entry mint targets.
 ///
 /// `selector` is an explicit devserver id or a hex prefix of one (the
 /// share landings' `?d=`, the desktop entry body's `devserver_id`);
@@ -1219,12 +1225,17 @@ async fn resolve_entry_target(
     caller: Uuid,
     selector: Option<&str>,
 ) -> Result<EntryTarget> {
-    let client = state.cfg.workspace_admin.as_ref().ok_or_else(|| {
-        Error::Anyhow(anyhow::anyhow!(
-            "devserver-control admin client not configured"
-        ))
-    })?;
-    let mut tunnels = client.list_user_tunnels(owner_username).await?;
+    let client = &state.cfg.workspace_admin;
+    let mut tunnels = client.list_owner_tunnels(owner_id).await?;
+    for tunnel in &tunnels {
+        crate::devserver_authority::verify_tunnel(&state.cfg.admission_lease_verifier, tunnel)
+            .map_err(|error| Error::Upstream(error.to_string()))?;
+        if tunnel.owner_user_id != owner_id || tunnel.user != owner_username {
+            return Err(Error::Upstream(
+                "controller returned a tunnel for the wrong owner".into(),
+            ));
+        }
+    }
     if let Some(sel) = selector {
         tunnels.retain(|t| t.devserver_id.starts_with(sel));
         if tunnels.len() > 1 {
@@ -1235,15 +1246,16 @@ async fn resolve_entry_target(
         return Ok(EntryTarget::Offline);
     }
     for t in tunnels {
-        if let Some(access) = state
+        if state
             .cfg
             .profile_client
             .devserver_access(owner_id, &t.devserver_id, caller)
             .await?
+            .is_some()
         {
             return Ok(EntryTarget::Ok {
                 devserver_id: t.devserver_id,
-                role: access.role,
+                proxy_id: t.proxy_id,
                 proxy_base_url: t.proxy_base_url,
             });
         }
@@ -1266,14 +1278,15 @@ async fn resolve_entry_target(
 ///      A grant gives the WHOLE devserver.
 ///   3. On access, mint an entry JWT (drv = the devserver_id) against
 ///      the tenant origin built from the controller row's node base
-///      (`{owner}--{disc}.{proxy}.<apex>`) and 303 to that node so it
-///      sets its gate cookies and serves `/{workspace}/`.
+///      (`{owner}--{disc}.{proxy}.<apex>`) and return an auto-submitting,
+///      no-store POST handoff so it sets gate cookies and serves the signed
+///      `/{workspace}/` target.
 async fn share_landing(
     State(state): State<AppState>,
     session: Session,
     Path((owner, workspace)): Path<(String, String)>,
     Query(query): Query<ShareQuery>,
-) -> Result<Redirect> {
+) -> Result<Response> {
     let owner = owner.trim().to_ascii_lowercase();
     let workspace = workspace.trim().to_ascii_lowercase();
     if !valid_username(&owner) || !is_workspace_name_shape(&workspace) {
@@ -1304,7 +1317,7 @@ async fn share_landing(
             .insert(KEY_POST_LOGIN_REDIRECT, &dest)
             .await
             .map_err(|e| Error::Anyhow(anyhow::anyhow!("session insert: {e}")))?;
-        return Ok(Redirect::to("/"));
+        return Ok(Redirect::to("/").into_response());
     };
 
     // Resolve the owner handle. 404 is the same shape as "no access" and
@@ -1327,12 +1340,12 @@ async fn share_landing(
         selector.as_deref(),
     )
     .await?;
-    let (devserver_id, role, proxy_base_url) = match target {
+    let (devserver_id, proxy_id, proxy_base_url) = match target {
         EntryTarget::Ok {
             devserver_id,
-            role,
+            proxy_id,
             proxy_base_url,
-        } => (devserver_id, role, proxy_base_url),
+        } => (devserver_id, proxy_id, proxy_base_url),
         EntryTarget::Offline | EntryTarget::Denied => {
             tracing::info!(
                 owner = %owner_user.username,
@@ -1349,16 +1362,29 @@ async fn share_landing(
     // configured proxy namespace is an upstream failure, never a mint.
     let tenant = state
         .cfg
-        .tenant_origin_for(&owner_user.username, &devserver_id, &proxy_base_url)
+        .tenant_origin_for(
+            &owner_user.username,
+            &devserver_id,
+            &proxy_id,
+            &proxy_base_url,
+        )
         .map_err(|e| Error::Upstream(e.to_string()))?;
-    let aud = chan_tunnel_proto::gateway_assertion::canonical_audience(&tenant.authority);
+    let tenant_url: url::Url = tenant
+        .origin
+        .parse()
+        .map_err(|e| Error::Upstream(format!("invalid resolved tenant origin: {e}")))?;
+    let aud = chan_tunnel_proto::gateway_assertion::canonical_audience(
+        tenant_url.scheme(),
+        &tenant.authority,
+    );
     let token = gateway_common::devserver_gate::encode_entry(
-        state.cfg.workspace_gate_secret.as_bytes(),
+        &state.cfg.entry_signer,
         uid,
-        &role,
+        owner_user.id,
         &devserver_id,
         &aud,
-        entry_caller_identity(&state, uid).await,
+        &proxy_id,
+        &format!("/{workspace}/"),
     )
     .map_err(|e| Error::Anyhow(anyhow::anyhow!("mint entry token: {e}")))?;
 
@@ -1366,13 +1392,11 @@ async fn share_landing(
         owner = %owner_user.username,
         workspace = %workspace,
         caller = %uid,
-        role = %role,
         devserver_id = %devserver_id,
         "share landing: minting entry token",
     );
 
-    let url = format!("{}/{workspace}/?t={token}", tenant.origin);
-    Ok(Redirect::to(&url))
+    entry_handoff_response(&tenant.origin, &token)
 }
 
 /// Whole-devserver open: land the caller on the launcher served at the
@@ -1380,15 +1404,15 @@ async fn share_landing(
 /// segment: resolve the owner's one live devserver, check access (owner
 /// or grantee), mint an entry JWT (`drv` = that devserver_id) against
 /// the owning node's tenant origin, and 303 to that node's ROOT
-/// `…/?t={token}` so the proxy sets its gate cookies and forwards `/`
-/// to the launcher. The
+/// through a body-only POST handoff so the proxy sets its gate cookies and
+/// forwards `/` to the launcher. The
 /// per-workspace `share_landing` above is the same shape with a tenant path.
 async fn share_landing_root(
     State(state): State<AppState>,
     session: Session,
     Path(owner): Path<String>,
     Query(query): Query<ShareQuery>,
-) -> Result<Redirect> {
+) -> Result<Response> {
     let owner = owner.trim().to_ascii_lowercase();
     if !valid_username(&owner) {
         return Err(Error::NotFound);
@@ -1413,7 +1437,7 @@ async fn share_landing_root(
             .insert(KEY_POST_LOGIN_REDIRECT, &dest)
             .await
             .map_err(|e| Error::Anyhow(anyhow::anyhow!("session insert: {e}")))?;
-        return Ok(Redirect::to("/"));
+        return Ok(Redirect::to("/").into_response());
     };
 
     // Resolve the owner handle. 404 is the same shape as "no access" and
@@ -1442,12 +1466,12 @@ async fn share_landing_root(
         selector.as_deref(),
     )
     .await?;
-    let (devserver_id, role, proxy_base_url) = match target {
+    let (devserver_id, proxy_id, proxy_base_url) = match target {
         EntryTarget::Ok {
             devserver_id,
-            role,
+            proxy_id,
             proxy_base_url,
-        } => (devserver_id, role, proxy_base_url),
+        } => (devserver_id, proxy_id, proxy_base_url),
         EntryTarget::Offline | EntryTarget::Denied => {
             tracing::info!(
                 owner = %owner_user.username,
@@ -1463,29 +1487,75 @@ async fn share_landing_root(
     // outside the configured proxy namespace is an upstream failure.
     let tenant = state
         .cfg
-        .tenant_origin_for(&owner_user.username, &devserver_id, &proxy_base_url)
+        .tenant_origin_for(
+            &owner_user.username,
+            &devserver_id,
+            &proxy_id,
+            &proxy_base_url,
+        )
         .map_err(|e| Error::Upstream(e.to_string()))?;
-    let aud = chan_tunnel_proto::gateway_assertion::canonical_audience(&tenant.authority);
+    let tenant_url: url::Url = tenant
+        .origin
+        .parse()
+        .map_err(|e| Error::Upstream(format!("invalid resolved tenant origin: {e}")))?;
+    let aud = chan_tunnel_proto::gateway_assertion::canonical_audience(
+        tenant_url.scheme(),
+        &tenant.authority,
+    );
     let token = gateway_common::devserver_gate::encode_entry(
-        state.cfg.workspace_gate_secret.as_bytes(),
+        &state.cfg.entry_signer,
         uid,
-        &role,
+        owner_user.id,
         &devserver_id,
         &aud,
-        entry_caller_identity(&state, uid).await,
+        &proxy_id,
+        "/",
     )
     .map_err(|e| Error::Anyhow(anyhow::anyhow!("mint entry token: {e}")))?;
 
     tracing::info!(
         owner = %owner_user.username,
         caller = %uid,
-        role = %role,
         devserver_id = %devserver_id,
         "whole-devserver landing: minting entry token",
     );
 
-    let url = format!("{}/?t={token}", tenant.origin);
-    Ok(Redirect::to(&url))
+    entry_handoff_response(&tenant.origin, &token)
+}
+
+fn entry_handoff_response(proxy_origin: &str, credential: &str) -> Result<Response> {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+    use rand::RngCore;
+
+    let mut nonce_bytes = [0_u8; 18];
+    rand::rngs::OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = URL_SAFE_NO_PAD.encode(nonce_bytes);
+    let action = format!(
+        "{}{}",
+        proxy_origin.trim_end_matches('/'),
+        gateway_common::devserver_gate::ENTRY_EXCHANGE_PATH,
+    );
+    let body = format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"referrer\" content=\"no-referrer\"></head>\
+         <body><form method=\"post\" action=\"{}\"><input type=\"hidden\" name=\"credential\" value=\"{}\"></form>\
+         <script nonce=\"{}\">document.forms[0].submit()</script></body></html>",
+        crate::pages::html_escape(&action),
+        crate::pages::html_escape(credential),
+        nonce,
+    );
+    let csp = format!(
+        "default-src 'none'; script-src 'nonce-{nonce}'; form-action {proxy_origin}; base-uri 'none'; frame-ancestors 'none'"
+    );
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+        .header(header::CACHE_CONTROL, "no-store")
+        .header(header::REFERRER_POLICY, "no-referrer")
+        .header(header::CONTENT_SECURITY_POLICY, csp)
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .body(axum::body::Body::from(body))
+        .map_err(|error| Error::Anyhow(error.into()))
 }
 
 pub(crate) const DESKTOP_CONNECT_SCOPE: &str = "desktop.connect";
@@ -1550,6 +1620,10 @@ struct DesktopEntryBody {
     /// devserver id. Absent both = first-accessible-live fallback.
     #[serde(default)]
     owner: Option<String>,
+    /// Immutable owner identity from the authenticated roster. Required for
+    /// every explicit target; usernames are routing/display labels only.
+    #[serde(default)]
+    owner_user_id: Option<Uuid>,
     #[serde(default)]
     devserver_id: Option<String>,
 }
@@ -1557,12 +1631,14 @@ struct DesktopEntryBody {
 /// Answers for ONE connection, so the fields stay singular. `username`
 /// names the devserver's OWNER (the wildcard host label); it equals
 /// the caller except for shared devservers targeted via `owner`.
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 struct DesktopEntryResponse {
+    owner_user_id: Uuid,
     username: String,
     devserver_id: String,
     proxy_origin: String,
-    entry_url: String,
+    entry_exchange_url: String,
+    entry_credential: String,
     expires_at: DateTime<Utc>,
 }
 
@@ -1570,7 +1646,7 @@ async fn desktop_devserver_entry(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<DesktopEntryBody>,
-) -> Result<Json<DesktopEntryResponse>> {
+) -> Result<Response> {
     let token = bearer_token(&headers).ok_or(Error::Unauthorized)?;
     let validated = state
         .api_tokens
@@ -1596,34 +1672,40 @@ async fn desktop_devserver_entry(
     // shared with the caller; absent = the caller's own. Unknown
     // owner reads as access_denied so the desktop clears its stored
     // selection without learning whether the handle exists.
-    let explicit_target = body.owner.is_some() || body.devserver_id.is_some();
-    let (owner_id, owner_username) = match body.owner.as_deref() {
-        None => (validated.user_id, validated.username.clone()),
-        Some(raw) => {
-            let owner = raw.trim().to_ascii_lowercase();
-            if owner == validated.username {
-                (validated.user_id, validated.username.clone())
-            } else {
-                if !valid_username(&owner) {
-                    return Err(Error::DesktopEntryNotFound {
-                        reason: ENTRY_REASON_ACCESS_DENIED,
-                        username: owner,
-                        label: None,
-                    });
-                }
-                let owner_user = state
-                    .cfg
-                    .profile_client
-                    .find_user_by_username(&owner)
-                    .await?
-                    .ok_or_else(|| Error::DesktopEntryNotFound {
-                        reason: ENTRY_REASON_ACCESS_DENIED,
-                        username: owner.clone(),
-                        label: None,
-                    })?;
-                (owner_user.id, owner_user.username)
-            }
+    let explicit_target =
+        body.owner.is_some() || body.owner_user_id.is_some() || body.devserver_id.is_some();
+    let (owner_id, owner_username) = if explicit_target {
+        let owner_id = body
+            .owner_user_id
+            .ok_or_else(|| Error::DesktopEntryNotFound {
+                reason: ENTRY_REASON_ACCESS_DENIED,
+                username: body.owner.clone().unwrap_or_default(),
+                label: None,
+            })?;
+        if body.devserver_id.is_none() {
+            return Err(Error::DesktopEntryNotFound {
+                reason: ENTRY_REASON_DEVSERVER_OFFLINE,
+                username: body.owner.clone().unwrap_or_default(),
+                label: None,
+            });
         }
+        if owner_id == validated.user_id {
+            (validated.user_id, validated.username.clone())
+        } else {
+            let owner_user = state
+                .cfg
+                .profile_client
+                .get_user(owner_id)
+                .await?
+                .ok_or_else(|| Error::DesktopEntryNotFound {
+                    reason: ENTRY_REASON_ACCESS_DENIED,
+                    username: body.owner.clone().unwrap_or_default(),
+                    label: None,
+                })?;
+            (owner_user.id, owner_user.username)
+        }
+    } else {
+        (validated.user_id, validated.username.clone())
     };
     let selector = match body.devserver_id.as_deref() {
         None => None,
@@ -1646,12 +1728,12 @@ async fn desktop_devserver_entry(
         selector.as_deref(),
     )
     .await?;
-    let (devserver_id, role, proxy_base_url) = match target {
+    let (devserver_id, proxy_id, proxy_base_url) = match target {
         EntryTarget::Ok {
             devserver_id,
-            role,
+            proxy_id,
             proxy_base_url,
-        } => (devserver_id, role, proxy_base_url),
+        } => (devserver_id, proxy_id, proxy_base_url),
         EntryTarget::Offline if explicit_target => {
             return Err(Error::DesktopEntryNotFound {
                 reason: ENTRY_REASON_DEVSERVER_OFFLINE,
@@ -1682,36 +1764,57 @@ async fn desktop_devserver_entry(
     // failure, never a fallback to the shared apex.
     let tenant = state
         .cfg
-        .tenant_origin_for(&owner_username, &devserver_id, &proxy_base_url)
+        .tenant_origin_for(&owner_username, &devserver_id, &proxy_id, &proxy_base_url)
         .map_err(|e| Error::Upstream(e.to_string()))?;
-    let aud = chan_tunnel_proto::gateway_assertion::canonical_audience(&tenant.authority);
+    let tenant_url: url::Url = tenant
+        .origin
+        .parse()
+        .map_err(|e| Error::Upstream(format!("invalid resolved tenant origin: {e}")))?;
+    let aud = chan_tunnel_proto::gateway_assertion::canonical_audience(
+        tenant_url.scheme(),
+        &tenant.authority,
+    );
     let entry_token = gateway_common::devserver_gate::encode_entry(
-        state.cfg.workspace_gate_secret.as_bytes(),
+        &state.cfg.entry_signer,
         validated.user_id,
-        &role,
+        owner_id,
         &devserver_id,
         &aud,
-        entry_caller_identity(&state, validated.user_id).await,
+        &proxy_id,
+        &path,
     )
     .map_err(|e| Error::Anyhow(anyhow::anyhow!("mint desktop entry token: {e}")))?;
     let proxy_origin = tenant.origin;
-    let sep = if path.contains('?') { '&' } else { '?' };
-    let entry_url = format!("{proxy_origin}{path}{sep}t={entry_token}");
+    let entry_exchange_url = format!(
+        "{}{}",
+        proxy_origin.trim_end_matches('/'),
+        gateway_common::devserver_gate::ENTRY_EXCHANGE_PATH,
+    );
     tracing::info!(
         user = %validated.username,
         owner = %owner_username,
         devserver_id = %devserver_id,
         path = %path,
-        role = %role,
-        "desktop entry: minted entry URL",
+        "desktop entry: minted entry credential",
     );
-    Ok(Json(DesktopEntryResponse {
+    let mut response = Json(DesktopEntryResponse {
+        owner_user_id: owner_id,
         username: owner_username,
         devserver_id,
         proxy_origin,
-        entry_url,
+        entry_exchange_url,
+        entry_credential: entry_token,
         expires_at: Utc::now() + chrono::Duration::seconds(30),
-    }))
+    })
+    .into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response.headers_mut().insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    Ok(response)
 }
 
 /// Classify a no-live-tunnel desktop entry for the 404 body: no
@@ -1883,6 +1986,12 @@ async fn admin_tokens_create(
 #[derive(Debug, Deserialize)]
 struct ValidateBody {
     token: String,
+    /// Both fields are required for a tunnel admission validation and
+    /// omitted together on the post-registration display-name refresh.
+    #[serde(default)]
+    proxy_id: Option<devserver_control_proto::ProxyId>,
+    #[serde(default)]
+    registration_id: Option<Uuid>,
     /// Optional display name the devserver announced in its tunnel
     /// `Hello` (devserver-proxy forwards it as a follow-up validate
     /// once the registration is accepted). When present, it refreshes
@@ -1916,10 +2025,23 @@ async fn validate_token(
     }
     // chan-tunnel forwards the originating client IP via
     // X-Forwarded-For; we record that as the validate-IP for audit.
-    let v = state
-        .api_tokens
-        .validate(&body.token, &request_meta(&headers))
-        .await?;
+    let meta = request_meta(&headers);
+    let v = match (body.proxy_id, body.registration_id) {
+        (Some(proxy_id), Some(registration_id)) if !registration_id.is_nil() => {
+            state
+                .api_tokens
+                .validate_for_admission(&body.token, proxy_id, registration_id, &meta)
+                .await?
+        }
+        (None, None) if body.name.is_some() => {
+            state.api_tokens.validate(&body.token, &meta).await?
+        }
+        _ => {
+            return Err(Error::BadRequest(
+                "proxy_id and non-nil registration_id are required for admission".into(),
+            ))
+        }
+    };
     // A tunnel-announced display name refreshes the devserver row's
     // label through the same gated upsert every mint site uses
     // (tunnel scope only, best-effort). Sanitized to the label bound
@@ -2072,17 +2194,22 @@ mod tests {
         let full_id = "a".repeat(64);
         let proxy_origin = "https://alice--aaaaaaaaaaaa.p1.usr.chan.app";
         let response = DesktopEntryResponse {
+            owner_user_id: Uuid::nil(),
             username: "alice".to_string(),
             devserver_id: full_id.clone(),
             proxy_origin: proxy_origin.to_string(),
-            entry_url: format!("{proxy_origin}/notes/index.html?t=entry"),
+            entry_exchange_url: format!(
+                "{proxy_origin}{}",
+                gateway_common::devserver_gate::ENTRY_EXCHANGE_PATH
+            ),
+            entry_credential: "entry".to_string(),
             expires_at: Utc::now() + chrono::Duration::seconds(30),
         };
         let wire = serde_json::to_value(response).unwrap();
         assert_eq!(wire["username"], "alice");
         assert_eq!(wire["devserver_id"], full_id);
         assert_eq!(wire["proxy_origin"], proxy_origin);
-        let entry_url = wire["entry_url"].as_str().unwrap();
+        let entry_url = wire["entry_exchange_url"].as_str().unwrap();
         assert_eq!(
             url::Url::parse(entry_url)
                 .unwrap()
@@ -2090,6 +2217,9 @@ mod tests {
                 .ascii_serialization(),
             proxy_origin
         );
+        assert_eq!(wire["entry_credential"], "entry");
+        assert!(entry_url.split('?').nth(1).is_none());
+        assert!(wire.get("entry_url").is_none());
         assert!(wire.get("expires_at").is_some());
     }
 

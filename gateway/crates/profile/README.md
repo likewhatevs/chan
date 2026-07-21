@@ -20,6 +20,8 @@ export DATABASE_URL=postgres://localhost/chan_gateway
 export BIND_ADDR=127.0.0.1:7001
 export PROFILE_AUTH_TOKEN=dev-service-token
 export PROFILE_ADMIN_TOKEN=dev-admin-token   # optional; gates /v1/admin/*
+export DEVSERVER_ADMIN_URL=http://127.0.0.1:7003
+export DEVSERVER_PROFILE_ADMIN_TOKEN=dev-profile-control-token
 cargo run -p profile
 ```
 
@@ -33,10 +35,14 @@ Migrations under `migrations/` run on startup.
 | `BIND_ADDR`            | no       | Default `127.0.0.1:7001`          |
 | `PROFILE_AUTH_TOKEN`   | yes      | Bearer for `/v1/users/*` routes   |
 | `PROFILE_ADMIN_TOKEN`  | no       | Bearer for `/v1/admin/*` routes   |
-| `DEVSERVER_ADMIN_URL`  | no       | devserver-control admin base; set with the token |
-| `DEVSERVER_ADMIN_TOKEN`| no       | enables the admin-block fan-out that evicts the user's tunnels |
+| `DEVSERVER_ADMIN_URL`  | yes      | protected devserver-control admin base |
+| `DEVSERVER_PROFILE_ADMIN_TOKEN` | yes | profile-scoped controller bearer |
 
-A missing `PROFILE_ADMIN_TOKEN` makes every `/v1/admin/*` route return 401; that is the safe default for a fresh deploy. When `DEVSERVER_ADMIN_URL` + `DEVSERVER_ADMIN_TOKEN` are set, blocking a user also tells devserver-control to drop that user's live tunnels fleet-wide (best-effort).
+A missing `PROFILE_ADMIN_TOKEN` makes every `/v1/admin/*` route return 401; that
+is the safe default for a fresh deploy. Every access-denial mutation writes a
+durable revocation job in the same transaction. The worker uses the
+profile-scoped controller bearer to cut tunnels and browser sessions across the
+fleet and retries across service restarts until settled or exhausted.
 
 ## Routes
 

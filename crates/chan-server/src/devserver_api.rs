@@ -67,7 +67,7 @@ pub struct DevserverInfo {
 /// (`http://127.0.0.1:{local_port}{prefix}/index.html?t={token}`, the
 /// loopback or `ssh -L` making the devserver's port reachable locally), so
 /// it never allocates the prefix or mints the token.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkspaceEntry {
     /// Non-empty, legible route prefix the tenant is mounted at, e.g.
     /// `/api/notes-1a2b3c`. The devserver allocates it.
@@ -89,6 +89,21 @@ pub struct WorkspaceEntry {
     pub token: String,
 }
 
+impl std::fmt::Debug for WorkspaceEntry {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WorkspaceEntry")
+            .field("prefix", &self.prefix)
+            .field("path", &self.path)
+            .field("label", &self.label)
+            .field("on", &self.on)
+            .field("status", &self.status)
+            .field("error", &self.error)
+            .field("token", &"[REDACTED]")
+            .finish()
+    }
+}
+
 /// One element of `GET /api/devserver/windows`: a persisted window on the box,
 /// aggregated across ALL tenants (workspace + standalone-terminal) for the
 /// desktop's Window menu (menu-reopen of closed devserver windows). A row
@@ -96,7 +111,7 @@ pub struct WorkspaceEntry {
 /// discard reaps the blob + PTYs, so discarded windows never appear. The
 /// desktop filters `saved && !connected` (closed-but-persisted = reopenable)
 /// and reopens at `prefix` with a re-minted token.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DevserverWindow {
     /// The `?w=` window id (== the session-blob key == the WS `window_id`).
     pub label: String,
@@ -116,6 +131,21 @@ pub struct DevserverWindow {
     pub connected: bool,
     /// A durable session blob exists for `label`.
     pub saved: bool,
+}
+
+impl std::fmt::Debug for DevserverWindow {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DevserverWindow")
+            .field("label", &self.label)
+            .field("prefix", &self.prefix)
+            .field("token", &"[REDACTED]")
+            .field("kind", &self.kind)
+            .field("title", &self.title)
+            .field("connected", &self.connected)
+            .field("saved", &self.saved)
+            .finish()
+    }
 }
 
 /// Body of `POST /api/devserver/workspaces`: mount the workspace rooted at
@@ -241,6 +271,9 @@ mod tests {
             })
         );
         assert_eq!(entry, serde_json::from_value(v).unwrap());
+        let debug = format!("{entry:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("tok_abc"));
     }
 
     #[test]
@@ -281,6 +314,9 @@ mod tests {
             connected: false,
             saved: true,
         };
+        let debug = format!("{win:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains(&win.token));
         let v = serde_json::to_value(&win).unwrap();
         assert_eq!(
             v,

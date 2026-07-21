@@ -53,7 +53,9 @@ only by sibling gateway services (identity, devserver-proxy); not exposed
 publicly. Ships as a single static binary."""
 section = "net"
 priority = "optional"
-depends = "$auto, adduser"
+# profile's systemd unit Requires the migration unit and binary shipped by the
+# matching identity package. Keep this exact pin in lockstep with workspace.package.
+depends = "$auto, adduser, chan-gateway-identity (= 0.74.0-1)"
 maintainer-scripts = "packaging/"
 assets = [
     ["target/release/profile-service", "/usr/bin/chan-gateway-profile", "755"],

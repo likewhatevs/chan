@@ -59,12 +59,10 @@ pub struct AppState {
     /// route 401, which is the safe default if the env var was
     /// forgotten on a fresh deploy.
     pub admin_token: Option<String>,
-    /// Optional devserver-control admin client used by `admin_block_user`
-    /// to evict the user's live tunnels at the same moment we set
-    /// `blocked_at`. `None` is fine in dev: tunnels just linger
-    /// until reconnect, at which point the validate query refuses
-    /// them on `blocked_at IS NOT NULL`.
-    pub workspace_admin: Option<DevserverControlClient>,
+    /// Scope-specific devserver-control client used for block and grant
+    /// revocation. Its configuration is mandatory at startup.
+    pub workspace_admin: DevserverControlClient,
+    pub revocations: crate::revocation::RevocationCoordinator,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -73,6 +71,14 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v1/users/{id}",
             get(get_user).patch(update_user).delete(delete_user),
+        )
+        .route(
+            "/v1/users/{id}/pending-delete",
+            post(mark_user_pending_delete),
+        )
+        .route(
+            "/v1/users/{id}/tokens/{token_id}/revoke",
+            post(revoke_user_token),
         )
         .route("/v1/users/{id}/username", patch(update_username))
         .route("/v1/users/by-identity", get(get_user_by_identity))
@@ -273,14 +279,101 @@ async fn update_user(
 }
 
 async fn delete_user(State(state): State<AppState>, Path(id): Path<Uuid>) -> Result<StatusCode> {
-    let res = sqlx::query("DELETE FROM users WHERE id = $1")
-        .bind(id)
-        .execute(&state.pool)
-        .await?;
-    if res.rows_affected() == 0 {
+    begin_user_delete(&state, id).await
+}
+
+/// Establish the local denial state required before identity can acknowledge
+/// an asynchronous account deletion. This transaction blocks every new
+/// authorization and revokes every PAT while leaving the user row in place
+/// until devserver-control confirms the live data plane is gone.
+async fn mark_user_pending_delete(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode> {
+    begin_user_delete(&state, id).await
+}
+
+async fn begin_user_delete(state: &AppState, id: Uuid) -> Result<StatusCode> {
+    let mut tx = state.pool.begin().await?;
+    let updated = sqlx::query(
+        "UPDATE users \
+         SET blocked_at = COALESCE(blocked_at, now()), \
+             block_reason = 'account deletion pending', \
+             updated_at = now() \
+         WHERE id = $1",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    if updated.rows_affected() == 0 {
         return Err(Error::NotFound);
     }
-    Ok(StatusCode::NO_CONTENT)
+    sqlx::query(
+        "UPDATE api_tokens SET revoked_at = now() \
+         WHERE user_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO auth_audit (user_id, action, note) \
+         VALUES ($1, 'account_delete_pending', 'awaiting data-plane revocation')",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    crate::revocation::reserve_tx(
+        &mut tx,
+        &crate::revocation::RevocationJob::AccountDelete(id),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RevokeUserToken {
+    ip: Option<String>,
+    user_agent: Option<String>,
+}
+
+/// Identity-service PAT revocation boundary. Profile owns both the token row
+/// and revocation outbox, so ownership verification, local denial, audit, and
+/// durable first-cut reservation commit atomically.
+async fn revoke_user_token(
+    State(state): State<AppState>,
+    Path((id, token_id)): Path<(Uuid, Uuid)>,
+    Json(body): Json<RevokeUserToken>,
+) -> Result<StatusCode> {
+    let mut tx = state.pool.begin().await?;
+    let active = sqlx::query_scalar::<_, bool>(
+        "SELECT revoked_at IS NULL FROM api_tokens \
+         WHERE id = $1 AND user_id = $2 FOR UPDATE",
+    )
+    .bind(token_id)
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(Error::NotFound)?;
+    if active {
+        sqlx::query("UPDATE api_tokens SET revoked_at = now() WHERE id = $1")
+            .bind(token_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "INSERT INTO api_token_audit (token_id, action, ip, user_agent) \
+             VALUES ($1, 'revoked', $2, $3)",
+        )
+        .bind(token_id)
+        .bind(body.ip.as_deref())
+        .bind(body.user_agent.as_deref())
+        .execute(&mut *tx)
+        .await?;
+    }
+    crate::revocation::reserve_tx(&mut tx, &crate::revocation::RevocationJob::Subject(id)).await?;
+    tx.commit().await?;
+    Ok(StatusCode::ACCEPTED)
 }
 
 #[derive(Debug, Deserialize)]
@@ -689,7 +782,7 @@ async fn admin_block_user(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(body): Json<BlockUser>,
-) -> Result<Json<User>> {
+) -> Result<(StatusCode, Json<User>)> {
     let mut tx = state.pool.begin().await?;
 
     let user = sqlx::query_as::<_, User>(&format!(
@@ -723,29 +816,10 @@ async fn admin_block_user(
         .bind(body.reason.as_deref())
         .execute(&mut *tx)
         .await?;
+    crate::revocation::reserve_tx(&mut tx, &crate::revocation::RevocationJob::Subject(id)).await?;
 
     tx.commit().await?;
-
-    // Best-effort: drop every live tunnel the user has at the moment
-    // we block. Without this, an authenticated `chan devserver` keeps
-    // serving over its existing yamux substreams until it disconnects;
-    // the DB block is already enforced for new validates and new
-    // sessions, but the live registrations the proxy fleet holds don't
-    // see the row change. A devserver-control outage at this exact
-    // moment is acceptable: the next reconnect's validate refuses the
-    // token on `blocked_at IS NOT NULL`, so the gap closes shortly.
-    if let Some(client) = &state.workspace_admin {
-        match client.kill_user_tunnels(&user.username).await {
-            Ok(killed) if killed > 0 => {
-                tracing::info!(user = %user.username, killed, "evicted tunnels on admin block");
-            }
-            Ok(_) => {}
-            Err(e) => {
-                tracing::warn!(error = ?e, user = %user.username, "tunnel evict on block failed");
-            }
-        }
-    }
-    Ok(Json(user))
+    Ok((StatusCode::ACCEPTED, Json(user)))
 }
 
 /// Admin-only: rewrite a user's email. Records the change in
@@ -793,6 +867,23 @@ async fn admin_unblock_user(
     Path(id): Path<Uuid>,
 ) -> Result<Json<User>> {
     let mut tx = state.pool.begin().await?;
+    let exists = sqlx::query_scalar::<_, Uuid>("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    if exists.is_none() {
+        return Err(Error::NotFound);
+    }
+    let deletion_pending = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM control_revocation_jobs \
+         WHERE job_key = $1 AND kind = 'account_delete')",
+    )
+    .bind(format!("subject:{id}"))
+    .fetch_one(&mut *tx)
+    .await?;
+    if deletion_pending {
+        return Err(Error::Conflict("account deletion is pending"));
+    }
     let user = sqlx::query_as::<_, User>(&format!(
         "UPDATE users \
          SET blocked_at = NULL, block_reason = NULL, updated_at = now() \
@@ -870,31 +961,32 @@ async fn admin_revoke_token(
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode> {
     let mut tx = state.pool.begin().await?;
-    let res = sqlx::query(
+    let revoked_user = sqlx::query_scalar::<_, Uuid>(
         "UPDATE api_tokens SET revoked_at = now() \
-         WHERE id = $1 AND revoked_at IS NULL",
+         WHERE id = $1 AND revoked_at IS NULL \
+         RETURNING user_id",
     )
     .bind(id)
-    .execute(&mut *tx)
+    .fetch_optional(&mut *tx)
     .await?;
-    if res.rows_affected() == 0 {
-        let exists =
-            sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM api_tokens WHERE id = $1)")
+    let user_id = match revoked_user {
+        Some(user_id) => {
+            sqlx::query("INSERT INTO api_token_audit (token_id, action) VALUES ($1, 'revoked')")
                 .bind(id)
-                .fetch_one(&mut *tx)
+                .execute(&mut *tx)
                 .await?;
-        if !exists {
-            return Err(Error::NotFound);
+            user_id
         }
-        tx.commit().await?;
-        return Ok(StatusCode::NO_CONTENT);
-    }
-    sqlx::query("INSERT INTO api_token_audit (token_id, action) VALUES ($1, 'revoked')")
-        .bind(id)
-        .execute(&mut *tx)
+        None => sqlx::query_scalar::<_, Uuid>("SELECT user_id FROM api_tokens WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(Error::NotFound)?,
+    };
+    crate::revocation::reserve_tx(&mut tx, &crate::revocation::RevocationJob::Subject(user_id))
         .await?;
     tx.commit().await?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok(StatusCode::ACCEPTED)
 }
 
 /// Idempotent devserver create. Re-issuing for the same
@@ -1032,12 +1124,9 @@ async fn list_devservers(
     Ok(Json(rows))
 }
 
-/// Drop a devserver and (via FK CASCADE) every grant on it. The owner
-/// remains responsible for stopping any `chan devserver` they have
-/// running; the in-memory devserver-proxy registration outlives the
-/// DELETE here. We do not call devserver-proxy admin from this path
-/// because the in-memory tunnel could still be useful; ops that want to
-/// evict tunnels should use the admin block flow instead.
+/// Drop an unshared devserver registry row. Shared rows must have each grant
+/// removed through the exact-revocation settlement path first; silently
+/// cascading a grant would leave its one-hour proxy session authorized.
 async fn delete_devserver(
     State(state): State<AppState>,
     Path((owner_id, devserver_id)): Path<(Uuid, String)>,
@@ -1046,22 +1135,36 @@ async fn delete_devserver(
     if !valid_devserver_id(&devserver_id) {
         return Err(Error::BadRequest("invalid devserver id".into()));
     }
-    let res = sqlx::query("DELETE FROM devservers WHERE owner_user_id = $1 AND devserver_id = $2")
+    let res = sqlx::query(
+        "DELETE FROM devservers d \
+         WHERE owner_user_id = $1 AND devserver_id = $2 \
+           AND NOT EXISTS (SELECT 1 FROM devserver_grants g \
+                           WHERE g.owner_user_id = d.owner_user_id \
+                             AND g.devserver_id = d.devserver_id)",
+    )
+    .bind(owner_id)
+    .bind(&devserver_id)
+    .execute(&state.pool)
+    .await?;
+    if res.rows_affected() == 0 {
+        let exists = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM devservers WHERE owner_user_id = $1 AND devserver_id = $2)",
+        )
         .bind(owner_id)
         .bind(&devserver_id)
-        .execute(&state.pool)
+        .fetch_one(&state.pool)
         .await?;
-    if res.rows_affected() == 0 {
-        return Err(Error::NotFound);
+        return if exists {
+            Err(Error::Conflict("remove devserver grants first"))
+        } else {
+            Err(Error::NotFound)
+        };
     }
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Idempotent grant create/promote. Re-adding the same email on the
-/// same (owner, devserver) returns the existing row with `role` updated
-/// to the latest value; the original `created_at`, `grantee_user_id`
-/// and `accepted_at` are preserved via COALESCE so an already-claimed
-/// grant doesn't lose its claim when the owner adjusts the role.
+/// Idempotent grant create. Re-adding the same email on the same
+/// (owner, devserver) returns the existing binary access row.
 ///
 /// grantee_user_id resolution: best-effort at insert time (matches
 /// the common case where the recipient already has an account).
@@ -1080,11 +1183,6 @@ async fn create_devserver_grant(
     if !valid_email(email) {
         return Err(Error::BadRequest("invalid email".into()));
     }
-    let role = body.role.trim();
-    if role != "viewer" && role != "editor" {
-        return Err(Error::BadRequest("invalid role".into()));
-    }
-
     let owner_exists =
         sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)")
             .bind(owner_id)
@@ -1118,21 +1216,19 @@ async fn create_devserver_grant(
 
     let row = sqlx::query_as::<_, DevserverGrant>(
         "INSERT INTO devserver_grants \
-             (owner_user_id, devserver_id, grantee_email, grantee_user_id, role, accepted_at) \
-         VALUES ($1, $2, $3, $4, $5, \
+             (owner_user_id, devserver_id, grantee_email, grantee_user_id, accepted_at) \
+         VALUES ($1, $2, $3, $4, \
                  CASE WHEN $4::uuid IS NULL THEN NULL ELSE now() END) \
          ON CONFLICT (owner_user_id, devserver_id, lower(grantee_email)) DO UPDATE SET \
-             role = EXCLUDED.role, \
              grantee_user_id = COALESCE(devserver_grants.grantee_user_id, EXCLUDED.grantee_user_id), \
              accepted_at = COALESCE(devserver_grants.accepted_at, EXCLUDED.accepted_at) \
-         RETURNING id, owner_user_id, devserver_id, grantee_email, grantee_user_id, role, \
+         RETURNING id, owner_user_id, devserver_id, grantee_email, grantee_user_id, \
                    created_at, accepted_at",
     )
     .bind(owner_id)
     .bind(&devserver_id)
     .bind(email)
     .bind(grantee_id)
-    .bind(role)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -1149,7 +1245,7 @@ async fn list_devserver_grants(
         return Err(Error::BadRequest("invalid devserver id".into()));
     }
     let rows = sqlx::query_as::<_, DevserverGrant>(
-        "SELECT id, owner_user_id, devserver_id, grantee_email, grantee_user_id, role, \
+        "SELECT id, owner_user_id, devserver_id, grantee_email, grantee_user_id, \
                 created_at, accepted_at \
          FROM devserver_grants \
          WHERE owner_user_id = $1 AND devserver_id = $2 \
@@ -1168,15 +1264,41 @@ async fn delete_devserver_grant(
     State(state): State<AppState>,
     Path((owner_id, grant_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode> {
-    let res = sqlx::query("DELETE FROM devserver_grants WHERE id = $1 AND owner_user_id = $2")
+    let mut tx = state.pool.begin().await?;
+    let grant = sqlx::query_as::<_, (Option<Uuid>, Uuid, String)>(
+        "SELECT grantee_user_id, owner_user_id, devserver_id \
+         FROM devserver_grants WHERE id = $1 AND owner_user_id = $2 FOR UPDATE",
+    )
+    .bind(grant_id)
+    .bind(owner_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(Error::NotFound)?;
+    let Some(subject_user_id) = grant.0 else {
+        sqlx::query("DELETE FROM devserver_grants WHERE id = $1 AND owner_user_id = $2")
+            .bind(grant_id)
+            .bind(owner_id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        return Ok(StatusCode::NO_CONTENT);
+    };
+    let job = crate::revocation::RevocationJob::Exact {
+        subject_user_id,
+        owner_user_id: grant.1,
+        devserver_id: grant.2,
+    };
+    crate::revocation::reserve_tx(&mut tx, &job).await?;
+    let deleted = sqlx::query("DELETE FROM devserver_grants WHERE id = $1 AND owner_user_id = $2")
         .bind(grant_id)
         .bind(owner_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
-    if res.rows_affected() == 0 {
+    if deleted.rows_affected() == 0 {
         return Err(Error::NotFound);
     }
-    Ok(StatusCode::NO_CONTENT)
+    tx.commit().await?;
+    Ok(StatusCode::ACCEPTED)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1188,10 +1310,8 @@ struct AccessQuery {
 
 /// Per-request access gate. identity-service calls this before minting
 /// an entry JWT, with the devserver_id of the owner's live registration.
-/// Returns:
-///   - `{role: "owner"}` if caller == owner
-///   - `{role: "viewer"|"editor"}` if caller has a claimed grant
-///   - 404 in every other case (no-grant and unknown-devserver share the
+/// Returns binary access when the caller is the owner or has a claimed grant,
+/// and 404 in every other case (no-grant and unknown-devserver share the
 ///     same shape so the endpoint can't be used to enumerate which
 ///     devservers a user is sharing). A grant gives the WHOLE devserver,
 ///     so this is the single authorization assertion the gate needs.
@@ -1204,21 +1324,25 @@ async fn devserver_access(
     if !valid_devserver_id(&devserver_id) {
         return Err(Error::BadRequest("invalid devserver id".into()));
     }
-    if owner_id == q.caller {
-        return Ok(Json(DevserverAccess {
-            role: "owner".into(),
-        }));
-    }
-    let role: Option<String> = sqlx::query_scalar(
-        "SELECT role FROM devserver_grants \
-         WHERE owner_user_id = $1 AND devserver_id = $2 AND grantee_user_id = $3",
+    let granted: bool = sqlx::query_scalar(
+        "SELECT EXISTS( \
+             SELECT 1 FROM devservers d \
+             WHERE d.owner_user_id = $1 AND d.devserver_id = $2 \
+               AND (d.owner_user_id = $3 OR EXISTS( \
+                   SELECT 1 FROM devserver_grants g \
+                   WHERE g.owner_user_id = d.owner_user_id \
+                     AND g.devserver_id = d.devserver_id \
+                     AND g.grantee_user_id = $3 \
+               )) \
+         )",
     )
     .bind(owner_id)
     .bind(&devserver_id)
     .bind(q.caller)
-    .fetch_optional(&state.pool)
+    .fetch_one(&state.pool)
     .await?;
-    role.map(|r| Json(DevserverAccess { role: r }))
+    granted
+        .then_some(Json(DevserverAccess { access: true }))
         .ok_or(Error::NotFound)
 }
 
@@ -1233,7 +1357,7 @@ async fn list_owned_devservers(
     Path(owner_id): Path<Uuid>,
 ) -> Result<Json<Vec<OwnedDevserverSummary>>> {
     let rows = sqlx::query_as::<_, OwnedDevserverSummary>(
-        "SELECT d.devserver_id, d.label, COALESCE(g.cnt, 0)::bigint AS grant_count \
+        "SELECT d.owner_user_id, d.devserver_id, d.label, COALESCE(g.cnt, 0)::bigint AS grant_count \
          FROM devservers d \
          LEFT JOIN ( \
              SELECT owner_user_id, devserver_id, COUNT(*) AS cnt \
@@ -1261,7 +1385,7 @@ async fn list_incoming_shares(
         "SELECT g.id AS grant_id, \
                 u.id AS owner_user_id, u.username AS owner_username, \
                 u.display_name AS owner_display_name, u.avatar_url AS owner_avatar_url, \
-                g.devserver_id, d.label, g.role, g.accepted_at \
+                g.devserver_id, d.label, g.accepted_at \
          FROM devserver_grants g \
          JOIN users u ON u.id = g.owner_user_id \
          JOIN devservers d ON d.owner_user_id = g.owner_user_id \

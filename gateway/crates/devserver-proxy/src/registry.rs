@@ -5,35 +5,18 @@
 //! on disconnect, substream open). devserver-proxy adds two things on
 //! top:
 //!
-//!   * a `username -> user_id` cache populated by the validator
-//!     wrapper on every successful tunnel handshake, so the
-//!     reverse-proxy auth gate can resolve `owner_id` without an
-//!     extra round trip to profile-service;
-//!
-//!   * lookup helpers that bundle the tunnel handle with the cached
-//!     `owner_id` required by the reverse-proxy authorization gate.
-//!
-//! Cache invalidation is fleet fail-closed: normal handshakes refresh the
-//! entry, and controller grace expiry clears the complete cache alongside
-//! every local tunnel.
+//! Lookup helpers return the immutable owner UUID carried by the signed
+//! registration and stored on `TunnelHandle`. Username remains a routing
+//! label only; it is never resolved through mutable cached identity state.
 
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use chan_tunnel_server::{Registry as TunnelRegistry, TunnelHandle};
 use uuid::Uuid;
 
-/// `RwLock` (not `Mutex`) because `Registry::get` is on the hot path:
-/// one read per inbound wildcard request, against an entry that is
-/// already cached by `record_user` on tunnel handshake. Writes are rare.
-/// `parking_lot` would buy a
-/// little extra throughput on contended reads but `std::sync::RwLock`
-/// keeps dependencies flat and is sufficient for the request rates we
-/// target.
 #[derive(Clone)]
 pub struct Registry {
     tunnels: Arc<TunnelRegistry>,
-    user_ids: Arc<RwLock<HashMap<String, Uuid>>>,
 }
 
 /// Bundle returned by `Registry::get` for the proxy auth gate plus
@@ -48,7 +31,6 @@ impl Registry {
     pub fn new() -> Self {
         Self {
             tunnels: TunnelRegistry::new(),
-            user_ids: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -59,33 +41,16 @@ impl Registry {
         self.tunnels.clone()
     }
 
-    /// Record the user_id seen for a username on the latest token
-    /// validate. Idempotent.
-    pub fn record_user(&self, username: &str, user_id: Uuid) {
-        // The cache holds no integrity invariant; a poisoned lock
-        // (some past handler panicked while holding it) is fine to
-        // reuse, so we transparently recover instead of propagating
-        // the poison. Without this, a single panic kills the proxy
-        // auth gate for the lifetime of the process.
-        self.user_ids
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(username.to_string(), user_id);
-    }
-
     /// Resolve a registered tunnel by its `(user, devserver_id)` key.
     /// Returns `None` when the tunnel disconnected, or when the username
-    /// hasn't been seen in any tunnel handshake yet (no cached
-    /// owner_id). The second key is the devserver id (the registry's
+    /// The second key is the devserver id (the registry's
     /// registration name), not a workspace slug.
     pub fn get(&self, username: &str, devserver_id: &str) -> Option<Entry> {
         let handle = self.tunnels.get(username, devserver_id)?;
-        let owner_id = self
-            .user_ids
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(username)
-            .copied()?;
+        let owner_id = handle.owner_user_id;
+        if owner_id.is_nil() {
+            return None;
+        }
         Some(Entry { handle, owner_id })
     }
 
@@ -126,28 +91,24 @@ impl Registry {
             .collect()
     }
 
-    /// Size of the `username -> user_id` cache. Tests assert the
-    /// fail-closed path empties it without re-registering a tunnel,
-    /// which would repopulate the cache through the validator wrapper.
+    /// Number of immutable owners represented by live signed tunnels.
     #[cfg(test)]
     pub(crate) fn cached_user_count(&self) -> usize {
-        self.user_ids
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
+        self.tunnels
+            .list_all()
+            .into_iter()
+            .map(|row| row.owner_user_id)
+            .filter(|owner| !owner.is_nil())
+            .collect::<std::collections::HashSet<_>>()
             .len()
     }
 
     /// Fail closed after the controller reconnect grace expires.
-    /// Clears every local tunnel and all cached user identities in one
+    /// Clears every local tunnel in one
     /// proxy-local operation; new registrations remain blocked by control
     /// readiness until a fresh snapshot reaches `FleetReady`.
     pub fn evict_all_for_control_loss(&self) -> usize {
-        let killed = self.tunnels.evict_all();
-        self.user_ids
-            .write()
-            .unwrap_or_else(|error| error.into_inner())
-            .clear();
-        killed
+        self.tunnels.evict_all()
     }
 }
 
@@ -162,22 +123,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn control_loss_clears_every_cached_user() {
+    fn control_loss_on_an_empty_registry_is_idempotent() {
         let r = Registry::new();
-        r.record_user("alice", Uuid::new_v4());
-        r.record_user("bob", Uuid::new_v4());
-
         assert_eq!(r.evict_all_for_control_loss(), 0);
-        assert!(r.user_ids.read().unwrap().is_empty());
-    }
-
-    #[test]
-    fn record_user_overwrites_existing() {
-        let r = Registry::new();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
-        r.record_user("alice", a);
-        r.record_user("alice", b);
-        assert_eq!(r.user_ids.read().unwrap().get("alice").copied(), Some(b));
+        assert_eq!(r.cached_user_count(), 0);
     }
 }

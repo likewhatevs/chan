@@ -24,13 +24,19 @@ use serde::{Deserialize, Serialize};
 /// Per-request cap so an unreachable devserver cannot hang the launcher's
 /// workspace poll, matching `probe_url`'s connect timeout.
 const HTTP_TIMEOUT_SECS: u64 = 5;
+/// Older proxies may omit cookie lifetime attributes. Refresh those sessions
+/// conservatively instead of caching them until the process exits.
+const GATE_SESSION_FALLBACK_TTL_SECS: u64 = 5 * 60;
+/// Stop reusing a native session shortly before the browser/proxy considers it
+/// expired, avoiding a clean navigation that immediately lands unauthenticated.
+const GATE_SESSION_EXPIRY_SAFETY_SECS: u64 = 30;
 
 /// Live connection to one devserver, keyed by the desktop-local
 /// `Devserver.id` in [`DevserverConns`]. Connection state is held in memory
 /// only: the bearer token rotates with the devserver, so a persisted copy
 /// would decay between launches (the same reason local serve URLs live in
 /// memory rather than `config.json`).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DevserverConn {
     /// Tunnel endpoint host the desktop dials, e.g. `127.0.0.1` for an
     /// `ssh -L` forward.
@@ -51,7 +57,19 @@ pub struct DevserverConn {
     pub gateway: Option<Box<GatewayConn>>,
 }
 
-#[derive(Debug, Clone)]
+impl std::fmt::Debug for DevserverConn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DevserverConn")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("token", &"[REDACTED]")
+            .field("name", &self.name)
+            .field("gateway", &self.gateway)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 pub struct GatewayConn {
     pub identity_origin: String,
     pub desktop_entry_url: String,
@@ -61,12 +79,30 @@ pub struct GatewayConn {
     /// Canonical exact origin pinned by the first validated entry response.
     pub proxy_origin: String,
     pub pat: String,
-    /// Explicit devserver target (`(owner_username, devserver_id)`, a
+    /// Explicit devserver target (immutable owner id plus routing/display
+    /// username and devserver id), a
     /// roster row's key), included in every entry request so the gateway
     /// mints for this exact devserver (own or shared). `None` = the
     /// gateway's first-accessible-live fallback.
-    pub entry_target: Option<(String, String)>,
+    pub entry_target: Option<GatewayEntryTarget>,
     session: Arc<Mutex<Option<GatewaySession>>>,
+    /// Serializes entry mint/exchange. The sync mutex above only protects the
+    /// cached value and is never held over network I/O.
+    session_refresh: Arc<tokio::sync::Mutex<()>>,
+}
+
+impl std::fmt::Debug for GatewayConn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GatewayConn")
+            .field("identity_origin", &self.identity_origin)
+            .field("desktop_entry_url", &self.desktop_entry_url)
+            .field("proxy_apex_origin", &self.proxy_apex_origin)
+            .field("proxy_origin", &self.proxy_origin)
+            .field("pat", &"[REDACTED]")
+            .field("entry_target", &self.entry_target)
+            .field("session", &self.session)
+            .finish()
+    }
 }
 
 impl GatewayConn {
@@ -84,20 +120,46 @@ impl GatewayConn {
             pat,
             entry_target: None,
             session: Arc::new(Mutex::new(None)),
+            session_refresh: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
     /// Attach an explicit devserver target to every entry mint.
-    pub fn with_entry_target(mut self, target: Option<(String, String)>) -> Self {
+    pub fn with_entry_target(mut self, target: Option<GatewayEntryTarget>) -> Self {
         self.entry_target = target;
         self
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewayEntryTarget {
+    pub owner_user_id: uuid::Uuid,
+    pub owner: String,
+    pub devserver_id: String,
+}
+
+#[derive(Clone)]
 struct GatewaySession {
+    gate: String,
     cookie_header: String,
     csrf: String,
+    expires_at: Instant,
+}
+
+impl GatewaySession {
+    fn is_fresh(&self) -> bool {
+        Instant::now() < self.expires_at
+    }
+}
+
+impl std::fmt::Debug for GatewaySession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GatewaySession")
+            .field("gate", &"[REDACTED]")
+            .field("cookie_header", &"[REDACTED]")
+            .field("csrf", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// In-memory map of connected devservers keyed by `Devserver.id`. A
@@ -180,7 +242,7 @@ pub struct DevserverInfo {
 
 /// One element of `GET /api/devserver/workspaces`: a tenant the desktop
 /// turns into a launcher row plus an assembled tenant URL.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 struct WorkspaceEntry {
     prefix: String,
     path: String,
@@ -191,6 +253,20 @@ struct WorkspaceEntry {
     #[serde(default)]
     error: Option<String>,
     token: String,
+}
+
+impl std::fmt::Debug for WorkspaceEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkspaceEntry")
+            .field("prefix", &self.prefix)
+            .field("path", &self.path)
+            .field("label", &self.label)
+            .field("on", &self.on)
+            .field("status", &self.status)
+            .field("error", &self.error)
+            .field("token", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// `POST /api/devserver/workspaces/{prefix}/on` body -- mirrors the server's
@@ -471,22 +547,55 @@ struct GatewayEntryRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     owner: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    owner_user_id: Option<uuid::Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     devserver_id: Option<&'a str>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct GatewayEntryResponse {
+    owner_user_id: uuid::Uuid,
     username: String,
     devserver_id: String,
     proxy_origin: String,
-    entry_url: String,
+    entry_exchange_url: String,
+    entry_credential: String,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+impl std::fmt::Debug for GatewayEntryResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GatewayEntryResponse")
+            .field("owner_user_id", &self.owner_user_id)
+            .field("username", &self.username)
+            .field("devserver_id", &self.devserver_id)
+            .field("proxy_origin", &self.proxy_origin)
+            .field("entry_exchange_url", &self.entry_exchange_url)
+            .field("entry_credential", &"[REDACTED]")
+            .finish()
+    }
+}
+
+#[derive(PartialEq, Eq)]
 struct ValidatedGatewayEntry {
     proxy_origin: String,
-    entry_url: String,
+    entry_exchange_url: String,
+    entry_credential: String,
+    requested_path: String,
 }
+
+impl std::fmt::Debug for ValidatedGatewayEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ValidatedGatewayEntry")
+            .field("proxy_origin", &self.proxy_origin)
+            .field("entry_exchange_url", &self.entry_exchange_url)
+            .field("entry_credential", &"[REDACTED]")
+            .field("requested_path", &self.requested_path)
+            .finish()
+    }
+}
+
+const GATEWAY_ENTRY_EXCHANGE_PATH: &str = "/_chan/entry";
+const MAX_GATEWAY_ENTRY_CREDENTIAL_BYTES: usize = 4096;
 
 fn canonical_origin_only(raw: &str, field: &str) -> Result<url::Url, String> {
     let parsed = url::Url::parse(raw).map_err(|e| format!("invalid {field}: {e}"))?;
@@ -513,21 +622,22 @@ fn canonical_origin_only(raw: &str, field: &str) -> Result<url::Url, String> {
 
 fn validate_gateway_entry(
     proxy_apex_origin: &str,
-    requested_target: Option<&(String, String)>,
+    requested_target: Option<&GatewayEntryTarget>,
+    requested_path: &str,
     pinned_origin: Option<&str>,
     response: GatewayEntryResponse,
 ) -> Result<ValidatedGatewayEntry, String> {
-    if let Some((owner, devserver_id)) = requested_target {
-        if response.username != *owner {
+    if let Some(target) = requested_target {
+        if response.owner_user_id != target.owner_user_id {
             return Err(format!(
-                "gateway entry username mismatch: requested {owner:?}, got {:?}",
-                response.username
+                "gateway entry owner id mismatch: requested {}, got {}",
+                target.owner_user_id, response.owner_user_id
             ));
         }
-        if response.devserver_id != *devserver_id {
+        if response.devserver_id != target.devserver_id {
             return Err(format!(
-                "gateway entry devserver id mismatch: requested {devserver_id:?}, got {:?}",
-                response.devserver_id
+                "gateway entry devserver id mismatch: requested {:?}, got {:?}",
+                target.devserver_id, response.devserver_id
             ));
         }
     }
@@ -556,8 +666,14 @@ fn validate_gateway_entry(
             "gateway entry proxy_origin is not exactly two labels below the discovery proxy apex"
                 .to_string()
         })?;
-    if child.is_empty() {
-        return Err("gateway entry proxy origin has an empty child label".into());
+    let expected_tenant_label = format!(
+        "{}--{}",
+        response.username,
+        response.devserver_id.chars().take(12).collect::<String>()
+    );
+    let tenant_label = child.split('.').next().unwrap_or_default();
+    if tenant_label != expected_tenant_label {
+        return Err("gateway entry proxy_origin is not bound to its owner and devserver".into());
     }
 
     let proxy_origin = proxy.origin().ascii_serialization();
@@ -565,17 +681,31 @@ fn validate_gateway_entry(
         return Err("gateway entry attempted to change the pinned proxy origin".to_string());
     }
 
-    let entry = url::Url::parse(&response.entry_url)
-        .map_err(|e| format!("invalid gateway entry_url: {e}"))?;
-    if !entry.username().is_empty() || entry.password().is_some() {
-        return Err("gateway entry_url must not contain credentials".to_string());
+    let exchange = url::Url::parse(&response.entry_exchange_url)
+        .map_err(|e| format!("invalid gateway entry_exchange_url: {e}"))?;
+    if !exchange.username().is_empty() || exchange.password().is_some() {
+        return Err("gateway entry_exchange_url must not contain credentials".to_string());
     }
-    if entry.origin().ascii_serialization() != proxy_origin {
-        return Err("gateway entry_url origin does not match proxy_origin".to_string());
+    if exchange.origin().ascii_serialization() != proxy_origin {
+        return Err("gateway entry_exchange_url origin does not match proxy_origin".to_string());
+    }
+    if exchange.path() != GATEWAY_ENTRY_EXCHANGE_PATH
+        || exchange.query().is_some()
+        || exchange.fragment().is_some()
+    {
+        return Err("gateway entry_exchange_url is not the fixed exchange endpoint".to_string());
+    }
+    if response.entry_credential.is_empty()
+        || response.entry_credential.len() > MAX_GATEWAY_ENTRY_CREDENTIAL_BYTES
+        || response.entry_credential.chars().any(char::is_control)
+    {
+        return Err("gateway entry_credential has an invalid shape".to_string());
     }
     Ok(ValidatedGatewayEntry {
         proxy_origin,
-        entry_url: response.entry_url,
+        entry_exchange_url: response.entry_exchange_url,
+        entry_credential: response.entry_credential,
+        requested_path: requested_path.to_string(),
     })
 }
 
@@ -692,7 +822,7 @@ fn classify_entry_error(status: reqwest::StatusCode, body: &[u8]) -> GatewayEntr
 async fn request_gateway_entry(
     desktop_entry_url: &str,
     pat: &str,
-    entry_target: Option<&(String, String)>,
+    entry_target: Option<&GatewayEntryTarget>,
     path: &str,
 ) -> Result<GatewayEntryResponse, GatewayEntryError> {
     let resp = http_client()
@@ -701,8 +831,9 @@ async fn request_gateway_entry(
         .bearer_auth(pat)
         .json(&GatewayEntryRequest {
             path,
-            owner: entry_target.map(|(o, _)| o.as_str()),
-            devserver_id: entry_target.map(|(_, d)| d.as_str()),
+            owner: entry_target.map(|target| target.owner.as_str()),
+            owner_user_id: entry_target.map(|target| target.owner_user_id),
+            devserver_id: entry_target.map(|target| target.devserver_id.as_str()),
         })
         .send()
         .await
@@ -731,6 +862,7 @@ async fn gateway_entry(
     validate_gateway_entry(
         &gw.proxy_apex_origin,
         gw.entry_target.as_ref(),
+        path,
         Some(&gw.proxy_origin),
         response,
     )
@@ -740,7 +872,7 @@ async fn gateway_entry(
 pub async fn gateway_conn(
     discovery: &GatewayDiscovery,
     pat: String,
-    entry_target: Option<(String, String)>,
+    entry_target: Option<GatewayEntryTarget>,
 ) -> Result<GatewayConn, GatewayEntryError> {
     let response = request_gateway_entry(
         &discovery.desktop_entry_url,
@@ -752,6 +884,7 @@ pub async fn gateway_conn(
     let entry = validate_gateway_entry(
         &discovery.devserver_proxy_origin,
         entry_target.as_ref(),
+        "/",
         None,
         response,
     )
@@ -761,12 +894,13 @@ pub async fn gateway_conn(
         desktop_entry_url: discovery.desktop_entry_url.clone(),
         proxy_apex_origin: origin_of(&discovery.devserver_proxy_origin)
             .map_err(GatewayEntryError::Other)?,
-        proxy_origin: entry.proxy_origin,
+        proxy_origin: entry.proxy_origin.clone(),
         pat,
         entry_target,
         session: Arc::new(Mutex::new(None)),
+        session_refresh: Arc::new(tokio::sync::Mutex::new(())),
     };
-    establish_gateway_session_from_entry(&gw, &entry.entry_url)
+    establish_gateway_session_from_entry(&gw, &entry)
         .await
         .map_err(GatewayEntryError::Other)?;
     Ok(gw)
@@ -789,37 +923,131 @@ fn extract_cookie_value(
     None
 }
 
+fn extract_cookie_max_age(
+    set_cookie: &reqwest::header::HeaderMap,
+    cookie_name: &str,
+) -> Option<u64> {
+    for value in set_cookie.get_all(reqwest::header::SET_COOKIE) {
+        let Ok(raw) = value.to_str() else { continue };
+        let mut fields = raw.split(';');
+        let Some((name, _)) = fields.next().and_then(|field| field.trim().split_once('=')) else {
+            continue;
+        };
+        if name != cookie_name {
+            continue;
+        }
+        for field in fields {
+            let Some((name, value)) = field.trim().split_once('=') else {
+                continue;
+            };
+            if name.eq_ignore_ascii_case("max-age") {
+                return value.trim().parse::<u64>().ok();
+            }
+        }
+    }
+    None
+}
+
+fn gateway_session_ttl(max_age: Option<u64>) -> Duration {
+    let max_age = max_age
+        .unwrap_or(GATE_SESSION_FALLBACK_TTL_SECS)
+        // A malicious or broken peer must not make the desktop cache forever.
+        .min(24 * 60 * 60);
+    Duration::from_secs(max_age.saturating_sub(GATE_SESSION_EXPIRY_SAFETY_SECS))
+}
+
+fn gateway_session_expiry(max_age: Option<u64>) -> Instant {
+    Instant::now() + gateway_session_ttl(max_age)
+}
+
 async fn establish_gateway_session_from_entry(
     gw: &GatewayConn,
-    entry_url: &str,
-) -> Result<GatewaySession, String> {
+    entry: &ValidatedGatewayEntry,
+) -> Result<(GatewaySession, String), String> {
     let resp = http_client_no_redirect()?
-        .get(entry_url)
+        .post(&entry.entry_exchange_url)
+        .header(reqwest::header::ORIGIN, &gw.identity_origin)
+        .form(&[("credential", entry.entry_credential.as_str())])
         .send()
         .await
-        .map_err(|e| format!("opening gateway entry URL: {e}"))?;
+        .map_err(|e| format!("exchanging gateway entry credential: {e}"))?;
+    if resp.status() != reqwest::StatusCode::SEE_OTHER {
+        return Err(format!(
+            "gateway entry exchange returned HTTP {}",
+            resp.status()
+        ));
+    }
+    let location = resp
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| "gateway entry exchange did not return a navigation target".to_string())?;
+    validate_gateway_navigation_location(location, &entry.requested_path)?;
     let gate = extract_cookie_value(resp.headers(), "devserver_gate")
         .ok_or_else(|| "gateway did not return a devserver session cookie".to_string())?;
     let csrf = extract_cookie_value(resp.headers(), "devserver_csrf")
         .ok_or_else(|| "gateway did not return a CSRF cookie".to_string())?;
+    let expires_at =
+        gateway_session_expiry(extract_cookie_max_age(resp.headers(), "devserver_gate"));
     let session = GatewaySession {
+        gate: gate.clone(),
         cookie_header: format!("devserver_gate={gate}; devserver_csrf={csrf}"),
         csrf,
+        expires_at,
     };
     *gw.session.lock().unwrap() = Some(session.clone());
-    Ok(session)
+    Ok((session, gateway_url(gw, location)))
 }
 
-async fn refresh_gateway_session_inner(gw: &GatewayConn) -> Result<GatewaySession, String> {
+fn validate_gateway_navigation_location(
+    location: &str,
+    requested_path: &str,
+) -> Result<(), String> {
+    if location != requested_path
+        || location.is_empty()
+        || !location.starts_with('/')
+        || location.starts_with("//")
+        || location.contains('\\')
+        || location.chars().any(char::is_control)
+    {
+        return Err("gateway entry exchange returned an unexpected navigation target".to_string());
+    }
+    Ok(())
+}
+
+async fn mint_gateway_session(gw: &GatewayConn) -> Result<GatewaySession, String> {
     let entry = gateway_entry(gw, "/").await?;
-    establish_gateway_session_from_entry(gw, &entry.entry_url).await
+    establish_gateway_session_from_entry(gw, &entry)
+        .await
+        .map(|(session, _)| session)
 }
 
 async fn gateway_session(gw: &GatewayConn) -> Result<GatewaySession, String> {
-    if let Some(session) = gw.session.lock().unwrap().clone() {
+    if let Some(session) = gw.session.lock().unwrap().clone().filter(|s| s.is_fresh()) {
         return Ok(session);
     }
-    refresh_gateway_session_inner(gw).await
+    let _refresh = gw.session_refresh.lock().await;
+    if let Some(session) = gw.session.lock().unwrap().clone().filter(|s| s.is_fresh()) {
+        return Ok(session);
+    }
+    mint_gateway_session(gw).await
+}
+
+async fn refresh_gateway_session_after(
+    gw: &GatewayConn,
+    observed_cookie_header: &str,
+) -> Result<GatewaySession, String> {
+    let _refresh = gw.session_refresh.lock().await;
+    if let Some(session) = gw
+        .session
+        .lock()
+        .unwrap()
+        .clone()
+        .filter(|s| s.is_fresh() && s.cookie_header != observed_cookie_header)
+    {
+        return Ok(session);
+    }
+    mint_gateway_session(gw).await
 }
 
 pub(crate) async fn gateway_cookie_header(conn: &DevserverConn) -> Result<String, String> {
@@ -830,12 +1058,72 @@ pub(crate) async fn gateway_cookie_header(conn: &DevserverConn) -> Result<String
     gateway_session(gw).await.map(|s| s.cookie_header)
 }
 
-pub(crate) async fn refresh_gateway_session(conn: &DevserverConn) -> Result<(), String> {
+pub(crate) async fn refresh_gateway_session_if_current(
+    conn: &DevserverConn,
+    observed_cookie_header: &str,
+) -> Result<(), String> {
     let gw = conn
         .gateway
         .as_ref()
         .ok_or_else(|| "not a gateway connection".to_string())?;
-    refresh_gateway_session_inner(gw).await.map(|_| ())
+    refresh_gateway_session_after(gw, observed_cookie_header)
+        .await
+        .map(|_| ())
+}
+
+/// Copy the native client's freshly exchanged opaque session into the shared
+/// Tauri WebView cookie store before a clean tenant URL is opened. This keeps
+/// the entry credential out of navigation URLs while preserving HttpOnly on
+/// the authorization cookie.
+pub(crate) fn install_gateway_webview_session(
+    app: &tauri::AppHandle,
+    conn: &DevserverConn,
+    preferred_window_label: Option<&str>,
+) -> Result<(), String> {
+    use tauri::Manager;
+    let Some(gw) = conn.gateway.as_ref() else {
+        return Ok(());
+    };
+    let session = gw
+        .session
+        .lock()
+        .unwrap()
+        .clone()
+        .filter(|session| session.is_fresh())
+        .ok_or_else(|| "gateway session is not established".to_string())?;
+    let origin = url::Url::parse(&gw.proxy_origin)
+        .map_err(|e| format!("invalid pinned gateway origin: {e}"))?;
+    let domain = origin
+        .host_str()
+        .ok_or_else(|| "pinned gateway origin has no host".to_string())?
+        .to_string();
+    let secure = origin.scheme() == "https";
+    let gate = tauri::webview::Cookie::build(("devserver_gate", session.gate))
+        .domain(domain.clone())
+        .path("/")
+        .secure(secure)
+        .http_only(true)
+        .same_site(tauri::webview::cookie::SameSite::Lax)
+        .build();
+    let csrf = tauri::webview::Cookie::build(("devserver_csrf", session.csrf))
+        .domain(domain)
+        .path("/")
+        .secure(secure)
+        .http_only(false)
+        .same_site(tauri::webview::cookie::SameSite::Lax)
+        .build();
+    let webview = preferred_window_label
+        .and_then(|label| app.get_webview_window(label))
+        .or_else(|| app.get_webview_window("main"))
+        .or_else(|| app.webview_windows().into_values().next())
+        .ok_or_else(|| "no WebView is available to install the gateway session".to_string())?;
+    webview
+        .set_cookie(gate)
+        .map_err(|e| format!("installing gateway session cookie: {e}"))?;
+    webview
+        .set_cookie(csrf)
+        .map_err(|e| format!("installing gateway CSRF cookie: {e}"))?;
+    Ok(())
 }
 
 fn gateway_url(gw: &GatewayConn, path: &str) -> String {
@@ -908,7 +1196,7 @@ async fn gateway_request(
     if !gateway_auth_shaped(resp.status()) {
         return Ok(resp);
     }
-    let session = refresh_gateway_session_inner(gw).await?;
+    let session = refresh_gateway_session_after(gw, &session.cookie_header).await?;
     apply_gateway_session(
         http_client()?.request(method.clone(), gateway_url(gw, path)),
         &method,
@@ -939,7 +1227,7 @@ async fn gateway_request_json<T: Serialize + ?Sized>(
     if !gateway_auth_shaped(resp.status()) {
         return Ok(resp);
     }
-    let session = refresh_gateway_session_inner(gw).await?;
+    let session = refresh_gateway_session_after(gw, &session.cookie_header).await?;
     apply_gateway_session(
         http_client()?
             .request(method.clone(), gateway_url(gw, path))
@@ -957,10 +1245,33 @@ pub async fn gateway_entry_url(conn: &DevserverConn, path: &str) -> Result<Strin
         .gateway
         .as_ref()
         .ok_or_else(|| "not a gateway connection".to_string())?;
-    gateway_entry(gw, path)
+    validate_gateway_navigation_location(path, path)?;
+    // GatewayConn is pinned to one exact proxy origin. Reuse its fresh opaque
+    // session for every same-origin WebView navigation; minting a new entry
+    // for each window would exhaust the proxy's per-principal session cap.
+    if gw
+        .session
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(GatewaySession::is_fresh)
+    {
+        return Ok(gateway_url(gw, path));
+    }
+    let _refresh = gw.session_refresh.lock().await;
+    if gw
+        .session
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(GatewaySession::is_fresh)
+    {
+        return Ok(gateway_url(gw, path));
+    }
+    let entry = gateway_entry(gw, path).await.map_err(String::from)?;
+    establish_gateway_session_from_entry(gw, &entry)
         .await
-        .map(|r| r.entry_url)
-        .map_err(String::from)
+        .map(|(_, navigation_url)| navigation_url)
 }
 
 /// Entry path for a tenant window: the prefix is normalized to exactly one
@@ -973,11 +1284,10 @@ fn window_entry_path(prefix: &str) -> String {
 
 /// The URL a devserver window's webview navigates to, resolved AT NAVIGATION
 /// TIME. Raw-tunnel devservers assemble the tenant URL from the row's stable
-/// per-tenant token. Gateway devservers mint a fresh 30-second entry URL for
-/// this navigation: entry tokens are single-use credentials, so they are never
-/// stamped into the window feed's rows (a fresh mint per feed push would make
-/// every push retarget every open window into a reload loop -- the page's
-/// standing auth is the devserver-gate cookie, not the `?t=` it arrived with).
+/// per-tenant token. Gateway devservers reuse the connection's exact-origin
+/// opaque session; only a connection without one mints and body-exchanges an
+/// entry credential. Entry credentials are never stamped into URLs or the
+/// window feed's rows.
 pub async fn window_navigation_url(
     conn: &DevserverConn,
     record: &chan_server::WindowRecord,
@@ -1028,7 +1338,7 @@ fn local_devserver_config_path() -> std::path::PathBuf {
 /// the bearer token. A devserver on the same box writes this `0600`, so on a
 /// local-loopback connection the desktop reads the token straight from the
 /// file rather than scraping it from terminal output.
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct LocalDevserverConfig {
     devserver_token: String,
     /// The devserver's last bound port, so a local connect dials the CURRENT
@@ -1036,6 +1346,15 @@ struct LocalDevserverConfig {
     /// restarts on a different OS-assigned port. Absent (`0`) on an older config.
     #[serde(default)]
     port: u16,
+}
+
+impl std::fmt::Debug for LocalDevserverConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LocalDevserverConfig")
+            .field("devserver_token", &"[REDACTED]")
+            .field("port", &self.port)
+            .finish()
+    }
 }
 
 /// Read the bearer token of a devserver running on this same box from its
@@ -1306,7 +1625,7 @@ async fn row_from_launcher(
 /// frozen wire; `title` is optional (mirrors `WindowInfo`). `prefix` + the
 /// CURRENT (re-minted) per-mount `token` assemble the reopen URL; `token` is
 /// empty when the tenant is off (not menu-reopenable -- use the launcher row).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct DevserverWindowRow {
     pub label: String,
     pub prefix: String,
@@ -1315,6 +1634,19 @@ pub struct DevserverWindowRow {
     pub title: Option<String>,
     pub connected: bool,
     pub saved: bool,
+}
+
+impl std::fmt::Debug for DevserverWindowRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DevserverWindowRow")
+            .field("label", &self.label)
+            .field("prefix", &self.prefix)
+            .field("token", &"[REDACTED]")
+            .field("title", &self.title)
+            .field("connected", &self.connected)
+            .field("saved", &self.saved)
+            .finish()
+    }
 }
 
 /// `GET /api/devserver/windows`: every PERSISTED window across all
@@ -1768,68 +2100,129 @@ mod tests {
             .expect("loopback http is explicit dev use");
     }
 
-    fn gateway_entry_response(proxy_origin: &str, entry_url: &str) -> GatewayEntryResponse {
+    fn gateway_entry_response(proxy_origin: &str, exchange_url: &str) -> GatewayEntryResponse {
         GatewayEntryResponse {
+            owner_user_id: test_owner_id(),
             username: "alice".into(),
             devserver_id: "a".repeat(64),
             proxy_origin: proxy_origin.into(),
-            entry_url: entry_url.into(),
+            entry_exchange_url: exchange_url.into(),
+            entry_credential: "entry-credential".into(),
         }
+    }
+
+    fn test_owner_id() -> uuid::Uuid {
+        uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap()
+    }
+
+    fn test_entry_target() -> GatewayEntryTarget {
+        GatewayEntryTarget {
+            owner_user_id: test_owner_id(),
+            owner: "alice".into(),
+            devserver_id: "a".repeat(64),
+        }
+    }
+
+    #[test]
+    fn credential_bearing_debug_output_is_redacted() {
+        let response = GatewayEntryResponse {
+            owner_user_id: test_owner_id(),
+            username: "alice".into(),
+            devserver_id: "a".repeat(64),
+            proxy_origin: "https://alice--aaaaaaaaaaaa.p1.devserver.chan.app".into(),
+            entry_exchange_url: "https://alice--aaaaaaaaaaaa.p1.devserver.chan.app/_chan/entry"
+                .into(),
+            entry_credential: "sentinel-entry-credential".into(),
+        };
+        let gw = GatewayConn::new(
+            "https://id.chan.app".into(),
+            "https://id.chan.app/desktop/v1/devserver/entry".into(),
+            "https://alice--aaaaaaaaaaaa.p1.devserver.chan.app".into(),
+            "sentinel-gateway-pat".into(),
+        );
+        *gw.session.lock().unwrap() = Some(GatewaySession {
+            gate: "sentinel-gate-cookie".into(),
+            cookie_header: "sentinel-cookie-header".into(),
+            csrf: "sentinel-csrf".into(),
+            expires_at: Instant::now() + Duration::from_secs(60),
+        });
+        let conn = DevserverConn {
+            host: "example.test".into(),
+            port: 443,
+            token: "sentinel-devserver-token".into(),
+            name: "test".into(),
+            gateway: Some(Box::new(gw)),
+        };
+        let debug = format!("{response:?} {conn:?}");
+        for secret in [
+            "sentinel-entry-credential",
+            "sentinel-gateway-pat",
+            "sentinel-gate-cookie",
+            "sentinel-cookie-header",
+            "sentinel-csrf",
+            "sentinel-devserver-token",
+        ] {
+            assert!(!debug.contains(secret), "Debug leaked {secret}");
+        }
+        assert!(debug.contains("[REDACTED]"));
     }
 
     fn validate_test_entry(
         proxy_origin: &str,
-        entry_url: &str,
+        exchange_url: &str,
     ) -> Result<ValidatedGatewayEntry, String> {
         validate_gateway_entry(
             "https://proxy.example.test",
-            Some(&("alice".into(), "a".repeat(64))),
+            Some(&test_entry_target()),
+            "/notes/index.html",
             None,
-            gateway_entry_response(proxy_origin, entry_url),
+            gateway_entry_response(proxy_origin, exchange_url),
         )
     }
 
     #[test]
     fn gateway_entry_accepts_exact_two_label_host() {
-        let origin = "https://alice--0a1b2c3d4e5f.p1.proxy.example.test";
-        let entry = validate_test_entry(origin, &format!("{origin}/notes/index.html?t=entry"))
+        let origin = "https://alice--aaaaaaaaaaaa.p1.proxy.example.test";
+        let entry = validate_test_entry(origin, &format!("{origin}/_chan/entry"))
             .expect("two-label entry origin validates");
         assert_eq!(entry.proxy_origin, origin);
         let canonical = validate_test_entry(
-            "https://alice.p1.proxy.example.test:443",
-            "https://alice.p1.proxy.example.test:443/?t=entry",
+            "https://alice--aaaaaaaaaaaa.p1.proxy.example.test:443",
+            "https://alice--aaaaaaaaaaaa.p1.proxy.example.test:443/_chan/entry",
         )
         .unwrap();
         assert_eq!(
             canonical.proxy_origin,
-            "https://alice.p1.proxy.example.test"
+            "https://alice--aaaaaaaaaaaa.p1.proxy.example.test"
         );
     }
 
     #[test]
     fn gateway_entry_binds_full_requested_identity() {
         let mut response = gateway_entry_response(
-            "https://alice.p1.proxy.example.test",
-            "https://alice.p1.proxy.example.test/?t=entry",
+            "https://alice--aaaaaaaaaaaa.p1.proxy.example.test",
+            "https://alice--aaaaaaaaaaaa.p1.proxy.example.test/_chan/entry",
         );
-        response.username = "mallory".into();
+        response.owner_user_id = uuid::Uuid::new_v4();
         assert!(validate_gateway_entry(
             "https://proxy.example.test",
-            Some(&("alice".into(), "a".repeat(64))),
+            Some(&test_entry_target()),
+            "/notes/index.html",
             None,
             response,
         )
         .unwrap_err()
-        .contains("username mismatch"));
+        .contains("owner id mismatch"));
 
         let mut response = gateway_entry_response(
-            "https://alice.p1.proxy.example.test",
-            "https://alice.p1.proxy.example.test/?t=entry",
+            "https://alice--aaaaaaaaaaaa.p1.proxy.example.test",
+            "https://alice--aaaaaaaaaaaa.p1.proxy.example.test/_chan/entry",
         );
         response.devserver_id = format!("{}b", "a".repeat(63));
         assert!(validate_gateway_entry(
             "https://proxy.example.test",
-            Some(&("alice".into(), "a".repeat(64))),
+            Some(&test_entry_target()),
+            "/notes/index.html",
             None,
             response,
         )
@@ -1838,7 +2231,7 @@ mod tests {
     }
 
     #[test]
-    fn gateway_entry_rejects_namespace_origin_and_entry_url_escapes() {
+    fn gateway_entry_rejects_namespace_and_exchange_endpoint_escapes() {
         for proxy in [
             "",
             "not a url",
@@ -1855,19 +2248,23 @@ mod tests {
             "https://alice.p1.proxy.example.test:444",
         ] {
             assert!(
-                validate_test_entry(proxy, "https://alice.p1.proxy.example.test/?t=entry").is_err(),
+                validate_test_entry(proxy, "https://alice.p1.proxy.example.test/_chan/entry")
+                    .is_err(),
                 "proxy escape accepted: {proxy}"
             );
         }
-        for entry_url in [
-            "https://bob.p1.proxy.example.test/?t=entry",
-            "http://alice.p1.proxy.example.test/?t=entry",
-            "https://alice.p1.proxy.example.test:444/?t=entry",
-            "https://user@alice.p1.proxy.example.test/?t=entry",
+        for exchange_url in [
+            "https://bob.p1.proxy.example.test/_chan/entry",
+            "http://alice.p1.proxy.example.test/_chan/entry",
+            "https://alice.p1.proxy.example.test:444/_chan/entry",
+            "https://user@alice.p1.proxy.example.test/_chan/entry",
+            "https://alice.p1.proxy.example.test/other",
+            "https://alice.p1.proxy.example.test/_chan/entry?q=credential",
+            "https://alice.p1.proxy.example.test/_chan/entry#fragment",
         ] {
             assert!(
-                validate_test_entry("https://alice.p1.proxy.example.test", entry_url).is_err(),
-                "entry URL escape accepted: {entry_url}"
+                validate_test_entry("https://alice.p1.proxy.example.test", exchange_url).is_err(),
+                "entry exchange escape accepted: {exchange_url}"
             );
         }
     }
@@ -1875,13 +2272,14 @@ mod tests {
     #[test]
     fn gateway_entry_refresh_cannot_change_the_pinned_origin() {
         let response = gateway_entry_response(
-            "https://bob.p2.proxy.example.test",
-            "https://bob.p2.proxy.example.test/?t=entry",
+            "https://alice--aaaaaaaaaaaa.p2.proxy.example.test",
+            "https://alice--aaaaaaaaaaaa.p2.proxy.example.test/_chan/entry",
         );
         let err = validate_gateway_entry(
             "https://proxy.example.test",
-            Some(&("alice".into(), "a".repeat(64))),
-            Some("https://alice.p1.proxy.example.test"),
+            Some(&test_entry_target()),
+            "/notes/index.html",
+            Some("https://alice--aaaaaaaaaaaa.p1.proxy.example.test"),
             response,
         )
         .unwrap_err();
@@ -1919,7 +2317,7 @@ mod tests {
             entry_addr.port()
         );
         let response_proxy = proxy_origin.clone();
-        let malicious_entry = format!("{sink_origin}/stolen?t=secret");
+        let malicious_entry = format!("{sink_origin}/stolen");
         let entry = axum::Router::new().route(
             "/desktop/v1/devserver/entry",
             axum::routing::post(move || {
@@ -1927,10 +2325,12 @@ mod tests {
                 let entry_url = malicious_entry.clone();
                 async move {
                     axum::Json(serde_json::json!({
+                        "owner_user_id": test_owner_id(),
                         "username": "alice",
                         "devserver_id": "a".repeat(64),
                         "proxy_origin": proxy_origin,
-                        "entry_url": entry_url,
+                        "entry_exchange_url": entry_url,
+                        "entry_credential": "never-send-me",
                     }))
                 }
             }),
@@ -1949,15 +2349,14 @@ mod tests {
             devserver_proxy_host_depth: 2,
             roster_url: None,
         };
-        let err = gateway_conn(
-            &discovery,
-            "pat".into(),
-            Some(("alice".into(), "a".repeat(64))),
-        )
-        .await
-        .unwrap_err()
-        .to_string();
-        assert!(err.contains("entry_url origin does not match"), "{err}");
+        let err = gateway_conn(&discovery, "pat".into(), Some(test_entry_target()))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("entry_exchange_url origin does not match"),
+            "{err}"
+        );
         assert_eq!(
             sink_hits.load(Ordering::SeqCst),
             0,
@@ -1966,6 +2365,96 @@ mod tests {
 
         entry_server.abort();
         sink_server.abort();
+    }
+
+    #[tokio::test]
+    async fn gateway_conn_posts_credential_with_exact_identity_origin() {
+        use axum::body::Bytes;
+        use axum::http::{HeaderMap, StatusCode};
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let exchange_seen = Arc::new(Mutex::new(None::<(HeaderMap, Bytes)>));
+        let entry_seen = Arc::new(AtomicBool::new(false));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let identity_origin = format!("http://{addr}");
+        let proxy_apex = format!("http://localtest.me:{}", addr.port());
+        let proxy_origin = format!("http://alice--aaaaaaaaaaaa.p1.localtest.me:{}", addr.port());
+        let response_proxy = proxy_origin.clone();
+        let entry_seen_route = Arc::clone(&entry_seen);
+        let exchange_seen_route = Arc::clone(&exchange_seen);
+        let app = axum::Router::new()
+            .route(
+                "/desktop/v1/devserver/entry",
+                axum::routing::post(move || {
+                    let proxy_origin = response_proxy.clone();
+                    let entry_seen = Arc::clone(&entry_seen_route);
+                    async move {
+                        entry_seen.store(true, Ordering::SeqCst);
+                        axum::Json(serde_json::json!({
+                            "owner_user_id": test_owner_id(),
+                            "username": "alice",
+                            "devserver_id": "a".repeat(64),
+                            "proxy_origin": proxy_origin,
+                            "entry_exchange_url": format!("{proxy_origin}/_chan/entry"),
+                            "entry_credential": "sentinel-entry-secret",
+                        }))
+                    }
+                }),
+            )
+            .route(
+                "/_chan/entry",
+                axum::routing::post(move |headers: HeaderMap, body: Bytes| {
+                    let exchange_seen = Arc::clone(&exchange_seen_route);
+                    async move {
+                        *exchange_seen.lock().unwrap() = Some((headers, body));
+                        axum::response::Response::builder()
+                            .status(StatusCode::SEE_OTHER)
+                            .header("location", "/")
+                            .header("set-cookie", "devserver_gate=opaque; Path=/; HttpOnly")
+                            .header("set-cookie", "devserver_csrf=csrf; Path=/")
+                            .body(axum::body::Body::empty())
+                            .unwrap()
+                    }
+                }),
+            );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let discovery = GatewayDiscovery {
+            kind: "chan-gateway".into(),
+            api_version: 1,
+            identity_origin: identity_origin.clone(),
+            desktop_authorize_url: format!("{identity_origin}/desktop/authorize"),
+            desktop_entry_url: format!("{identity_origin}/desktop/v1/devserver/entry"),
+            devserver_proxy_origin: proxy_apex,
+            devserver_proxy_host_depth: 2,
+            roster_url: None,
+        };
+
+        let gw = gateway_conn(&discovery, "pat".into(), Some(test_entry_target()))
+            .await
+            .expect("native POST exchange succeeds");
+        assert!(entry_seen.load(Ordering::SeqCst));
+        assert!(gw.session.lock().unwrap().is_some());
+        let (headers, body) = exchange_seen
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("exchange request");
+        assert_eq!(headers.get("origin").unwrap(), identity_origin.as_str());
+        assert_eq!(
+            headers.get("content-type").unwrap(),
+            "application/x-www-form-urlencoded"
+        );
+        let fields: Vec<_> = url::form_urlencoded::parse(&body).collect();
+        assert_eq!(
+            fields,
+            vec![(
+                std::borrow::Cow::Borrowed("credential"),
+                std::borrow::Cow::Borrowed("sentinel-entry-secret")
+            )]
+        );
+        assert!(!proxy_origin.contains("sentinel-entry-secret"));
+        server.abort();
     }
 
     #[test]
@@ -2000,6 +2489,7 @@ mod tests {
         let bare = serde_json::to_value(GatewayEntryRequest {
             path: "/",
             owner: None,
+            owner_user_id: None,
             devserver_id: None,
         })
         .unwrap();
@@ -2010,12 +2500,18 @@ mod tests {
         let targeted = serde_json::to_value(GatewayEntryRequest {
             path: "/",
             owner: Some("alice"),
+            owner_user_id: Some(test_owner_id()),
             devserver_id: Some("abc123"),
         })
         .unwrap();
         assert_eq!(
             targeted,
-            serde_json::json!({"path": "/", "owner": "alice", "devserver_id": "abc123"})
+            serde_json::json!({
+                "path": "/",
+                "owner": "alice",
+                "owner_user_id": test_owner_id(),
+                "devserver_id": "abc123"
+            })
         );
     }
 
@@ -2366,17 +2862,37 @@ mod tests {
     }
 
     fn gateway_test_conn(entry_url: String) -> DevserverConn {
+        let parsed = url::Url::parse(&entry_url).unwrap();
+        let identity_origin = parsed.origin().ascii_serialization();
+        let port = parsed.port_or_known_default().unwrap();
+        let (proxy_origin, proxy_apex_origin) =
+            if parsed.host_str().is_some_and(is_loopback_gateway_host) {
+                (
+                    format!("http://alice--aaaaaaaaaaaa.p1.localtest.me:{port}"),
+                    format!("http://localtest.me:{port}"),
+                )
+            } else {
+                (
+                    "https://alice--aaaaaaaaaaaa.p1.devserver.chan.app".into(),
+                    "https://devserver.chan.app".into(),
+                )
+            };
         let mut gateway = GatewayConn::new(
-            "https://id.chan.app".into(),
+            identity_origin,
             entry_url,
-            "https://alice--aaaaaaaaaaaa.p1.devserver.chan.app".into(),
+            proxy_origin.clone(),
             "pat".into(),
         )
-        .with_entry_target(Some(("alice".into(), "a".repeat(64))));
-        gateway.proxy_apex_origin = "https://devserver.chan.app".into();
+        .with_entry_target(Some(test_entry_target()));
+        gateway.proxy_apex_origin = proxy_apex_origin;
+        gateway.proxy_origin = proxy_origin.clone();
         DevserverConn {
-            host: "alice--aaaaaaaaaaaa.p1.devserver.chan.app".into(),
-            port: 443,
+            host: url::Url::parse(&proxy_origin)
+                .unwrap()
+                .host_str()
+                .unwrap()
+                .into(),
+            port,
             token: String::new(),
             name: "alice".into(),
             gateway: Some(Box::new(gateway)),
@@ -2404,35 +2920,49 @@ mod tests {
 
     #[tokio::test]
     async fn navigation_url_mints_a_fresh_entry_for_a_gateway_window() {
-        // One-shot mock entry endpoint: the gateway path resolves the
-        // navigation target by minting an entry URL at navigation time (the
-        // feed rows keep their devserver-local tokens untouched).
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        // The gateway path mints then exchanges a body-only credential at
+        // navigation time; feed rows keep their devserver-local tokens.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            let body = format!(
-                r#"{{"username":"alice","devserver_id":"{}","proxy_origin":"https://alice--aaaaaaaaaaaa.p1.devserver.chan.app","entry_url":"https://alice--aaaaaaaaaaaa.p1.devserver.chan.app/notes-1a2b3c/index.html?t=tok_entry_1"}}"#,
-                "a".repeat(64)
+        let proxy_origin = format!("http://alice--aaaaaaaaaaaa.p1.localtest.me:{}", addr.port());
+        let response_proxy = proxy_origin.clone();
+        let app = axum::Router::new()
+            .route(
+                "/desktop/v1/devserver/entry",
+                axum::routing::post(move || {
+                    let proxy_origin = response_proxy.clone();
+                    async move {
+                        axum::Json(serde_json::json!({
+                            "owner_user_id": test_owner_id(),
+                            "username": "alice",
+                            "devserver_id": "a".repeat(64),
+                            "proxy_origin": proxy_origin,
+                            "entry_exchange_url": format!("{proxy_origin}/_chan/entry"),
+                            "entry_credential": "tok_entry_1",
+                        }))
+                    }
+                }),
+            )
+            .route(
+                "/_chan/entry",
+                axum::routing::post(|| async {
+                    axum::response::Response::builder()
+                        .status(axum::http::StatusCode::SEE_OTHER)
+                        .header("location", "/notes-1a2b3c/index.html")
+                        .header("set-cookie", "devserver_gate=opaque; Path=/; HttpOnly")
+                        .header("set-cookie", "devserver_csrf=csrf; Path=/")
+                        .body(axum::body::Body::empty())
+                        .unwrap()
+                }),
             );
-            let response = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            let (mut sock, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 4096];
-            let _ = sock.read(&mut buf).await;
-            let _ = sock.write_all(response.as_bytes()).await;
-        });
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let conn = gateway_test_conn(format!("http://{addr}/desktop/v1/devserver/entry"));
         let record = window_row("w-1", "/notes-1a2b3c", "tok_local_1");
         let url = window_navigation_url(&conn, &record)
             .await
             .expect("gateway navigation URL mints");
-        assert_eq!(
-            url,
-            "https://alice--aaaaaaaaaaaa.p1.devserver.chan.app/notes-1a2b3c/index.html?t=tok_entry_1"
-        );
+        assert_eq!(url, format!("{proxy_origin}/notes-1a2b3c/index.html"));
+        assert!(!url.contains("tok_entry_1"));
         assert_eq!(record.token, "tok_local_1", "the row's token is untouched");
     }
 
@@ -2442,6 +2972,174 @@ mod tests {
         // an Err to warn on and retry later; nothing else is affected.
         let conn = gateway_test_conn("http://127.0.0.1:9/desktop/v1/devserver/entry".into());
         let record = window_row("w-1", "/notes-1a2b3c", "tok_local_1");
+        assert!(window_navigation_url(&conn, &record).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn more_than_session_cap_navigations_reuse_one_opaque_session() {
+        let conn = gateway_test_conn("http://127.0.0.1:9/desktop/v1/devserver/entry".into());
+        let gw = conn.gateway.as_ref().unwrap();
+        *gw.session.lock().unwrap() = Some(GatewaySession {
+            gate: "opaque-once".into(),
+            cookie_header: "devserver_gate=opaque-once; devserver_csrf=csrf-once".into(),
+            csrf: "csrf-once".into(),
+            expires_at: Instant::now() + Duration::from_secs(60),
+        });
+
+        for index in 0..17 {
+            let prefix = format!("/notes-{index}");
+            let record = window_row(&format!("w-{index}"), &prefix, "row-token");
+            let url = window_navigation_url(&conn, &record)
+                .await
+                .expect("cached session navigation succeeds without a new exchange");
+            assert_eq!(
+                url,
+                format!("{}/{}/index.html", gw.proxy_origin, &prefix[1..])
+            );
+        }
+    }
+
+    #[test]
+    fn gateway_session_ttl_honors_max_age_with_a_safety_margin() {
+        assert_eq!(gateway_session_ttl(Some(120)), Duration::from_secs(90));
+        assert_eq!(
+            gateway_session_ttl(None),
+            Duration::from_secs(GATE_SESSION_FALLBACK_TTL_SECS - 30)
+        );
+        assert_eq!(gateway_session_ttl(Some(10)), Duration::ZERO);
+        assert_eq!(
+            gateway_session_ttl(Some(u64::MAX)),
+            Duration::from_secs(24 * 60 * 60 - 30)
+        );
+    }
+
+    #[test]
+    fn gateway_cookie_max_age_is_scoped_to_the_named_cookie() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.append(
+            reqwest::header::SET_COOKIE,
+            "other=x; Max-Age=999".parse().unwrap(),
+        );
+        headers.append(
+            reqwest::header::SET_COOKIE,
+            "devserver_gate=opaque; Path=/; HttpOnly; max-age=3600"
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(
+            extract_cookie_max_age(&headers, "devserver_gate"),
+            Some(3600)
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_session_miss_and_auth_refresh_each_exchange_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let entry_hits = Arc::new(AtomicUsize::new(0));
+        let exchange_hits = Arc::new(AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let proxy_origin = format!("http://alice--aaaaaaaaaaaa.p1.localtest.me:{}", addr.port());
+        let response_proxy = proxy_origin.clone();
+        let entry_hits_route = Arc::clone(&entry_hits);
+        let exchange_hits_route = Arc::clone(&exchange_hits);
+        let app = axum::Router::new()
+            .route(
+                "/desktop/v1/devserver/entry",
+                axum::routing::post(move || {
+                    let proxy_origin = response_proxy.clone();
+                    let entry_hits = Arc::clone(&entry_hits_route);
+                    async move {
+                        entry_hits.fetch_add(1, Ordering::SeqCst);
+                        axum::Json(serde_json::json!({
+                            "owner_user_id": test_owner_id(),
+                            "username": "alice",
+                            "devserver_id": "a".repeat(64),
+                            "proxy_origin": proxy_origin,
+                            "entry_exchange_url": format!("{proxy_origin}/_chan/entry"),
+                            "entry_credential": "tok_entry",
+                        }))
+                    }
+                }),
+            )
+            .route(
+                "/_chan/entry",
+                axum::routing::post(move || {
+                    let exchange_hits = Arc::clone(&exchange_hits_route);
+                    async move {
+                        let generation = exchange_hits.fetch_add(1, Ordering::SeqCst) + 1;
+                        axum::response::Response::builder()
+                            .status(axum::http::StatusCode::SEE_OTHER)
+                            .header("location", "/")
+                            .header(
+                                "set-cookie",
+                                format!(
+                                    "devserver_gate=opaque-{generation}; Path=/; HttpOnly; Max-Age=120"
+                                ),
+                            )
+                            .header(
+                                "set-cookie",
+                                format!("devserver_csrf=csrf-{generation}; Path=/; Max-Age=120"),
+                            )
+                            .body(axum::body::Body::empty())
+                            .unwrap()
+                    }
+                }),
+            );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let conn = gateway_test_conn(format!("http://{addr}/desktop/v1/devserver/entry"));
+        let gw = conn.gateway.as_ref().unwrap().as_ref().clone();
+
+        let mut tasks = tokio::task::JoinSet::new();
+        for _ in 0..24 {
+            let gw = gw.clone();
+            tasks.spawn(async move { gateway_session(&gw).await.unwrap() });
+        }
+        while let Some(result) = tasks.join_next().await {
+            result.unwrap();
+        }
+        assert_eq!(entry_hits.load(Ordering::SeqCst), 1);
+        assert_eq!(exchange_hits.load(Ordering::SeqCst), 1);
+
+        let observed = gw
+            .session
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .cookie_header
+            .clone();
+        for _ in 0..24 {
+            let gw = gw.clone();
+            let observed = observed.clone();
+            tasks
+                .spawn(async move { refresh_gateway_session_after(&gw, &observed).await.unwrap() });
+        }
+        while let Some(result) = tasks.join_next().await {
+            result.unwrap();
+        }
+        assert_eq!(entry_hits.load(Ordering::SeqCst), 2);
+        assert_eq!(exchange_hits.load(Ordering::SeqCst), 2);
+        assert_ne!(
+            gw.session.lock().unwrap().as_ref().unwrap().cookie_header,
+            observed
+        );
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn expired_session_is_not_reused_for_clean_navigation() {
+        let conn = gateway_test_conn("http://127.0.0.1:9/desktop/v1/devserver/entry".into());
+        let gw = conn.gateway.as_ref().unwrap();
+        *gw.session.lock().unwrap() = Some(GatewaySession {
+            gate: "expired".into(),
+            cookie_header: "devserver_gate=expired; devserver_csrf=expired".into(),
+            csrf: "expired".into(),
+            expires_at: Instant::now(),
+        });
+        let record = window_row("w-1", "/notes", "row-token");
         assert!(window_navigation_url(&conn, &record).await.is_err());
     }
 

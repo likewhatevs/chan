@@ -1,16 +1,44 @@
 #!/bin/sh
-# Idempotent: shared across the three chan-gateway packages.
 set -e
+
+require_one_line() {
+  file=$1
+  pattern=$2
+  description=$3
+  count=$(grep -Ec "$pattern" "$file" || true)
+  if [ "$count" -ne 1 ]; then
+    echo "chan-gateway-profile: $file must contain exactly one $description" >&2
+    exit 1
+  fi
+}
 
 case "$1" in
   configure)
-    if ! getent passwd chan-gateway >/dev/null; then
-      adduser --system --no-create-home --group chan-gateway
+    if ! getent passwd chan-gateway-profile >/dev/null; then
+      adduser --system --no-create-home --group chan-gateway-profile
     fi
-    install -d -m 0750 -o root -g chan-gateway /etc/chan-gateway
+    install -d -m 0751 -o root -g root /etc/chan-gateway
+    if [ -f /etc/chan-gateway/domain.env ]; then
+      chown root:root /etc/chan-gateway/domain.env
+      chmod 0644 /etc/chan-gateway/domain.env
+    fi
     if [ -f /etc/chan-gateway/profile.env ]; then
-      chown root:chan-gateway /etc/chan-gateway/profile.env
+      chown root:chan-gateway-profile /etc/chan-gateway/profile.env
       chmod 0640 /etc/chan-gateway/profile.env
+      require_one_line /etc/chan-gateway/profile.env \
+        '^DATABASE_URL=' 'DATABASE_URL setting'
+      require_one_line /etc/chan-gateway/profile.env \
+        '^DATABASE_URL=postgres://chan_gateway_profile:[^[:space:]]+@' \
+        'non-owner chan_gateway_profile DATABASE_URL'
+      require_one_line /etc/chan-gateway/profile.env \
+        '^CHAN_GATEWAY_MIGRATIONS=' 'CHAN_GATEWAY_MIGRATIONS setting'
+      require_one_line /etc/chan-gateway/profile.env \
+        '^CHAN_GATEWAY_MIGRATIONS=external$' \
+        'CHAN_GATEWAY_MIGRATIONS=external setting'
+      require_one_line /etc/chan-gateway/profile.env \
+        '^EXPECTED_SQLX_MIGRATION=15$' 'release EXPECTED_SQLX_MIGRATION=15 setting'
+      require_one_line /etc/chan-gateway/profile.env \
+        '^DATABASE_ROLE_POLICY_VERSION=1$' 'release DATABASE_ROLE_POLICY_VERSION=1 setting'
     fi
     ;;
 esac

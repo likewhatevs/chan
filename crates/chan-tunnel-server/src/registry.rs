@@ -53,16 +53,41 @@ pub struct WorkspaceInfo {
 /// One row of `Registry::list_all`. Same as `WorkspaceInfo` but also
 /// carries the username so a single call covers the admin
 /// `tunnel ps` view.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TunnelInfo {
     pub registration_id: Uuid,
+    pub owner_user_id: Uuid,
     pub user: Arc<str>,
     pub workspace: Arc<str>,
+    pub admission_lease: Option<Arc<str>>,
+    pub admission_lease_expires_at: Option<DateTime<Utc>>,
     pub peer_addr: Option<SocketAddr>,
     pub connected_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone)]
+impl std::fmt::Debug for TunnelInfo {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TunnelInfo")
+            .field("registration_id", &self.registration_id)
+            .field("owner_user_id", &self.owner_user_id)
+            .field("user", &self.user)
+            .field("workspace", &self.workspace)
+            .field(
+                "admission_lease",
+                &self.admission_lease.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "admission_lease_expires_at",
+                &self.admission_lease_expires_at,
+            )
+            .field("peer_addr", &self.peer_addr)
+            .field("connected_at", &self.connected_at)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 pub enum RegistryEvent {
     TunnelUp {
         generation: u64,
@@ -72,6 +97,44 @@ pub enum RegistryEvent {
         generation: u64,
         registration_id: Uuid,
     },
+    LeaseRefresh {
+        registration_id: Uuid,
+        owner_user_id: Uuid,
+        admission_lease: Arc<str>,
+        admission_lease_expires_at: DateTime<Utc>,
+    },
+}
+
+impl std::fmt::Debug for RegistryEvent {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TunnelUp { generation, row } => formatter
+                .debug_struct("TunnelUp")
+                .field("generation", generation)
+                .field("row", row)
+                .finish(),
+            Self::TunnelDown {
+                generation,
+                registration_id,
+            } => formatter
+                .debug_struct("TunnelDown")
+                .field("generation", generation)
+                .field("registration_id", registration_id)
+                .finish(),
+            Self::LeaseRefresh {
+                registration_id,
+                owner_user_id,
+                admission_lease: _,
+                admission_lease_expires_at,
+            } => formatter
+                .debug_struct("LeaseRefresh")
+                .field("registration_id", registration_id)
+                .field("owner_user_id", owner_user_id)
+                .field("admission_lease", &"[REDACTED]")
+                .field("admission_lease_expires_at", admission_lease_expires_at)
+                .finish(),
+        }
+    }
 }
 
 pub(crate) type OpenReply = oneshot::Sender<Result<yamux::Stream, OpenError>>;
@@ -89,6 +152,7 @@ pub(crate) type OpenRequest = OpenReply;
 pub struct TunnelHandle {
     open_tx: mpsc::Sender<OpenRequest>,
     pub registration_id: Uuid,
+    pub owner_user_id: Uuid,
     pub user: Arc<str>,
     pub workspace: Arc<str>,
     /// Peer's TCP address as seen by the listener accept loop.
@@ -101,6 +165,8 @@ pub struct TunnelHandle {
     /// Shared only between the tunnel client and gateway proxy for this
     /// registration. Not surfaced in admin views.
     pub gateway_assertion_key: Option<AssertionKey>,
+    pub admission_lease: Option<Arc<str>>,
+    pub admission_lease_expires_at: Option<DateTime<Utc>>,
 }
 
 impl TunnelHandle {
@@ -193,6 +259,7 @@ impl Registry {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn register_with_id_and_cap(
         self: &Arc<Self>,
         user: Arc<str>,
@@ -209,16 +276,52 @@ impl Registry {
         ),
         RegisterCapped,
     > {
+        self.register_authorized_with_id_and_cap(
+            user,
+            workspace,
+            peer_addr,
+            gateway_assertion_key,
+            registration_id,
+            Uuid::nil(),
+            None,
+            None,
+            max_workspaces_per_user,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn register_authorized_with_id_and_cap(
+        self: &Arc<Self>,
+        user: Arc<str>,
+        workspace: Arc<str>,
+        peer_addr: Option<SocketAddr>,
+        gateway_assertion_key: Option<AssertionKey>,
+        registration_id: Uuid,
+        owner_user_id: Uuid,
+        admission_lease: Option<Arc<str>>,
+        admission_lease_expires_at: Option<DateTime<Utc>>,
+        max_workspaces_per_user: usize,
+    ) -> Result<
+        (
+            TunnelHandle,
+            mpsc::Receiver<OpenRequest>,
+            oneshot::Receiver<()>,
+        ),
+        RegisterCapped,
+    > {
         let (open_tx, open_rx) = mpsc::channel::<OpenRequest>(64);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let handle = TunnelHandle {
             open_tx,
             registration_id,
+            owner_user_id,
             user: user.clone(),
             workspace: workspace.clone(),
             peer_addr,
             connected_at: Utc::now(),
             gateway_assertion_key,
+            admission_lease,
+            admission_lease_expires_at,
         };
         let entry = Entry {
             handle: handle.clone(),
@@ -320,8 +423,11 @@ impl Registry {
             .flat_map(|(u, workspaces)| {
                 workspaces.iter().map(move |(d, e)| TunnelInfo {
                     registration_id: e.handle.registration_id,
+                    owner_user_id: e.handle.owner_user_id,
                     user: u.clone(),
                     workspace: d.clone(),
+                    admission_lease: e.handle.admission_lease.clone(),
+                    admission_lease_expires_at: e.handle.admission_lease_expires_at,
                     peer_addr: e.handle.peer_addr,
                     connected_at: e.handle.connected_at,
                 })
@@ -411,6 +517,46 @@ impl Registry {
         true
     }
 
+    /// Replace the identity lease for one live registration and publish a
+    /// generation-contiguous delta so controller authority expires and
+    /// refreshes independently of tunnel liveness.
+    pub fn refresh_admission_lease(
+        &self,
+        registration_id: Uuid,
+        owner_user_id: Uuid,
+        admission_lease: Arc<str>,
+        admission_lease_expires_at: DateTime<Utc>,
+    ) -> bool {
+        let mut g = self.inner.lock();
+        let mut changed = None;
+        for workspaces in g.users.values_mut() {
+            for entry in workspaces.values_mut() {
+                if entry.handle.registration_id == registration_id
+                    && entry.handle.owner_user_id == owner_user_id
+                {
+                    entry.handle.admission_lease = Some(admission_lease.clone());
+                    entry.handle.admission_lease_expires_at = Some(admission_lease_expires_at);
+                    changed = Some(tunnel_info(&entry.handle));
+                    break;
+                }
+            }
+            if changed.is_some() {
+                break;
+            }
+        }
+        let Some(row) = changed else {
+            return false;
+        };
+        let _ = row;
+        let _ = g.events.send(RegistryEvent::LeaseRefresh {
+            registration_id,
+            owner_user_id,
+            admission_lease,
+            admission_lease_expires_at,
+        });
+        true
+    }
+
     pub fn evict_all(&self) -> usize {
         let mut g = self.inner.lock();
         let ids: Vec<Uuid> = g
@@ -433,8 +579,11 @@ impl Registry {
 fn tunnel_info(handle: &TunnelHandle) -> TunnelInfo {
     TunnelInfo {
         registration_id: handle.registration_id,
+        owner_user_id: handle.owner_user_id,
         user: handle.user.clone(),
         workspace: handle.workspace.clone(),
+        admission_lease: handle.admission_lease.clone(),
+        admission_lease_expires_at: handle.admission_lease_expires_at,
         peer_addr: handle.peer_addr,
         connected_at: handle.connected_at,
     }
@@ -654,5 +803,33 @@ mod tests {
             second,
             RegistryEvent::TunnelDown { generation: 4, .. }
         ));
+    }
+
+    #[test]
+    fn admission_authority_debug_is_redacted_in_rows_and_events() {
+        let sentinel = Arc::<str>::from("lease-secret-sentinel");
+        let row = TunnelInfo {
+            registration_id: Uuid::new_v4(),
+            owner_user_id: Uuid::new_v4(),
+            user: Arc::from("alice"),
+            workspace: Arc::from("devserver"),
+            admission_lease: Some(sentinel.clone()),
+            admission_lease_expires_at: Some(Utc::now() + chrono::Duration::minutes(5)),
+            peer_addr: None,
+            connected_at: Utc::now(),
+        };
+        let row_debug = format!("{row:?}");
+        assert!(row_debug.contains("[REDACTED]"));
+        assert!(!row_debug.contains(sentinel.as_ref()));
+
+        let event = RegistryEvent::LeaseRefresh {
+            registration_id: row.registration_id,
+            owner_user_id: row.owner_user_id,
+            admission_lease: sentinel.clone(),
+            admission_lease_expires_at: row.admission_lease_expires_at.unwrap(),
+        };
+        let event_debug = format!("{event:?}");
+        assert!(event_debug.contains("[REDACTED]"));
+        assert!(!event_debug.contains(sentinel.as_ref()));
     }
 }

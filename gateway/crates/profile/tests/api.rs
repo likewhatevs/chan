@@ -32,6 +32,21 @@ use uuid::Uuid;
 const TOKEN: &str = "test-token";
 const ADMIN_TOKEN: &str = "test-admin-token";
 
+type OptionalTimestamp = Option<chrono::DateTime<chrono::Utc>>;
+type RevocationScheduleRow = (
+    String,
+    OptionalTimestamp,
+    OptionalTimestamp,
+    OptionalTimestamp,
+);
+type RevocationGenerationRow = (
+    String,
+    OptionalTimestamp,
+    OptionalTimestamp,
+    OptionalTimestamp,
+    i64,
+);
+
 struct TestApp {
     router: Router,
     schema: String,
@@ -41,6 +56,10 @@ struct TestApp {
 
 impl TestApp {
     async fn new() -> Self {
+        Self::new_with_control("http://127.0.0.1:7003").await
+    }
+
+    async fn new_with_control(control_url: &str) -> Self {
         let url = std::env::var("TEST_DATABASE_URL")
             .expect("TEST_DATABASE_URL must be set; e.g. postgres://localhost/chan_gateway_test");
         // Hold-one-connection reaper: clears any idle connections
@@ -80,11 +99,21 @@ impl TestApp {
             .await
             .expect("migrate");
 
+        let workspace_admin =
+            gateway_common::devserver_control_client::DevserverControlClient::new(
+                control_url.parse().unwrap(),
+                "test-profile-admin-token".into(),
+            )
+            .unwrap();
         let router = profile::http::router(profile::http::AppState {
+            revocations: profile::revocation::RevocationCoordinator::spawn(
+                pool.clone(),
+                workspace_admin.clone(),
+            ),
             pool: pool.clone(),
             auth_token: TOKEN.to_string(),
             admin_token: Some(ADMIN_TOKEN.to_string()),
-            workspace_admin: None,
+            workspace_admin,
         });
 
         Self {
@@ -191,10 +220,12 @@ async fn user_crud() {
     let (s, _) = app
         .req(Method::DELETE, &format!("/v1/users/{id}"), None)
         .await;
-    assert_eq!(s, StatusCode::NO_CONTENT);
+    assert_eq!(s, StatusCode::ACCEPTED);
 
-    let (s, _) = app.req(Method::GET, &format!("/v1/users/{id}"), None).await;
-    assert_eq!(s, StatusCode::NOT_FOUND);
+    let (s, user) = app.req(Method::GET, &format!("/v1/users/{id}"), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(user["blocked_at"].is_string());
+    assert_eq!(user["block_reason"], "account deletion pending");
 
     app.cleanup().await;
 }
@@ -464,7 +495,7 @@ async fn admin_block_revokes_tokens_and_audits() {
             Some(json!({"reason": "abuse"})),
         )
         .await;
-    assert_eq!(s, StatusCode::OK);
+    assert_eq!(s, StatusCode::ACCEPTED);
     assert!(!blocked["blocked_at"].is_null());
     assert_eq!(blocked["block_reason"], "abuse");
 
@@ -503,7 +534,7 @@ async fn admin_block_revokes_tokens_and_audits() {
             Some(json!({"reason": "still bad"})),
         )
         .await;
-    assert_eq!(s, StatusCode::OK);
+    assert_eq!(s, StatusCode::ACCEPTED);
     assert_eq!(reblocked["blocked_at"], original_blocked_at);
     assert_eq!(reblocked["block_reason"], "still bad");
 
@@ -556,7 +587,7 @@ async fn admin_token_revoke_and_audit() {
             None,
         )
         .await;
-    assert_eq!(s, StatusCode::NO_CONTENT);
+    assert_eq!(s, StatusCode::ACCEPTED);
 
     let (s, audit) = app
         .admin(Method::GET, &format!("/v1/admin/tokens/{tid}/audit"), None)
@@ -574,7 +605,7 @@ async fn admin_token_revoke_and_audit() {
             None,
         )
         .await;
-    assert_eq!(s, StatusCode::NO_CONTENT);
+    assert_eq!(s, StatusCode::ACCEPTED);
     let (_, audit2) = app
         .admin(Method::GET, &format!("/v1/admin/tokens/{tid}/audit"), None)
         .await;
@@ -589,6 +620,83 @@ async fn admin_token_revoke_and_audit() {
         )
         .await;
     assert_eq!(s, StatusCode::NOT_FOUND);
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn identity_pat_revoke_atomically_denies_audits_and_reserves() {
+    let app = TestApp::new().await;
+    let alice: Uuid = mk_user(&app, "pat-alice@x.com").await.parse().unwrap();
+    let bob: Uuid = mk_user(&app, "pat-bob@x.com").await.parse().unwrap();
+    let alice_token = insert_api_token(&app.pool, alice, "desktop").await;
+    let bob_token = insert_api_token(&app.pool, bob, "desktop").await;
+
+    let (status, _) = app
+        .req(
+            Method::POST,
+            &format!("/v1/users/{alice}/tokens/{alice_token}/revoke"),
+            Some(json!({"ip": "192.0.2.4", "user_agent": "chan-test/1"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let (revoked, action, ip, user_agent, kind, phase): (
+        bool,
+        String,
+        Option<String>,
+        Option<String>,
+        String,
+        String,
+    ) = sqlx::query_as(
+        "SELECT t.revoked_at IS NOT NULL, a.action, a.ip, a.user_agent, j.kind, j.phase \
+         FROM api_tokens t \
+         JOIN api_token_audit a ON a.token_id = t.id \
+         JOIN control_revocation_jobs j ON j.subject_user_id = t.user_id \
+         WHERE t.id = $1",
+    )
+    .bind(alice_token)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert!(revoked);
+    assert_eq!(action, "revoked");
+    assert_eq!(ip.as_deref(), Some("192.0.2.4"));
+    assert_eq!(user_agent.as_deref(), Some("chan-test/1"));
+    assert_eq!(kind, "subject");
+    assert_eq!(phase, "pending_first_cut");
+
+    let (status, _) = app
+        .req(
+            Method::POST,
+            &format!("/v1/users/{alice}/tokens/{bob_token}/revoke"),
+            Some(json!({"ip": null, "user_agent": null})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let bob_active: bool =
+        sqlx::query_scalar("SELECT revoked_at IS NULL FROM api_tokens WHERE id = $1")
+            .bind(bob_token)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert!(bob_active);
+
+    // Idempotent retry restarts settlement but does not duplicate the audit.
+    let (status, _) = app
+        .req(
+            Method::POST,
+            &format!("/v1/users/{alice}/tokens/{alice_token}/revoke"),
+            Some(json!({"ip": "192.0.2.4", "user_agent": "chan-test/1"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let audits: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM api_token_audit WHERE token_id = $1")
+            .bind(alice_token)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert_eq!(audits, 1);
 
     app.cleanup().await;
 }
@@ -932,7 +1040,7 @@ async fn upsert_concurrent_first_time_no_orphans() {
 }
 
 #[tokio::test]
-async fn cascade_on_user_delete() {
+async fn pending_user_delete_preserves_identity_until_settlement() {
     let app = TestApp::new().await;
 
     let (_, u) = app
@@ -950,7 +1058,7 @@ async fn cascade_on_user_delete() {
     let (s, _) = app
         .req(Method::DELETE, &format!("/v1/users/{uid}"), None)
         .await;
-    assert_eq!(s, StatusCode::NO_CONTENT);
+    assert_eq!(s, StatusCode::ACCEPTED);
 
     let (s, _) = app
         .req(
@@ -959,7 +1067,7 @@ async fn cascade_on_user_delete() {
             None,
         )
         .await;
-    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert_eq!(s, StatusCode::OK);
 
     app.cleanup().await;
 }
@@ -993,12 +1101,12 @@ async fn grant_create_resolves_existing_user() {
         .req(
             Method::POST,
             &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
-            Some(json!({"grantee_email": "alice@x.com", "role": "editor"})),
+            Some(json!({"grantee_email": "alice@x.com"})),
         )
         .await;
     assert_eq!(s, StatusCode::CREATED);
     assert_eq!(v["grantee_user_id"], alice);
-    assert_eq!(v["role"], "editor");
+    assert!(v.get("role").is_none());
     assert_eq!(v["devserver_id"], dsid);
     assert!(v["accepted_at"].is_string());
 
@@ -1015,7 +1123,7 @@ async fn grant_create_pending_for_unknown_email() {
         .req(
             Method::POST,
             &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
-            Some(json!({"grantee_email": "future@x.com", "role": "viewer"})),
+            Some(json!({"grantee_email": "future@x.com"})),
         )
         .await;
     assert_eq!(s, StatusCode::CREATED);
@@ -1031,22 +1139,23 @@ async fn grant_create_validates_inputs() {
     let owner = mk_user(&app, "owner@x.com").await;
     let dsid = ds("a");
 
-    // Bad role.
+    // Role-bearing clients must fail the binary-access cutover instead of
+    // silently creating broader shell-equivalent authority.
     let (s, _) = app
         .req(
             Method::POST,
             &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
-            Some(json!({"grantee_email": "a@b.com", "role": "admin"})),
+            Some(json!({"grantee_email": "a@b.com", "role": "viewer"})),
         )
         .await;
-    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
 
     // Bad email.
     let (s, _) = app
         .req(
             Method::POST,
             &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
-            Some(json!({"grantee_email": "nope", "role": "viewer"})),
+            Some(json!({"grantee_email": "nope"})),
         )
         .await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
@@ -1057,7 +1166,7 @@ async fn grant_create_validates_inputs() {
         .req(
             Method::POST,
             &format!("/v1/users/{owner}/devservers/{bad}/grants"),
-            Some(json!({"grantee_email": "a@b.com", "role": "viewer"})),
+            Some(json!({"grantee_email": "a@b.com"})),
         )
         .await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
@@ -1068,7 +1177,7 @@ async fn grant_create_validates_inputs() {
         .req(
             Method::POST,
             &format!("/v1/users/{owner}/devservers/{short}/grants"),
-            Some(json!({"grantee_email": "a@b.com", "role": "viewer"})),
+            Some(json!({"grantee_email": "a@b.com"})),
         )
         .await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
@@ -1079,7 +1188,7 @@ async fn grant_create_validates_inputs() {
         .req(
             Method::POST,
             &format!("/v1/users/{ghost}/devservers/{dsid}/grants"),
-            Some(json!({"grantee_email": "a@b.com", "role": "viewer"})),
+            Some(json!({"grantee_email": "a@b.com"})),
         )
         .await;
     assert_eq!(s, StatusCode::NOT_FOUND);
@@ -1088,7 +1197,23 @@ async fn grant_create_validates_inputs() {
 }
 
 #[tokio::test]
-async fn grant_create_is_idempotent_and_promotes_role() {
+async fn grant_role_column_is_absent_after_migrations() {
+    let app = TestApp::new().await;
+    let role_columns = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM information_schema.columns \
+         WHERE table_schema = current_schema() \
+           AND table_name = 'devserver_grants' \
+           AND column_name = 'role'",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("inspect migrated devserver_grants shape");
+    assert_eq!(role_columns, 0, "legacy role column survived migration");
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn grant_create_is_idempotent_case_insensitively() {
     let app = TestApp::new().await;
     let owner = mk_user(&app, "owner@x.com").await;
     let _alice = mk_user(&app, "alice@x.com").await;
@@ -1098,7 +1223,7 @@ async fn grant_create_is_idempotent_and_promotes_role() {
         .req(
             Method::POST,
             &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
-            Some(json!({"grantee_email": "alice@x.com", "role": "viewer"})),
+            Some(json!({"grantee_email": "alice@x.com"})),
         )
         .await;
     assert_eq!(s, StatusCode::CREATED);
@@ -1107,12 +1232,12 @@ async fn grant_create_is_idempotent_and_promotes_role() {
         .req(
             Method::POST,
             &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
-            Some(json!({"grantee_email": "ALICE@x.com", "role": "editor"})),
+            Some(json!({"grantee_email": "ALICE@x.com"})),
         )
         .await;
     assert_eq!(s, StatusCode::CREATED);
     assert_eq!(v1["id"], v2["id"], "same row");
-    assert_eq!(v2["role"], "editor", "role promoted");
+    assert!(v2.get("role").is_none());
     assert_eq!(v1["created_at"], v2["created_at"], "created_at preserved");
 
     app.cleanup().await;
@@ -1129,14 +1254,14 @@ async fn grant_list_and_delete() {
     app.req(
         Method::POST,
         &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
-        Some(json!({"grantee_email": "alice@x.com", "role": "viewer"})),
+        Some(json!({"grantee_email": "alice@x.com"})),
     )
     .await;
     let (_, b) = app
         .req(
             Method::POST,
             &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
-            Some(json!({"grantee_email": "bob@x.com", "role": "editor"})),
+            Some(json!({"grantee_email": "bob@x.com"})),
         )
         .await;
     let bid = b["id"].as_str().unwrap().to_string();
@@ -1158,7 +1283,7 @@ async fn grant_list_and_delete() {
             None,
         )
         .await;
-    assert_eq!(s, StatusCode::NO_CONTENT);
+    assert_eq!(s, StatusCode::ACCEPTED);
 
     let (_, v) = app
         .req(
@@ -1175,7 +1300,7 @@ async fn grant_list_and_delete() {
         .req(
             Method::POST,
             &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
-            Some(json!({"grantee_email": "bob@x.com", "role": "viewer"})),
+            Some(json!({"grantee_email": "bob@x.com"})),
         )
         .await;
     let gid = again["id"].as_str().unwrap();
@@ -1203,7 +1328,7 @@ async fn devserver_access_owner_grantee_and_stranger() {
     app.req(
         Method::POST,
         &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
-        Some(json!({"grantee_email": "alice@x.com", "role": "editor"})),
+        Some(json!({"grantee_email": "alice@x.com"})),
     )
     .await;
 
@@ -1216,7 +1341,7 @@ async fn devserver_access_owner_grantee_and_stranger() {
         )
         .await;
     assert_eq!(s, StatusCode::OK);
-    assert_eq!(v["role"], "owner");
+    assert_eq!(v["access"], true);
 
     // Grantee.
     let (s, v) = app
@@ -1227,7 +1352,7 @@ async fn devserver_access_owner_grantee_and_stranger() {
         )
         .await;
     assert_eq!(s, StatusCode::OK);
-    assert_eq!(v["role"], "editor");
+    assert_eq!(v["access"], true);
 
     // Stranger: 404, not 403 (no enumeration).
     let (s, _) = app
@@ -1263,7 +1388,7 @@ async fn claim_sweep_fills_pending_grants() {
     app.req(
         Method::POST,
         &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
-        Some(json!({"grantee_email": "late@x.com", "role": "viewer"})),
+        Some(json!({"grantee_email": "late@x.com"})),
     )
     .await;
 
@@ -1290,7 +1415,7 @@ async fn claim_sweep_fills_pending_grants() {
         )
         .await;
     assert_eq!(s, StatusCode::OK);
-    assert_eq!(v["role"], "viewer");
+    assert_eq!(v["access"], true);
 
     // Second sweep is a no-op.
     let (_, v) = app
@@ -1316,19 +1441,19 @@ async fn list_owned_and_incoming() {
     app.req(
         Method::POST,
         &format!("/v1/users/{owner}/devservers/{ds_a}/grants"),
-        Some(json!({"grantee_email": "alice@x.com", "role": "viewer"})),
+        Some(json!({"grantee_email": "alice@x.com"})),
     )
     .await;
     app.req(
         Method::POST,
         &format!("/v1/users/{owner}/devservers/{ds_a}/grants"),
-        Some(json!({"grantee_email": "ghost@x.com", "role": "viewer"})),
+        Some(json!({"grantee_email": "ghost@x.com"})),
     )
     .await;
     app.req(
         Method::POST,
         &format!("/v1/users/{owner}/devservers/{ds_b}/grants"),
-        Some(json!({"grantee_email": "alice@x.com", "role": "editor"})),
+        Some(json!({"grantee_email": "alice@x.com"})),
     )
     .await;
 
@@ -1342,6 +1467,7 @@ async fn list_owned_and_incoming() {
     assert_eq!(s, StatusCode::OK);
     let arr = v.as_array().unwrap();
     assert_eq!(arr.len(), 2);
+    assert!(arr.iter().all(|row| row["owner_user_id"] == owner));
     // Ordered by devserver_id, so ds_a ("aaaa...") precedes ds_b.
     assert_eq!(arr[0]["devserver_id"], ds_a);
     assert_eq!(arr[0]["grant_count"], 2);
@@ -1370,7 +1496,7 @@ async fn list_owned_and_incoming() {
 }
 
 #[tokio::test]
-async fn cascade_grants_on_user_delete() {
+async fn pending_user_delete_preserves_grants_until_settlement() {
     let app = TestApp::new().await;
     let owner = mk_user(&app, "owner@x.com").await;
     let alice = mk_user(&app, "alice@x.com").await;
@@ -1379,13 +1505,16 @@ async fn cascade_grants_on_user_delete() {
     app.req(
         Method::POST,
         &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
-        Some(json!({"grantee_email": "alice@x.com", "role": "editor"})),
+        Some(json!({"grantee_email": "alice@x.com"})),
     )
     .await;
 
-    // Delete the owner; grant should vanish.
-    app.req(Method::DELETE, &format!("/v1/users/{owner}"), None)
+    // The owner and dependent grants stay durable until the outbox confirms
+    // the second data-plane cut.
+    let (status, _) = app
+        .req(Method::DELETE, &format!("/v1/users/{owner}"), None)
         .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
     let (_, v) = app
         .req(
             Method::GET,
@@ -1393,7 +1522,7 @@ async fn cascade_grants_on_user_delete() {
             None,
         )
         .await;
-    assert_eq!(v.as_array().unwrap().len(), 0);
+    assert_eq!(v.as_array().unwrap().len(), 1);
 
     app.cleanup().await;
 }
@@ -1572,7 +1701,7 @@ async fn devserver_label_dedup_serializes_concurrent_first_dials() {
 }
 
 #[tokio::test]
-async fn devserver_list_and_delete_cascades_grants() {
+async fn devserver_delete_refuses_to_cascade_grants() {
     let app = TestApp::new().await;
     let owner = mk_user(&app, "owner@x.com").await;
     mk_user(&app, "alice@x.com").await;
@@ -1585,12 +1714,13 @@ async fn devserver_list_and_delete_cascades_grants() {
         Some(json!({"devserver_id": ds_a})),
     )
     .await;
-    app.req(
-        Method::POST,
-        &format!("/v1/users/{owner}/devservers/{ds_a}/grants"),
-        Some(json!({"grantee_email": "alice@x.com", "role": "viewer"})),
-    )
-    .await;
+    let (_, grant) = app
+        .req(
+            Method::POST,
+            &format!("/v1/users/{owner}/devservers/{ds_a}/grants"),
+            Some(json!({"grantee_email": "alice@x.com"})),
+        )
+        .await;
     app.req(
         Method::POST,
         &format!("/v1/users/{owner}/devservers"),
@@ -1614,16 +1744,14 @@ async fn devserver_list_and_delete_cascades_grants() {
             None,
         )
         .await;
-    assert_eq!(s, StatusCode::NO_CONTENT);
+    assert_eq!(s, StatusCode::CONFLICT);
 
-    // List shrinks.
+    // Neither the registry row nor its grant was cascaded.
     let (_, v) = app
         .req(Method::GET, &format!("/v1/users/{owner}/devservers"), None)
         .await;
-    assert_eq!(v.as_array().unwrap().len(), 1);
+    assert_eq!(v.as_array().unwrap().len(), 2);
 
-    // Cascade dropped the grant. Listing grants on the deleted devserver
-    // returns an empty array (the route is valid; just no rows).
     let (_, v) = app
         .req(
             Method::GET,
@@ -1631,7 +1759,26 @@ async fn devserver_list_and_delete_cascades_grants() {
             None,
         )
         .await;
-    assert_eq!(v.as_array().unwrap().len(), 0);
+    assert_eq!(v.as_array().unwrap().len(), 1);
+
+    // Explicit grant revocation is the only safe route to deletion.
+    let grant_id = grant["id"].as_str().unwrap();
+    let (s, _) = app
+        .req(
+            Method::DELETE,
+            &format!("/v1/users/{owner}/grants/{grant_id}"),
+            None,
+        )
+        .await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let (s, _) = app
+        .req(
+            Method::DELETE,
+            &format!("/v1/users/{owner}/devservers/{ds_a}"),
+            None,
+        )
+        .await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
 
     app.cleanup().await;
 }
@@ -1684,7 +1831,7 @@ async fn grant_create_autocreates_devserver() {
         .req(
             Method::POST,
             &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
-            Some(json!({"grantee_email": "alice@x.com", "role": "viewer"})),
+            Some(json!({"grantee_email": "alice@x.com"})),
         )
         .await;
     assert_eq!(s, StatusCode::CREATED);
@@ -1954,21 +2101,20 @@ async fn grant_count(app: &TestApp, dsid: &str) -> i64 {
 }
 
 #[tokio::test]
-async fn sweep_deletes_stale_rows_cascades_grants_and_marks_live_ones() {
+async fn sweep_preserves_shared_rows_and_marks_live_ones() {
     let app = TestApp::new().await;
     let owner = mk_user(&app, "owner@x.com").await;
     mk_user(&app, "friend@x.com").await;
     let stale = ds("a");
     let live = ds("b");
 
-    // The stale row carries a grant (the endpoint auto-creates the
-    // devservers row); ruling: sweep deletes rows offline > retention
-    // INCLUDING rows carrying grants, and the grants cascade away.
+    // A stale row carrying a grant remains until the grant has completed its
+    // exact-revocation path; the sweeper must never cascade authorization.
     let (s, _) = app
         .req(
             Method::POST,
             &format!("/v1/users/{owner}/devservers/{stale}/grants"),
-            Some(json!({"grantee_email": "friend@x.com", "role": "viewer"})),
+            Some(json!({"grantee_email": "friend@x.com"})),
         )
         .await;
     assert_eq!(s, StatusCode::CREATED);
@@ -1979,18 +2125,18 @@ async fn sweep_deletes_stale_rows_cascades_grants_and_marks_live_ones() {
     backdate_devserver(&app, &stale, 30.0, None).await;
     backdate_devserver(&app, &live, 30.0, None).await;
 
-    let snapshot = vec![(username_of(&app, &owner).await, live.clone())];
+    let snapshot = vec![(owner.parse().unwrap(), live.clone())];
     let stats = profile::sweeper::sweep_once(&app.pool, &snapshot, RETENTION)
         .await
         .expect("sweep runs");
     assert_eq!(stats.marked, 1, "the live row is stamped");
-    assert_eq!(stats.deleted, 1, "the stale row is deleted");
+    assert_eq!(stats.deleted, 0, "the shared stale row is preserved");
 
-    assert_eq!(devserver_ids(&app).await, vec![live.clone()]);
+    assert_eq!(devserver_ids(&app).await, vec![stale.clone(), live.clone()]);
     assert_eq!(
         grant_count(&app, &stale).await,
-        0,
-        "grants cascade with the row"
+        1,
+        "shared authorization remains explicit"
     );
     let seen: Option<chrono::DateTime<chrono::Utc>> =
         sqlx::query_scalar("SELECT last_seen_at FROM devservers WHERE devserver_id = $1")
@@ -2047,7 +2193,7 @@ async fn sweep_is_idempotent_across_ticks() {
     backdate_devserver(&app, &stale, 30.0, None).await;
     backdate_devserver(&app, &live, 30.0, None).await;
 
-    let snapshot = vec![(username_of(&app, &owner).await, live.clone())];
+    let snapshot = vec![(owner.parse().unwrap(), live.clone())];
     let first = profile::sweeper::sweep_once(&app.pool, &snapshot, RETENTION)
         .await
         .expect("first sweep");
@@ -2062,11 +2208,284 @@ async fn sweep_is_idempotent_across_ticks() {
 
     // A snapshot naming a user with no rows marks nothing and is
     // harmless (the proxy can know tunnels profile has no row for).
-    let stranger = vec![("no-such-user".to_string(), ds("f"))];
+    let stranger = vec![(Uuid::new_v4(), ds("f"))];
     let third = profile::sweeper::sweep_once(&app.pool, &stranger, RETENTION)
         .await
         .expect("third sweep");
     assert_eq!(third.marked, 0);
 
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn sweep_owner_uuid_survives_username_rename_and_reclaim() {
+    let app = TestApp::new().await;
+    let owner = mk_user(&app, "owner@x.com").await;
+    let reclaimer = mk_user(&app, "reclaimer@x.com").await;
+    let old_username = username_of(&app, &owner).await;
+
+    let (status, _) = app
+        .req(
+            Method::PATCH,
+            &format!("/v1/users/{owner}/username"),
+            Some(json!({"username": "renamed-owner"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = app
+        .req(
+            Method::PATCH,
+            &format!("/v1/users/{reclaimer}/username"),
+            Some(json!({"username": old_username})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "retired handle can be reclaimed");
+
+    // Both accounts have the same devserver identifier. Only the immutable
+    // UUID in the live snapshot decides which row is marked and retained.
+    let devserver_id = ds("a");
+    seed_devserver(&app, &owner, &devserver_id).await;
+    seed_devserver(&app, &reclaimer, &devserver_id).await;
+    backdate_devserver(&app, &devserver_id, 30.0, None).await;
+
+    let snapshot = vec![(owner.parse().unwrap(), devserver_id.clone())];
+    let stats = profile::sweeper::sweep_once(&app.pool, &snapshot, RETENTION)
+        .await
+        .expect("sweep runs");
+    assert_eq!((stats.marked, stats.deleted), (1, 1));
+
+    let survivors: Vec<Uuid> =
+        sqlx::query_scalar("SELECT owner_user_id FROM devservers WHERE devserver_id = $1")
+            .bind(&devserver_id)
+            .fetch_all(&app.pool)
+            .await
+            .expect("list surviving owners");
+    assert_eq!(survivors, vec![owner.parse::<Uuid>().unwrap()]);
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn revocation_reservation_has_no_precommit_settlement_clock() {
+    let app = TestApp::new().await;
+    let user_id: Uuid = mk_user(&app, "restart@x.com").await.parse().unwrap();
+    let job = profile::revocation::RevocationJob::Subject(user_id);
+    let mut tx = app.pool.begin().await.unwrap();
+    profile::revocation::reserve_tx(&mut tx, &job)
+        .await
+        .expect("transactional reservation");
+    let (phase, first_cut, settle, deadline): RevocationScheduleRow = sqlx::query_as(
+        "SELECT phase, first_cut_confirmed_at, settle_not_before, deadline \
+         FROM control_revocation_jobs WHERE job_key = $1",
+    )
+    .bind(format!("subject:{user_id}"))
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    assert_eq!(phase, "pending_first_cut");
+    assert!(first_cut.is_none());
+    assert!(settle.is_none());
+    assert!(deadline.is_none());
+    tx.commit().await.unwrap();
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn admin_delete_atomically_persists_dominant_outbox_job() {
+    let app = TestApp::new().await;
+    let user_id = mk_user(&app, "delete@x.com").await;
+    let (status, _) = app
+        .req(Method::DELETE, &format!("/v1/users/{user_id}"), None)
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let (blocked, kind, phase, settle): (
+        bool,
+        String,
+        String,
+        Option<chrono::DateTime<chrono::Utc>>,
+    ) = sqlx::query_as(
+        "SELECT u.blocked_at IS NOT NULL, j.kind, j.phase, j.settle_not_before \
+         FROM users u JOIN control_revocation_jobs j ON j.subject_user_id = u.id \
+         WHERE u.id = $1",
+    )
+    .bind(user_id.parse::<Uuid>().unwrap())
+    .fetch_one(&app.pool)
+    .await
+    .expect("denial and outbox commit together");
+    assert!(blocked);
+    assert_eq!(kind, "account_delete");
+    assert_eq!(phase, "pending_first_cut");
+    assert!(settle.is_none());
+
+    let (status, _) = app
+        .admin(
+            Method::POST,
+            &format!("/v1/admin/users/{user_id}/unblock"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let blocked: bool =
+        sqlx::query_scalar("SELECT blocked_at IS NOT NULL FROM users WHERE id = $1")
+            .bind(user_id.parse::<Uuid>().unwrap())
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert!(blocked, "pending deletion cannot reopen authorization");
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn admin_delete_finalizes_only_after_confirmed_settlement() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let control = axum::Router::new()
+        .route(
+            "/admin/v1/owners/{owner_id}/tunnels/kill",
+            axum::routing::post(|| async { axum::Json(json!({"killed": 0})) }),
+        )
+        .route(
+            "/admin/v1/sessions/revoke",
+            axum::routing::post(|| async {
+                axum::Json(json!({
+                    "revoked": 0,
+                    "proxies_confirmed": 1,
+                    "proxies_expected": 1
+                }))
+            }),
+        );
+    let server = tokio::spawn(async move { axum::serve(listener, control).await.unwrap() });
+    let control_url = format!("http://{addr}");
+    let app = TestApp::new_with_control(&control_url).await;
+    let user_id: Uuid = mk_user(&app, "finalize@x.com").await.parse().unwrap();
+    app.req(
+        Method::POST,
+        &format!("/v1/users/{user_id}/identities"),
+        Some(json!({"provider": "google", "provider_subject": "finalize-sub"})),
+    )
+    .await;
+
+    let (status, _) = app
+        .req(Method::DELETE, &format!("/v1/users/{user_id}"), None)
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        users, 1,
+        "the first cut must not delete durable identity state"
+    );
+
+    let client = gateway_common::devserver_control_client::DevserverControlClient::new(
+        control_url.parse().unwrap(),
+        "test-profile-admin-token".into(),
+    )
+    .unwrap();
+    // The first successful post-commit cut only starts the quiet window.
+    profile::revocation::process_once(&app.pool, &client)
+        .await
+        .unwrap();
+    let (phase, settle): (String, chrono::DateTime<chrono::Utc>) = sqlx::query_as(
+        "SELECT phase, settle_not_before FROM control_revocation_jobs WHERE job_key = $1",
+    )
+    .bind(format!("subject:{user_id}"))
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(phase, "settling");
+    assert!(settle >= chrono::Utc::now() + chrono::Duration::seconds(39));
+    let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(users, 1);
+
+    sqlx::query(
+        "UPDATE control_revocation_jobs SET \
+           settle_not_before = now() - interval '1 second', next_attempt_at = now() \
+         WHERE job_key = $1",
+    )
+    .bind(format!("subject:{user_id}"))
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    for _ in 0..10 {
+        profile::revocation::process_once(&app.pool, &client)
+            .await
+            .unwrap();
+        let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+        if users == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    let identities: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM identities WHERE user_id = $1")
+        .bind(user_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(users, 0, "confirmed second cut finalizes the account");
+    assert_eq!(identities, 0, "finalization applies dependent-row cascades");
+
+    app.cleanup().await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn coalesced_reservation_resets_a_due_generation_to_first_cut_phase() {
+    let app = TestApp::new().await;
+    let user_id: Uuid = mk_user(&app, "supersede@x.com").await.parse().unwrap();
+    let job = profile::revocation::RevocationJob::Subject(user_id);
+    profile::revocation::reserve(&app.pool, &job)
+        .await
+        .expect("initial reservation");
+    sqlx::query(
+        "UPDATE control_revocation_jobs SET \
+           phase = 'settling', first_cut_confirmed_at = now() - interval '41 seconds', \
+           settle_not_before = now() - interval '1 second', \
+           deadline = now() + interval '5 minutes', next_attempt_at = now() - interval '1 second' \
+         WHERE job_key = $1",
+    )
+    .bind(format!("subject:{user_id}"))
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    let old_generation: i64 =
+        sqlx::query_scalar("SELECT generation FROM control_revocation_jobs WHERE job_key = $1")
+            .bind(format!("subject:{user_id}"))
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+
+    profile::revocation::reserve(&app.pool, &job)
+        .await
+        .expect("new denial supersedes the due generation");
+    let (phase, first_cut, settle, deadline, generation): RevocationGenerationRow = sqlx::query_as(
+        "SELECT phase, first_cut_confirmed_at, settle_not_before, deadline, generation \
+         FROM control_revocation_jobs WHERE job_key = $1",
+    )
+    .bind(format!("subject:{user_id}"))
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(phase, "pending_first_cut");
+    assert!(first_cut.is_none());
+    assert!(settle.is_none());
+    assert!(deadline.is_none());
+    assert!(generation > old_generation);
     app.cleanup().await;
 }

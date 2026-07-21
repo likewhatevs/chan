@@ -4,7 +4,6 @@
     HttpError,
     type Devserver,
     type DevserverGrant,
-    type DevserverGrantRole,
     type IncomingShare,
     type OwnedDevserverSummary,
   } from "../lib/api";
@@ -33,7 +32,6 @@
 
   // Add-grant form state, keyed by devserver_id. Reset on submit.
   let addEmail = $state<Record<string, string>>({});
-  let addRole = $state<Record<string, DevserverGrantRole>>({});
   let addBusy = $state<Record<string, boolean>>({});
   let addError = $state<Record<string, string | null>>({});
 
@@ -118,7 +116,6 @@
       return;
     }
     expanded = devserverId;
-    if (!addRole[devserverId]) addRole[devserverId] = "viewer";
     void loadGrants(devserverId);
   }
 
@@ -172,7 +169,6 @@
 
   async function addGrant(devserverId: string) {
     const email = (addEmail[devserverId] ?? "").trim();
-    const role = addRole[devserverId] ?? "viewer";
     if (!isLikelyEmail(email)) {
       addError[devserverId] = "Enter a valid email (local@host.tld)";
       return;
@@ -180,7 +176,7 @@
     addBusy[devserverId] = true;
     addError[devserverId] = null;
     try {
-      const row = await api.addDevserverGrant(devserverId, email, role);
+      const row = await api.addDevserverGrant(devserverId, email);
       const list = grants[devserverId] ?? [];
       // create-or-promote: replace an existing row for this email,
       // else prepend so the newest is visible.
@@ -228,7 +224,11 @@
       A devserver is one of your access tokens running <code>chan devserver</code>;
       it exposes your whole workspace library. Create one under the Tokens
       tab, then run <code>chan devserver --tunnel-token=&lt;token&gt;</code>.
-      Sharing grants a collaborator the whole devserver.
+      Sharing grants shell-equivalent access to the whole devserver, including
+      its terminals, processes, files, and every workspace it serves.
+      A grantee can copy credentials or install persistence on the host.
+      Revoking the grant closes future Chan access, but cannot undo host changes
+      or recover secrets already copied.
     </p>
 
     {#if myDevservers.length === 0 && !loadingLists}
@@ -289,8 +289,12 @@
               <div class="panel">
                 <strong>Share this devserver</strong>
                 <p class="muted small">
-                  Grant by email. The collaborator gets access to the whole
-                  devserver once they sign in with a matching verified email.
+                  Grant by email. This is shell-equivalent access to the whole
+                  devserver, including terminals, processes, files, and every
+                  workspace it serves. The grant activates after sign-in with a
+                  matching verified email. A grantee can copy credentials or
+                  install persistence on the host; later revocation closes Chan
+                  access but cannot undo host changes or secrets already copied.
                 </p>
 
                 <form
@@ -308,10 +312,6 @@
                     autocomplete="off"
                     spellcheck="false"
                   />
-                  <select bind:value={addRole[d.id]} disabled={addBusy[d.id]} aria-label="Role">
-                    <option value="viewer">Viewer</option>
-                    <option value="editor">Editor</option>
-                  </select>
                   <button
                     type="submit"
                     disabled={addBusy[d.id] || !isLikelyEmail((addEmail[d.id] ?? "").trim())}
@@ -335,7 +335,6 @@
                     {#each grants[d.id] ?? [] as g (g.id)}
                       <li>
                         <span class="grant-email">{g.grantee_email}</span>
-                        <span class="grant-role">{g.role}</span>
                         <span class="grant-status muted small">
                           {g.accepted_at ? "active" : "pending sign-in"}
                         </span>
@@ -377,9 +376,7 @@
                   {s.label || s.devserver_id.slice(0, 12)}
                   <span class="muted small"> - from @{s.owner_username}</span>
                 </div>
-                <div class="muted small">
-                  {s.role === "editor" ? "Editor" : "Viewer"} access
-                </div>
+                <div class="muted small">Shell-equivalent devserver access</div>
               </div>
             </div>
           </li>
@@ -506,7 +503,7 @@
   }
   .grantlist li {
     display: grid;
-    grid-template-columns: 1fr auto auto auto;
+    grid-template-columns: 1fr auto auto;
     align-items: center;
     gap: .5rem;
     padding: .25rem .5rem;
@@ -520,13 +517,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .grant-role {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: .04em;
-    color: var(--text-secondary);
-  }
-  input, select {
+  input {
     font: inherit;
     padding: .35rem .5rem;
     border-radius: 6px;

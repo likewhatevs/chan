@@ -29,7 +29,8 @@ serve_substreams(yconn,
 serve_substreams_with_limit   same, with explicit concurrency cap
 
 run(cfg, router)              long-lived: dial, register, serve,
-                              reconnect with exponential backoff
+                              refresh admission authority, reconnect
+                              with exponential backoff
 ```
 
 ## Build & test
@@ -45,7 +46,7 @@ The full workspace gate (used by CI and the pre-push hook) is `cargo fmt --check
 
 ## Design
 
-See [`design.md`](design.md) for the dial / handshake / yamux flow, the reconnect loop, why `handshake` and `serve_substreams` are free functions, the h2c branch, and the cross-crate context. The wire format itself is in [`chan-tunnel-proto/design.md`](../chan-tunnel-proto/design.md).
+See [`design.md`](design.md) for the dial / handshake / yamux flow, permit-before-poll substream bound, PAT-backed admission-lease refresh, reconnect loop, loopback-only h2c policy, and cross-crate context. The wire format itself is in [`chan-tunnel-proto/design.md`](../chan-tunnel-proto/design.md).
 
 ## License
 

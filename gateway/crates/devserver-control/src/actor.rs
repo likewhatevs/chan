@@ -2,8 +2,10 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
-use devserver_control_proto::{CanonicalOrigin, ProxyId, ServerFrame, TunnelRow};
+use chrono::{DateTime, Utc};
+use devserver_control_proto::{
+    AdmissionLease, CanonicalOrigin, ProxyId, ServerFrame, SessionRevocation, TunnelRow,
+};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{Instant, MissedTickBehavior};
 use uuid::Uuid;
@@ -47,6 +49,12 @@ pub enum KillPlan {
     Issued(Vec<oneshot::Receiver<CommandOutcome>>),
 }
 
+pub struct SessionRevocationPlan {
+    pub confirmations: Vec<oneshot::Receiver<CommandOutcome>>,
+    pub unreachable_proxies: usize,
+    pub authority_ready: bool,
+}
+
 enum Command {
     BeginSession {
         proxy_id: ProxyId,
@@ -54,7 +62,7 @@ enum Command {
         package_version: String,
         boot_id: Uuid,
         command_tx: mpsc::Sender<ServerFrame>,
-        reply: oneshot::Sender<SessionIncarnation>,
+        reply: oneshot::Sender<Result<SessionIncarnation, StateError>>,
     },
     AcceptSnapshot {
         proxy_id: ProxyId,
@@ -82,8 +90,22 @@ enum Command {
         incarnation: SessionIncarnation,
         request_id: Uuid,
         registration_id: Uuid,
+        owner_user_id: Uuid,
         user: String,
         devserver_id: String,
+        admission_lease: AdmissionLease,
+        admission_lease_expires_at: DateTime<Utc>,
+        reply: StateReply,
+    },
+    RefreshLease {
+        proxy_id: ProxyId,
+        incarnation: SessionIncarnation,
+        registration_id: Uuid,
+        owner_user_id: Uuid,
+        user: String,
+        devserver_id: String,
+        admission_lease: AdmissionLease,
+        admission_lease_expires_at: DateTime<Utc>,
         reply: StateReply,
     },
     CancelAdmission {
@@ -113,6 +135,13 @@ enum Command {
         failed: Vec<Uuid>,
         reply: StateReply,
     },
+    ReportSessionRevocation {
+        proxy_id: ProxyId,
+        incarnation: SessionIncarnation,
+        command_id: Uuid,
+        revoked: usize,
+        reply: StateReply,
+    },
     Disconnect {
         proxy_id: ProxyId,
         incarnation: SessionIncarnation,
@@ -129,18 +158,38 @@ enum Command {
     Tunnels {
         reply: oneshot::Sender<Result<Vec<TunnelView>, StateError>>,
     },
+    OwnerTunnels {
+        owner_user_id: Uuid,
+        reply: oneshot::Sender<Result<Vec<TunnelView>, StateError>>,
+    },
     Proxies {
         reply: oneshot::Sender<Result<Vec<ProxyView>, StateError>>,
     },
     KillTunnel {
-        user: String,
+        owner_user_id: Uuid,
         devserver_id: String,
         reply: oneshot::Sender<Result<KillPlan, StateError>>,
     },
     KillUserTunnels {
-        user: String,
+        owner_user_id: Uuid,
         reply: oneshot::Sender<Result<KillPlan, StateError>>,
     },
+    RevokeSessions {
+        revocation: SessionRevocation,
+        reply: oneshot::Sender<Result<SessionRevocationPlan, StateError>>,
+    },
+}
+
+impl Command {
+    fn affects_watch_views(&self) -> bool {
+        !matches!(
+            self,
+            Self::Readiness { .. }
+                | Self::Tunnels { .. }
+                | Self::OwnerTunnels { .. }
+                | Self::Proxies { .. }
+        )
+    }
 }
 
 type StateReply = oneshot::Sender<Result<MutationStatus, StateError>>;
@@ -152,7 +201,7 @@ pub fn spawn_controller(max_devservers_per_user: usize) -> ControllerHandle {
 pub fn spawn_controller_owned(
     max_devservers_per_user: usize,
 ) -> (ControllerHandle, tokio::task::JoinHandle<()>) {
-    let (tx, mut rx) = mpsc::channel(ACTOR_QUEUE_CAPACITY);
+    let (tx, mut rx) = mpsc::channel::<Command>(ACTOR_QUEUE_CAPACITY);
     let (readiness_watch_tx, readiness_watch) = watch::channel(false);
     let (tunnel_watch_tx, tunnel_watch) = watch::channel(Arc::new(Vec::new()));
     let (proxy_watch_tx, proxy_watch) = watch::channel(Arc::new(Vec::new()));
@@ -163,24 +212,36 @@ pub fn spawn_controller_owned(
         let mut waiters = HashMap::new();
         let mut ticker = tokio::time::interval(TICK_INTERVAL);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut watch_views_dirty = true;
 
         loop {
-            let effects = tokio::select! {
-                _ = ticker.tick() => state.tick(Instant::now(), Utc::now()),
+            tokio::select! {
+                _ = ticker.tick() => {
+                    let before = state.watch_shape();
+                    let effects = state.tick(Instant::now(), Utc::now());
+                    let has_effects = !effects.is_empty();
+                    apply_effects(&mut state, &mut sessions, &mut waiters, effects);
+                    watch_views_dirty |= has_effects || before != state.watch_shape();
+                    if watch_views_dirty {
+                        publish_watches(
+                            &state,
+                            &readiness_watch_tx,
+                            &tunnel_watch_tx,
+                            &proxy_watch_tx,
+                        );
+                        watch_views_dirty = false;
+                    }
+                }
                 command = rx.recv() => {
                     let Some(command) = command else {
                         break;
                     };
-                    handle_command(command, &mut state, &mut sessions, &mut waiters)
+                    let affects_watch_views = command.affects_watch_views();
+                    let effects = handle_command(command, &mut state, &mut sessions, &mut waiters);
+                    apply_effects(&mut state, &mut sessions, &mut waiters, effects);
+                    watch_views_dirty |= affects_watch_views;
                 }
-            };
-            apply_effects(&mut state, &mut sessions, &mut waiters, effects);
-            publish_watches(
-                &state,
-                &readiness_watch_tx,
-                &tunnel_watch_tx,
-                &proxy_watch_tx,
-            );
+            }
         }
     });
 
@@ -213,8 +274,20 @@ fn handle_command(
             reply,
         } => {
             let proxy_id_text = proxy_id.as_str().to_string();
-            let (incarnation, effects) =
-                state.begin_session(proxy_id, base_url, package_version, boot_id, now, wall_now);
+            let (incarnation, effects) = match state.begin_session_authorized(
+                proxy_id,
+                base_url,
+                package_version,
+                boot_id,
+                now,
+                wall_now,
+            ) {
+                Ok(result) => result,
+                Err(error) => {
+                    let _ = reply.send(Err(error));
+                    return Vec::new();
+                }
+            };
             sessions.insert(
                 SessionKey {
                     proxy_id: proxy_id_text,
@@ -222,7 +295,7 @@ fn handle_command(
                 },
                 command_tx,
             );
-            let _ = reply.send(incarnation);
+            let _ = reply.send(Ok(incarnation));
             effects
         }
         Command::AcceptSnapshot {
@@ -267,18 +340,49 @@ fn handle_command(
             incarnation,
             request_id,
             registration_id,
+            owner_user_id,
             user,
             devserver_id,
+            admission_lease,
+            admission_lease_expires_at,
             reply,
         } => finish(
             reply,
-            state.request_admission(
+            state.request_admission_authorized(
                 &proxy_id,
                 incarnation,
                 request_id,
                 registration_id,
+                owner_user_id,
                 user,
                 devserver_id,
+                admission_lease,
+                admission_lease_expires_at,
+                now,
+                wall_now,
+            ),
+        ),
+        Command::RefreshLease {
+            proxy_id,
+            incarnation,
+            registration_id,
+            owner_user_id,
+            user,
+            devserver_id,
+            admission_lease,
+            admission_lease_expires_at,
+            reply,
+        } => finish(
+            reply,
+            state.refresh_lease(
+                &proxy_id,
+                incarnation,
+                registration_id,
+                owner_user_id,
+                user,
+                devserver_id,
+                admission_lease,
+                admission_lease_expires_at,
                 now,
                 wall_now,
             ),
@@ -338,6 +442,16 @@ fn handle_command(
                 wall_now,
             ),
         ),
+        Command::ReportSessionRevocation {
+            proxy_id,
+            incarnation,
+            command_id,
+            revoked,
+            reply,
+        } => finish(
+            reply,
+            state.session_revocation_result(&proxy_id, incarnation, command_id, revoked),
+        ),
         Command::Disconnect {
             proxy_id,
             incarnation,
@@ -362,22 +476,30 @@ fn handle_command(
             let _ = reply.send(state.read_tunnels());
             Vec::new()
         }
+        Command::OwnerTunnels {
+            owner_user_id,
+            reply,
+        } => {
+            let _ = reply.send(state.read_owner_tunnels(owner_user_id));
+            Vec::new()
+        }
         Command::Proxies { reply } => {
             let _ = reply.send(state.read_proxies());
             Vec::new()
         }
         Command::KillTunnel {
-            user,
+            owner_user_id,
             devserver_id,
             reply,
         } => {
-            let (command_id, effects) = match state.begin_exact_kill(&user, &devserver_id, now) {
-                Ok(plan) => plan,
-                Err(error) => {
-                    let _ = reply.send(Err(error));
-                    return Vec::new();
-                }
-            };
+            let (command_id, effects) =
+                match state.begin_exact_kill(owner_user_id, &devserver_id, now) {
+                    Ok(plan) => plan,
+                    Err(error) => {
+                        let _ = reply.send(Err(error));
+                        return Vec::new();
+                    }
+                };
             let plan = match command_id {
                 Some(command_id) => KillPlan::Issued(vec![register_waiter(waiters, command_id)]),
                 None => KillPlan::NotFound,
@@ -385,8 +507,11 @@ fn handle_command(
             let _ = reply.send(Ok(plan));
             effects
         }
-        Command::KillUserTunnels { user, reply } => {
-            let (command_ids, effects) = match state.begin_user_kill(&user, now) {
+        Command::KillUserTunnels {
+            owner_user_id,
+            reply,
+        } => {
+            let (command_ids, effects) = match state.begin_owner_kill(owner_user_id, now) {
                 Ok(plan) => plan,
                 Err(error) => {
                     let _ = reply.send(Err(error));
@@ -398,6 +523,26 @@ fn handle_command(
                 .map(|command_id| register_waiter(waiters, command_id))
                 .collect();
             let _ = reply.send(Ok(KillPlan::Issued(confirmations)));
+            effects
+        }
+        Command::RevokeSessions { revocation, reply } => {
+            let (command_ids, effects, unreachable_proxies, authority_ready) =
+                match state.begin_session_revocation(revocation, now) {
+                    Ok(plan) => plan,
+                    Err(error) => {
+                        let _ = reply.send(Err(error));
+                        return Vec::new();
+                    }
+                };
+            let confirmations = command_ids
+                .into_iter()
+                .map(|command_id| register_waiter(waiters, command_id))
+                .collect();
+            let _ = reply.send(Ok(SessionRevocationPlan {
+                confirmations,
+                unreachable_proxies,
+                authority_ready,
+            }));
             effects
         }
     }
@@ -469,7 +614,10 @@ fn apply_effects(
                 }
                 Effect::Retire { session, reason } => {
                     if let Some(sender) = sessions.remove(&session) {
-                        let _ = sender.try_send(ServerFrame::Shutdown { reason });
+                        let _ = sender.try_send(ServerFrame::Shutdown {
+                            reason,
+                            retryable: true,
+                        });
                     }
                 }
                 Effect::CommandSettled {
@@ -545,7 +693,8 @@ impl ControllerHandle {
                 command_tx,
                 reply,
             })
-            .await?;
+            .await?
+            .map_err(ActorError::State)?;
         Ok(ProxyControlSession {
             incarnation,
             commands,
@@ -604,6 +753,34 @@ impl ControllerHandle {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub async fn request_admission_authorized(
+        &self,
+        proxy_id: ProxyId,
+        incarnation: SessionIncarnation,
+        request_id: Uuid,
+        registration_id: Uuid,
+        owner_user_id: Uuid,
+        user: String,
+        devserver_id: String,
+        admission_lease: AdmissionLease,
+        admission_lease_expires_at: DateTime<Utc>,
+    ) -> Result<MutationStatus, ActorError> {
+        self.state_request(|reply| Command::RequestAdmission {
+            proxy_id,
+            incarnation,
+            request_id,
+            registration_id,
+            owner_user_id,
+            user,
+            devserver_id,
+            admission_lease,
+            admission_lease_expires_at,
+            reply,
+        })
+        .await
+    }
+
+    #[cfg(test)]
     pub async fn request_admission(
         &self,
         proxy_id: ProxyId,
@@ -613,13 +790,41 @@ impl ControllerHandle {
         user: String,
         devserver_id: String,
     ) -> Result<MutationStatus, ActorError> {
-        self.state_request(|reply| Command::RequestAdmission {
+        self.request_admission_authorized(
             proxy_id,
             incarnation,
             request_id,
             registration_id,
+            crate::state::legacy_owner_user_id(&user),
             user,
             devserver_id,
+            AdmissionLease::parse("test").expect("test lease"),
+            Utc::now() + chrono::Duration::minutes(5),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn refresh_lease(
+        &self,
+        proxy_id: ProxyId,
+        incarnation: SessionIncarnation,
+        registration_id: Uuid,
+        owner_user_id: Uuid,
+        user: String,
+        devserver_id: String,
+        admission_lease: AdmissionLease,
+        admission_lease_expires_at: DateTime<Utc>,
+    ) -> Result<MutationStatus, ActorError> {
+        self.state_request(|reply| Command::RefreshLease {
+            proxy_id,
+            incarnation,
+            registration_id,
+            owner_user_id,
+            user,
+            devserver_id,
+            admission_lease,
+            admission_lease_expires_at,
             reply,
         })
         .await
@@ -692,6 +897,23 @@ impl ControllerHandle {
         .await
     }
 
+    pub async fn session_revocation_result(
+        &self,
+        proxy_id: ProxyId,
+        incarnation: SessionIncarnation,
+        command_id: Uuid,
+        revoked: usize,
+    ) -> Result<MutationStatus, ActorError> {
+        self.state_request(|reply| Command::ReportSessionRevocation {
+            proxy_id,
+            incarnation,
+            command_id,
+            revoked,
+            reply,
+        })
+        .await
+    }
+
     pub async fn disconnect(
         &self,
         proxy_id: ProxyId,
@@ -728,6 +950,15 @@ impl ControllerHandle {
             .map_err(ActorError::State)
     }
 
+    pub async fn owner_tunnels(&self, owner_user_id: Uuid) -> Result<Vec<TunnelView>, ActorError> {
+        self.request(|reply| Command::OwnerTunnels {
+            owner_user_id,
+            reply,
+        })
+        .await?
+        .map_err(ActorError::State)
+    }
+
     pub async fn proxies(&self) -> Result<Vec<ProxyView>, ActorError> {
         self.request(|reply| Command::Proxies { reply })
             .await?
@@ -736,11 +967,11 @@ impl ControllerHandle {
 
     pub async fn plan_tunnel_kill(
         &self,
-        user: &str,
+        owner_user_id: Uuid,
         devserver_id: &str,
     ) -> Result<KillPlan, ActorError> {
         self.request(|reply| Command::KillTunnel {
-            user: user.to_string(),
+            owner_user_id,
             devserver_id: devserver_id.to_string(),
             reply,
         })
@@ -748,13 +979,22 @@ impl ControllerHandle {
         .map_err(ActorError::State)
     }
 
-    pub async fn plan_user_kill(&self, user: &str) -> Result<KillPlan, ActorError> {
+    pub async fn plan_owner_kill(&self, owner_user_id: Uuid) -> Result<KillPlan, ActorError> {
         self.request(|reply| Command::KillUserTunnels {
-            user: user.to_string(),
+            owner_user_id,
             reply,
         })
         .await?
         .map_err(ActorError::State)
+    }
+
+    pub async fn plan_session_revocation(
+        &self,
+        revocation: SessionRevocation,
+    ) -> Result<SessionRevocationPlan, ActorError> {
+        self.request(|reply| Command::RevokeSessions { revocation, reply })
+            .await?
+            .map_err(ActorError::State)
     }
 
     pub fn watch_tunnels(&self) -> watch::Receiver<Arc<Vec<TunnelView>>> {
@@ -871,17 +1111,51 @@ mod tests {
             actor.tunnels().await,
             Err(ActorError::State(StateError::NotReady))
         ));
-        proxy_watch.changed().await.unwrap();
+        while !proxy_watch.borrow_and_update().is_empty() {
+            proxy_watch.changed().await.unwrap();
+        }
         assert!(proxy_watch.borrow().is_empty());
         assert!(matches!(
             session.commands.try_recv(),
-            Ok(ServerFrame::Shutdown { reason })
+            Ok(ServerFrame::Shutdown { reason, .. })
                 if reason == "proxy control heartbeat expired"
         ));
         assert!(matches!(
             session.commands.try_recv(),
             Err(mpsc::error::TryRecvError::Disconnected)
         ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn command_flood_coalesces_watch_publication_to_the_one_second_tick() {
+        let actor = spawn_controller(100);
+        tokio::task::yield_now().await;
+        let mut proxy_watch = actor.watch_proxies();
+        proxy_watch.borrow_and_update();
+        let _session = actor
+            .begin_session(
+                proxy(),
+                CanonicalOrigin::parse("https://p1.proxy.example.test").unwrap(),
+                env!("CARGO_PKG_VERSION").into(),
+                Uuid::new_v4(),
+            )
+            .await
+            .unwrap();
+
+        for _ in 0..512 {
+            assert!(!actor.is_ready().await.unwrap());
+        }
+        assert!(
+            !proxy_watch.has_changed().unwrap(),
+            "commands published a whole-fleet view before the tick"
+        );
+        tokio::time::advance(TICK_INTERVAL - Duration::from_millis(1)).await;
+        tokio::task::yield_now().await;
+        assert!(!proxy_watch.has_changed().unwrap());
+        tokio::time::advance(Duration::from_millis(1)).await;
+        proxy_watch.changed().await.unwrap();
+        assert_eq!(proxy_watch.borrow_and_update().len(), 1);
+        assert!(!proxy_watch.has_changed().unwrap());
     }
 
     #[tokio::test(start_paused = true)]
@@ -925,8 +1199,11 @@ mod tests {
                 1,
                 TunnelRow {
                     registration_id,
+                    owner_user_id: crate::state::legacy_owner_user_id("alice"),
                     user: "alice".into(),
                     devserver_id: "one".into(),
+                    admission_lease: AdmissionLease::parse("test").unwrap(),
+                    admission_lease_expires_at: Utc::now() + chrono::Duration::days(365),
                     peer_addr: None,
                     connected_at: Utc::now(),
                 },
@@ -941,8 +1218,11 @@ mod tests {
     fn row(user: &str, devserver_id: &str, registration_id: Uuid) -> TunnelRow {
         TunnelRow {
             registration_id,
+            owner_user_id: crate::state::legacy_owner_user_id(user),
             user: user.into(),
             devserver_id: devserver_id.into(),
+            admission_lease: AdmissionLease::parse("test").unwrap(),
+            admission_lease_expires_at: Utc::now() + chrono::Duration::days(365),
             peer_addr: None,
             connected_at: Utc::now(),
         }
@@ -1041,7 +1321,10 @@ mod tests {
         keep_alive_sessions_until_ready(&actor, &mut sessions).await;
         assert!(actor.is_ready().await.unwrap());
 
-        let plan = actor.plan_user_kill("alice").await.unwrap();
+        let plan = actor
+            .plan_owner_kill(crate::state::legacy_owner_user_id("alice"))
+            .await
+            .unwrap();
         let KillPlan::Issued(confirmations) = plan else {
             panic!("alice has live rows");
         };
@@ -1082,7 +1365,10 @@ mod tests {
         // No aggregate row matches after the kill: the plan reports not
         // found instead of issuing another command.
         assert!(matches!(
-            actor.plan_tunnel_kill("alice", "one").await.unwrap(),
+            actor
+                .plan_tunnel_kill(crate::state::legacy_owner_user_id("alice"), "one")
+                .await
+                .unwrap(),
             KillPlan::NotFound
         ));
     }
@@ -1111,7 +1397,10 @@ mod tests {
             .unwrap();
         keep_alive_until_ready(&actor, &mut session).await;
 
-        let plan = actor.plan_tunnel_kill("alice", "one").await.unwrap();
+        let plan = actor
+            .plan_tunnel_kill(crate::state::legacy_owner_user_id("alice"), "one")
+            .await
+            .unwrap();
         let KillPlan::Issued(mut confirmations) = plan else {
             panic!("alice/one has a live row");
         };
@@ -1147,7 +1436,10 @@ mod tests {
             .unwrap();
         keep_alive_until_ready(&actor, &mut session).await;
 
-        let plan = actor.plan_user_kill("alice").await.unwrap();
+        let plan = actor
+            .plan_owner_kill(crate::state::legacy_owner_user_id("alice"))
+            .await
+            .unwrap();
         let KillPlan::Issued(mut confirmations) = plan else {
             panic!("alice has a live row");
         };

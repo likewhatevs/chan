@@ -2,7 +2,7 @@
 // stubbed OAuth, walk the account-mode desktop-authorize consent, and
 // hand the chan:// callback URL back to the harness.
 //
-// Env: CHROME_BIN, ID_ORIGIN (http://id.localtest.me:PORT),
+// Env: CHROME_BIN, ID_ORIGIN (https://id.localtest.me:PORT),
 // AUTH_PATH (the /desktop/authorize?... query). Prints one JSON
 // object on stdout:
 //   { radios: [values...], consent_text: "...", handoff_url: "chan://..." }
@@ -24,6 +24,10 @@ const browser = await puppeteer.launch({
     args: [
         "--no-sandbox",
         "--disable-dev-shm-usage",
+        // The local full-stack harness uses a fresh per-run CA. Chromium is
+        // isolated from the host trust store, so permit only this test launch
+        // to navigate the loopback TLS edge.
+        "--ignore-certificate-errors",
         // The wildcard + id hosts must hit the loopback listeners even
         // if the sandbox resolver prefers AAAA records.
         "--host-resolver-rules=MAP *.localtest.me 127.0.0.1",

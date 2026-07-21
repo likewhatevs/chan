@@ -26,6 +26,7 @@ spec:
         app.kubernetes.io/name: devserver-proxy
         app.kubernetes.io/part-of: chan-gateway
     spec:
+      automountServiceAccountToken: false
       containers:
         - name: devserver-proxy
           # set <version> to the release tag you are deploying (see README.md).
@@ -34,7 +35,13 @@ spec:
           # URLs/tokens from ConfigMap/Secret.
           envFrom:
             - configMapRef: { name: chan-gateway-config }
-            - secretRef: { name: chan-gateway-secrets }
+          env:
+            - name: IDENTITY_INTERNAL_TOKEN
+              valueFrom: { secretKeyRef: { name: chan-gateway-devserver-proxy, key: IDENTITY_INTERNAL_TOKEN } }
+            - name: DEVSERVER_ENTRY_VERIFYING_KEYS
+              valueFrom: { secretKeyRef: { name: chan-gateway-devserver-proxy, key: DEVSERVER_ENTRY_VERIFYING_KEYS } }
+            - name: DEVSERVER_PROXY_TOKEN
+              valueFrom: { secretKeyRef: { name: chan-gateway-devserver-proxy, key: DEVSERVER_PROXY_TOKEN } }
           ports:
             - { name: http, containerPort: 7002 }
             - { name: tunnel, containerPort: 7100 }

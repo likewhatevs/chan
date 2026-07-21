@@ -645,12 +645,41 @@ pub async fn api_read_file(
             writable,
         })
         .into_response(),
-        Ok(Ok(ReadFileResult::Binary(bytes))) => {
-            ([(header::CONTENT_TYPE, content_type_for(&path))], bytes).into_response()
-        }
+        Ok(Ok(ReadFileResult::Binary(bytes))) => binary_file_response(&path, bytes),
         Ok(Err(e)) => err_from(&e),
         Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
     }
+}
+
+fn binary_file_response(path: &str, bytes: Vec<u8>) -> Response {
+    let mut response = ([(header::CONTENT_TYPE, content_type_for(path))], bytes).into_response();
+    if is_active_content_path(path) {
+        response.headers_mut().insert(
+            header::CONTENT_DISPOSITION,
+            content_disposition_attachment(path)
+                .parse()
+                .expect("download filename is header-safe"),
+        );
+        response.headers_mut().insert(
+            header::CONTENT_SECURITY_POLICY,
+            "sandbox".parse().expect("static header value"),
+        );
+        response.headers_mut().insert(
+            "x-content-type-options",
+            "nosniff".parse().expect("static header value"),
+        );
+    }
+    response
+}
+
+fn is_active_content_path(path: &str) -> bool {
+    matches!(
+        path.rsplit('.')
+            .next()
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("svg" | "svgz" | "html" | "htm" | "xhtml" | "xml" | "pdf")
+    )
 }
 
 /// Serve an attached path from its live session (doc or scene):
@@ -2360,6 +2389,36 @@ mod doc_divert_tests {
     pub(super) async fn body_json(resp: axum::response::Response) -> Value {
         let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn svg_read_is_an_attached_sandboxed_resource() {
+        let (_cfg, root, state) = divert_app();
+        std::fs::write(
+            root.path().join("active.svg"),
+            r#"<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>"#,
+        )
+        .unwrap();
+
+        let resp = api_read_file(
+            State(state),
+            AxumPath("active.svg".to_string()),
+            Query(ReadFileQuery::default()),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+            "attachment; filename=\"active.svg\""
+        );
+        assert_eq!(
+            resp.headers().get("content-security-policy").unwrap(),
+            "sandbox"
+        );
+        assert_eq!(
+            resp.headers().get("x-content-type-options").unwrap(),
+            "nosniff"
+        );
     }
 
     #[tokio::test]

@@ -10,8 +10,9 @@ use chan_tunnel_server::{
     RegistrationAdmission, RegistrationPermit, RegistryEvent, ServerError, TunnelInfo,
 };
 use devserver_control_proto::{
-    read_frame, write_frame, AdmissionDecision, ClientFrame, ServerFrame, TunnelRow, CONNECT_PATH,
-    CONTENT_TYPE, MAX_SNAPSHOT_CHUNK_ROWS, PROTOCOL_VERSION,
+    read_frame, write_frame, AdmissionDecision, AdmissionLease, ClientFrame, ServerFrame,
+    SessionRevocation, TunnelRow, CONNECT_PATH, CONTENT_TYPE, MAX_SNAPSHOT_CHUNK_ROWS,
+    PROTOCOL_VERSION, PROXY_CONTROL_LOSS_GRACE_SECONDS, PROXY_CONVERGENCE_GRACE_SECONDS,
 };
 use rand::Rng;
 use tokio::net::TcpStream;
@@ -19,14 +20,19 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use crate::{registry::Registry, Config};
+use crate::{registry::Registry, session_store::SessionStore, Config};
 
 const REQUEST_QUEUE_CAPACITY: usize = 1024;
 const SERVER_FRAME_QUEUE_CAPACITY: usize = 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(30);
 const CONTROLLER_DEAD_AFTER: Duration = Duration::from_secs(15);
-const GRACE_PERIOD: Duration = Duration::from_secs(30);
+const GRACE_PERIOD: Duration = Duration::from_secs(PROXY_CONTROL_LOSS_GRACE_SECONDS);
+/// Once a replacement controller has accepted the signed snapshot it still
+/// needs the controller's 30s fleet convergence window and one 5s command
+/// round. This separate hard deadline prevents a peer that never sends
+/// `FleetReady` from extending old authority indefinitely.
+const CONVERGENCE_GRACE_PERIOD: Duration = Duration::from_secs(PROXY_CONVERGENCE_GRACE_SECONDS);
 const BACKOFF_MIN: Duration = Duration::from_millis(500);
 const BACKOFF_MAX: Duration = Duration::from_secs(10);
 
@@ -62,9 +68,16 @@ impl Drop for AbortOnDropTask {
 pub fn spawn_control_supervisor(
     config: Arc<Config>,
     registry: Registry,
+    sessions: SessionStore,
     shutdown: watch::Receiver<bool>,
 ) -> ControlRuntime {
-    spawn_supervisor(config, registry, shutdown, BackoffObserver::disabled())
+    spawn_supervisor(
+        config,
+        registry,
+        sessions,
+        shutdown,
+        BackoffObserver::disabled(),
+    )
 }
 
 /// Test-only tap on the computed reconnect delay. Asserting the
@@ -104,6 +117,7 @@ impl BackoffObserver {
 fn spawn_supervisor(
     config: Arc<Config>,
     registry: Registry,
+    sessions: SessionStore,
     shutdown: watch::Receiver<bool>,
     backoff_observer: BackoffObserver,
 ) -> ControlRuntime {
@@ -119,6 +133,7 @@ fn spawn_supervisor(
         supervise(
             config,
             registry,
+            sessions,
             requests_rx,
             readiness_tx,
             admission_epoch,
@@ -148,6 +163,16 @@ impl RegistrationAdmission for ControlAdmission {
         _hello: &chan_tunnel_proto::Hello,
         validated: &chan_tunnel_server::Validated,
     ) -> Result<RegistrationPermit, ServerError> {
+        self.admit_registration(_hello, validated, Uuid::new_v4())
+            .await
+    }
+
+    async fn admit_registration(
+        &self,
+        _hello: &chan_tunnel_proto::Hello,
+        validated: &chan_tunnel_server::Validated,
+        registration_id: Uuid,
+    ) -> Result<RegistrationPermit, ServerError> {
         if !*self.readiness.borrow() {
             return Err(ServerError::ControlUnavailable);
         }
@@ -156,14 +181,20 @@ impl RegistrationAdmission for ControlAdmission {
             return Err(ServerError::ControlUnavailable);
         }
         let request_id = Uuid::new_v4();
-        let registration_id = Uuid::new_v4();
+        let admission_lease = validated
+            .admission_lease
+            .as_ref()
+            .and_then(|lease| AdmissionLease::parse(lease.clone()).ok())
+            .ok_or(ServerError::ControlUnavailable)?;
         let (reply, wait) = oneshot::channel();
         self.requests
             .send(LocalRequest::Admit {
                 request_id,
                 registration_id,
+                owner_user_id: validated.user_id,
                 user: validated.username.clone(),
                 devserver_id: validated.devserver_id.clone(),
+                admission_lease,
                 admission_epoch,
                 reply,
             })
@@ -223,8 +254,10 @@ enum LocalRequest {
     Admit {
         request_id: Uuid,
         registration_id: Uuid,
+        owner_user_id: Uuid,
         user: String,
         devserver_id: String,
+        admission_lease: AdmissionLease,
         admission_epoch: u64,
         reply: oneshot::Sender<Result<RegistrationPermit, ServerError>>,
     },
@@ -243,11 +276,14 @@ struct PendingAdmission {
 
 enum LifecycleEvent {
     SnapshotAccepted,
+    FleetReady,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn supervise(
     config: Arc<Config>,
     registry: Registry,
+    sessions: SessionStore,
     mut requests: mpsc::Receiver<LocalRequest>,
     readiness: watch::Sender<bool>,
     admission_epoch: Arc<AtomicU64>,
@@ -258,6 +294,7 @@ async fn supervise(
     let mut backoff = BACKOFF_MIN;
     let mut grace_deadline = None;
     let mut grace_armed = false;
+    let mut convergence_deadline = None;
 
     loop {
         reject_queued(&mut requests);
@@ -266,6 +303,7 @@ async fn supervise(
             config.as_ref(),
             boot_id,
             &registry,
+            &sessions,
             &mut requests,
             &readiness,
             lifecycle_tx,
@@ -280,17 +318,38 @@ async fn supervise(
                     }
                 }
                 event = lifecycle_rx.recv() => {
-                    if matches!(event, Some(LifecycleEvent::SnapshotAccepted)) {
-                        grace_deadline = None;
-                        grace_armed = true;
-                        backoff = BACKOFF_MIN;
-                        tracing::info!(proxy_id = config.proxy_id.as_str(), %boot_id, "controller snapshot accepted");
+                    match event {
+                        Some(LifecycleEvent::SnapshotAccepted) => {
+                            if grace_deadline.is_some() && convergence_deadline.is_none() {
+                                convergence_deadline =
+                                    Some(Instant::now() + CONVERGENCE_GRACE_PERIOD);
+                                grace_deadline = convergence_deadline;
+                            }
+                            backoff = BACKOFF_MIN;
+                            tracing::info!(proxy_id = config.proxy_id.as_str(), %boot_id, "controller snapshot accepted; awaiting FleetReady");
+                        }
+                        Some(LifecycleEvent::FleetReady) => {
+                            grace_deadline = None;
+                            convergence_deadline = None;
+                            grace_armed = true;
+                            backoff = BACKOFF_MIN;
+                            tracing::info!(proxy_id = config.proxy_id.as_str(), %boot_id, "controller authority restored");
+                        }
+                        None => {}
                     }
                 }
                 _ = wait_deadline(grace_deadline) => {
                     let killed = registry.evict_all_for_control_loss();
+                    let cleared_sessions = match sessions.clear().await {
+                        Ok(cleared) => cleared,
+                        Err(error) => {
+                            tracing::error!(proxy_id = config.proxy_id.as_str(), %error, "revoked browser-session transports did not drain after controller grace expired");
+                            0
+                        }
+                    };
                     grace_deadline = None;
-                    tracing::warn!(proxy_id = config.proxy_id.as_str(), killed, "controller reconnect grace expired");
+                    convergence_deadline = None;
+                    tracing::warn!(proxy_id = config.proxy_id.as_str(), killed, cleared_sessions, "controller reconnect grace expired");
                 }
                 outcome = &mut attempt => break outcome,
             }
@@ -303,6 +362,7 @@ async fn supervise(
         if grace_armed {
             grace_armed = false;
             grace_deadline = Some(Instant::now() + GRACE_PERIOD);
+            convergence_deadline = None;
         }
         match outcome {
             Err(AttemptError::Permanent(message)) => anyhow::bail!(message),
@@ -334,8 +394,16 @@ async fn supervise(
                 }
                 _ = wait_deadline(grace_deadline) => {
                     let killed = registry.evict_all_for_control_loss();
+                    let cleared_sessions = match sessions.clear().await {
+                        Ok(cleared) => cleared,
+                        Err(error) => {
+                            tracing::error!(proxy_id = config.proxy_id.as_str(), %error, "revoked browser-session transports did not drain after controller grace expired");
+                            0
+                        }
+                    };
                     grace_deadline = None;
-                    tracing::warn!(proxy_id = config.proxy_id.as_str(), killed, "controller reconnect grace expired");
+                    convergence_deadline = None;
+                    tracing::warn!(proxy_id = config.proxy_id.as_str(), killed, cleared_sessions, "controller reconnect grace expired");
                 }
                 request = requests.recv() => {
                     match request {
@@ -354,6 +422,7 @@ async fn run_connection(
     config: &Config,
     boot_id: Uuid,
     registry: &Registry,
+    sessions: &SessionStore,
     requests: &mut mpsc::Receiver<LocalRequest>,
     readiness: &watch::Sender<bool>,
     lifecycle: mpsc::Sender<LifecycleEvent>,
@@ -370,6 +439,20 @@ async fn run_connection(
         .await
         .map_err(|_| AttemptError::Retry("controller TCP connect timed out".into()))?
         .map_err(|error| AttemptError::Retry(format!("controller TCP connect: {error}")))?;
+    let loopback_host = host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback());
+    if loopback_host
+        && !tcp
+            .peer_addr()
+            .map(|peer| peer.ip().is_loopback())
+            .unwrap_or(false)
+    {
+        return Err(AttemptError::Permanent(
+            "loopback controller URL resolved to a non-loopback peer".into(),
+        ));
+    }
     let _ = tcp.set_nodelay(true);
     let (mut sender, mut connection) =
         tokio::time::timeout(CONNECT_TIMEOUT, h2::client::handshake(tcp))
@@ -386,6 +469,7 @@ async fn run_connection(
             header::AUTHORIZATION,
             format!("Bearer {}", config.proxy_token),
         )
+        .header("x-chan-proxy-id", config.proxy_id.as_str())
         .header(header::CONTENT_TYPE, CONTENT_TYPE)
         .body(())
         .map_err(|error| AttemptError::Permanent(format!("build controller request: {error}")))?;
@@ -426,6 +510,7 @@ async fn run_connection(
         config,
         boot_id,
         registry,
+        sessions,
         requests,
         readiness,
         lifecycle,
@@ -445,6 +530,7 @@ async fn run_stream<S>(
     config: &Config,
     boot_id: Uuid,
     registry: &Registry,
+    sessions: &SessionStore,
     requests: &mut mpsc::Receiver<LocalRequest>,
     readiness: &watch::Sender<bool>,
     lifecycle: mpsc::Sender<LifecycleEvent>,
@@ -482,10 +568,13 @@ where
             && package_version == env!("CARGO_PKG_VERSION")
             && heartbeat_seconds == 5
             && dead_seconds == 15
-            && grace_seconds == 30 => {}
-        ServerFrame::Shutdown { reason } => return Err(AttemptError::Permanent(reason)),
+            && grace_seconds == PROXY_CONTROL_LOSS_GRACE_SECONDS => {}
+        ServerFrame::Shutdown {
+            reason,
+            retryable: _,
+        } => return Err(AttemptError::Retry(reason)),
         _ => {
-            return Err(AttemptError::Permanent(
+            return Err(AttemptError::Retry(
                 "controller returned an invalid ServerHello".into(),
             ))
         }
@@ -505,7 +594,10 @@ where
             write_control(
                 &mut writer,
                 &ClientFrame::SnapshotChunk {
-                    rows: chunk.iter().map(tunnel_row).collect(),
+                    rows: chunk
+                        .iter()
+                        .map(tunnel_row)
+                        .collect::<Result<Vec<_>, _>>()?,
                 },
             )
             .await?;
@@ -569,7 +661,10 @@ where
                         }
                     ServerFrame::FleetReady if snapshot_accepted && !fleet_ready => {
                         fleet_ready = true;
+                        sessions.resume_authority();
                         let _ = readiness.send(true);
+                        lifecycle.send(LifecycleEvent::FleetReady).await
+                            .map_err(|_| AttemptError::Retry("control supervisor stopped".into()))?;
                         tracing::info!(
                             proxy_id = config.proxy_id.as_str(),
                             %boot_id,
@@ -585,7 +680,7 @@ where
                             continue;
                         };
                         if pending_admission.registration_id != registration_id {
-                            break Err(AttemptError::Permanent("controller admission id mismatch".into()));
+                            break Err(AttemptError::Retry("controller admission id mismatch".into()));
                         }
                         tracing::debug!(
                             proxy_id = config.proxy_id.as_str(),
@@ -630,6 +725,39 @@ where
                             failed: Vec::new(),
                         }, controller_deadline).await?;
                     }
+                    ServerFrame::RevokeSessions {
+                        command_id,
+                        revocation,
+                    } => {
+                        let revocation = match revocation {
+                            SessionRevocation::Exact {
+                                subject_user_id,
+                                owner_user_id,
+                                devserver_id,
+                            } => crate::session_store::Revocation::Exact {
+                                subject_user_id,
+                                owner_user_id,
+                                devserver_id,
+                            },
+                            SessionRevocation::Subject { subject_user_id } => {
+                                crate::session_store::Revocation::Subject { subject_user_id }
+                            }
+                        };
+                        let revoked = sessions.revoke(&revocation).await.map_err(|error| {
+                            AttemptError::Retry(format!(
+                                "session revocation transport shutdown failed: {error}"
+                            ))
+                        })?;
+                        write_active(
+                            &mut writer,
+                            &ClientFrame::SessionRevocationResult {
+                                command_id,
+                                revoked,
+                            },
+                            controller_deadline,
+                        )
+                        .await?;
+                    }
                     ServerFrame::ResyncRequired { expected_generation } => {
                         tracing::warn!(
                             proxy_id = config.proxy_id.as_str(),
@@ -647,8 +775,11 @@ where
                         )
                         .await?;
                     }
-                    ServerFrame::Shutdown { reason } => break Err(AttemptError::Permanent(reason)),
-                    _ => break Err(AttemptError::Permanent("controller sent a frame illegal in the current state".into())),
+                    ServerFrame::Shutdown {
+                        reason,
+                        retryable: _,
+                    } => break Err(AttemptError::Retry(reason)),
+                    _ => break Err(AttemptError::Retry("controller sent a frame illegal in the current state".into())),
                     }
                 }
                 event = events.recv() => {
@@ -662,7 +793,7 @@ where
                             );
                             write_active(
                                 &mut writer,
-                                &ClientFrame::TunnelUp { generation, row: tunnel_row(&row) },
+                                &ClientFrame::TunnelUp { generation, row: tunnel_row(&row)? },
                                 controller_deadline,
                             )
                             .await?;
@@ -677,6 +808,24 @@ where
                             write_active(
                                 &mut writer,
                                 &ClientFrame::TunnelDown { generation, registration_id },
+                                controller_deadline,
+                            )
+                            .await?;
+                        }
+                        Ok(RegistryEvent::LeaseRefresh {
+                            registration_id,
+                            owner_user_id: _,
+                            admission_lease,
+                            admission_lease_expires_at: _,
+                        }) => {
+                            let admission_lease = AdmissionLease::parse(admission_lease.to_string())
+                                .map_err(|error| AttemptError::Retry(format!("refreshed admission lease: {error}")))?;
+                            write_active(
+                                &mut writer,
+                                &ClientFrame::LeaseRefresh {
+                                    registration_id,
+                                    admission_lease,
+                                },
                                 controller_deadline,
                             )
                             .await?;
@@ -697,8 +846,10 @@ where
                         LocalRequest::Admit {
                             request_id,
                             registration_id,
+                            owner_user_id,
                             user,
                             devserver_id,
+                            admission_lease,
                             admission_epoch,
                             reply,
                         } => {
@@ -711,8 +862,10 @@ where
                                 &ClientFrame::AdmissionRequest {
                                     request_id,
                                     registration_id,
+                                    owner_user_id,
                                     user: user.clone(),
                                     devserver_id,
+                                    admission_lease,
                                 },
                                 controller_deadline,
                             )
@@ -746,14 +899,25 @@ where
     result
 }
 
-fn tunnel_row(info: &TunnelInfo) -> TunnelRow {
-    TunnelRow {
+fn tunnel_row(info: &TunnelInfo) -> Result<TunnelRow, AttemptError> {
+    let admission_lease = info
+        .admission_lease
+        .as_deref()
+        .ok_or_else(|| AttemptError::Retry("local tunnel has no admission lease".into()))?;
+    let admission_lease_expires_at = info
+        .admission_lease_expires_at
+        .ok_or_else(|| AttemptError::Retry("local tunnel has no admission lease expiry".into()))?;
+    Ok(TunnelRow {
         registration_id: info.registration_id,
+        owner_user_id: info.owner_user_id,
         user: info.user.as_ref().to_string(),
         devserver_id: info.workspace.as_ref().to_string(),
+        admission_lease: AdmissionLease::parse(admission_lease.to_string())
+            .map_err(|error| AttemptError::Retry(format!("local admission lease: {error}")))?,
+        admission_lease_expires_at,
         peer_addr: info.peer_addr,
         connected_at: info.connected_at,
-    }
+    })
 }
 
 async fn write_control<S>(stream: &mut S, frame: &ClientFrame) -> Result<(), AttemptError>
@@ -832,13 +996,18 @@ mod tests {
     use chan_tunnel_proto::{Hello, ProtocolVersion};
     use chan_tunnel_server::{serve_tunnel_listener_with_admission, Validated, Validator};
     use devserver_control::{
-        serve_control_listener, spawn_controller_owned, ControllerHandle, ProxyStatus,
+        serve_control_listener, spawn_controller_owned, ControllerHandle, ProxyCredentials,
+        ProxyStatus,
     };
-    use devserver_control_proto::ProxyOriginTemplate;
+    use devserver_control_proto::{
+        AdmissionLeaseSigner, AdmissionLeaseVerifier, ProxyOriginTemplate,
+    };
     use http_body_util::BodyExt;
     use tokio::io::duplex;
     use tokio::net::TcpListener;
     use tokio_util::compat::FuturesAsyncReadCompatExt;
+
+    const TEST_PROXY_TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
     fn test_config(control_addr: std::net::SocketAddr) -> Arc<Config> {
         Arc::new(Config {
@@ -849,9 +1018,20 @@ mod tests {
             identity_url: "http://127.0.0.1:7000/".parse().unwrap(),
             identity_auth_token: "identity-token".into(),
             dashboard_url: "https://id.chan.app/workspaces".into(),
-            workspace_gate_secret: "gate-secret".into(),
+            identity_origin: devserver_control_proto::CanonicalOrigin::parse("https://id.chan.app")
+                .unwrap(),
+            entry_verifiers: {
+                let signer = gateway_common::devserver_gate::EntrySigner::from_base64(
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                )
+                .unwrap();
+                gateway_common::devserver_gate::EntryVerifierRing::from_base64_list(
+                    &signer.verifying_key_base64(),
+                )
+                .unwrap()
+            },
             control_url: format!("http://{control_addr}/").parse().unwrap(),
-            proxy_token: "proxy-token".into(),
+            proxy_token: TEST_PROXY_TOKEN.into(),
             proxy_id: devserver_control_proto::ProxyId::parse("p1").unwrap(),
             proxy_base_url: devserver_control_proto::CanonicalOrigin::parse(
                 "https://p1.devserver.chan.app",
@@ -861,6 +1041,9 @@ mod tests {
             max_request_bytes: None,
             request_timeout: None,
             ws_idle_timeout: crate::config::DEFAULT_WS_IDLE_TIMEOUT,
+            session_max_active: 10_000,
+            session_lifetime: Duration::from_secs(3600),
+            entry_replay_max_active: 10_000,
             forwarded_proto: "https".into(),
         })
     }
@@ -902,10 +1085,15 @@ mod tests {
         let control_addr = listener.local_addr().unwrap();
         let template = ProxyOriginTemplate::parse("https://{proxy_id}.devserver.chan.app").unwrap();
         let (listener_shutdown, listener_shutdown_rx) = watch::channel(false);
+        let signer =
+            AdmissionLeaseSigner::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                .unwrap();
+        let verifier = AdmissionLeaseVerifier::from_base64(&signer.verifying_key_base64()).unwrap();
         let listener_task = tokio::spawn(serve_control_listener(
             listener,
             controller.clone(),
-            "proxy-token".into(),
+            ProxyCredentials::parse(&format!("p1={TEST_PROXY_TOKEN}")).unwrap(),
+            verifier,
             template.clone(),
             listener_shutdown_rx,
         ));
@@ -916,7 +1104,12 @@ mod tests {
             admission: _admission,
             readiness,
             task: mut supervisor_task,
-        } = spawn_control_supervisor(test_config(control_addr), registry, proxy_shutdown_rx);
+        } = spawn_control_supervisor(
+            test_config(control_addr),
+            registry,
+            SessionStore::new(100, Duration::from_secs(3600)),
+            proxy_shutdown_rx,
+        );
 
         settle().await;
         tokio::select! {
@@ -980,6 +1173,25 @@ mod tests {
                 read_frame::<_, ClientFrame>(&mut controller).await.unwrap(),
                 ClientFrame::SnapshotEnd { base_generation: 0 }
             ));
+            let warming_revocation = Uuid::new_v4();
+            write_frame(
+                &mut controller,
+                &ServerFrame::RevokeSessions {
+                    command_id: warming_revocation,
+                    revocation: SessionRevocation::Subject {
+                        subject_user_id: Uuid::new_v4(),
+                    },
+                },
+            )
+            .await
+            .unwrap();
+            assert!(matches!(
+                read_frame::<_, ClientFrame>(&mut controller).await.unwrap(),
+                ClientFrame::SessionRevocationResult {
+                    command_id,
+                    revoked: 0,
+                } if command_id == warming_revocation
+            ));
             write_frame(
                 &mut controller,
                 &ServerFrame::SnapshotAccepted { base_generation: 0 },
@@ -996,6 +1208,7 @@ mod tests {
                 registration_id,
                 user,
                 devserver_id,
+                ..
             } = request
             else {
                 panic!("expected admission request, got {request:?}");
@@ -1058,6 +1271,7 @@ mod tests {
                 config.as_ref(),
                 boot_id,
                 &registry,
+                &SessionStore::new(100, Duration::from_secs(3600)),
                 &mut requests_rx,
                 &readiness_tx,
                 lifecycle_tx,
@@ -1086,6 +1300,8 @@ mod tests {
             devserver_id: "devserver-a".into(),
             scopes: vec!["tunnel".into()],
             gateway_assertion_key: None,
+            admission_lease: Some("test".into()),
+            admission_lease_expires_at: Some(chrono::Utc::now() + chrono::Duration::days(1)),
         };
         let permit = admission.admit(&hello, &validated).await.unwrap();
         admission.cancel(permit).await;
@@ -1099,7 +1315,7 @@ mod tests {
         let error = client.await.unwrap().unwrap_err();
         assert!(matches!(
             error,
-            AttemptError::Permanent(reason)
+            AttemptError::Retry(reason)
                 if reason == "controller sent a frame illegal in the current state"
         ));
     }
@@ -1110,7 +1326,11 @@ mod tests {
         let registry = Registry::new();
         let (_requests_tx, mut requests_rx) = mpsc::channel(1);
         let (readiness_tx, readiness) = watch::channel(false);
-        let (lifecycle_tx, _lifecycle_rx) = mpsc::channel(1);
+        // `run_stream` reports both SnapshotAccepted and FleetReady. This
+        // direct unit test does not run the supervisor, so retain both
+        // events without backpressuring the stream before its heartbeat
+        // deadline can fire.
+        let (lifecycle_tx, _lifecycle_rx) = mpsc::channel(2);
         let boot_id = Uuid::new_v4();
         let (proxy, mut controller) = duplex(64 * 1024);
 
@@ -1154,6 +1374,7 @@ mod tests {
                 config.as_ref(),
                 boot_id,
                 &registry,
+                &SessionStore::new(100, Duration::from_secs(3600)),
                 &mut requests_rx,
                 &readiness_tx,
                 lifecycle_tx,
@@ -1192,6 +1413,7 @@ mod tests {
             config.as_ref(),
             Uuid::new_v4(),
             &registry,
+            &SessionStore::new(100, Duration::from_secs(3600)),
             &mut requests_rx,
             &readiness_tx,
             lifecycle_tx,
@@ -1229,6 +1451,10 @@ mod tests {
                     devserver_id: "devserver-a".into(),
                     scopes: vec!["tunnel".into()],
                     gateway_assertion_key: None,
+                    admission_lease: Some("test".into()),
+                    admission_lease_expires_at: Some(
+                        chrono::Utc::now() + chrono::Duration::days(1),
+                    ),
                 },
             )
             .await
@@ -1399,13 +1625,14 @@ mod tests {
         let Some(Ok((request, mut respond))) = connection.accept().await else {
             return;
         };
+        let expected_authorization = format!("Bearer {TEST_PROXY_TOKEN}");
         let authorized = request.method() == Method::POST
             && request.uri().path() == CONNECT_PATH
             && request
                 .headers()
                 .get(header::AUTHORIZATION)
                 .and_then(|value| value.to_str().ok())
-                == Some("Bearer proxy-token");
+                == Some(expected_authorization.as_str());
         if !authorized {
             let response = axum::http::Response::builder()
                 .status(StatusCode::UNAUTHORIZED)
@@ -1546,6 +1773,10 @@ mod tests {
                     devserver_id: "ds-1".into(),
                     scopes: vec!["tunnel".into()],
                     gateway_assertion_key: None,
+                    admission_lease: Some("test".into()),
+                    admission_lease_expires_at: Some(
+                        chrono::Utc::now() + chrono::Duration::days(1),
+                    ),
                 }),
                 _ => Err(ServerError::InvalidToken),
             }
@@ -1606,14 +1837,8 @@ mod tests {
     ) -> (u16, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let validator: Arc<dyn Validator> = if capture_users {
-            Arc::new(crate::identity_validator::CapturingValidator::new(
-                StubValidator,
-                registry.clone(),
-            ))
-        } else {
-            Arc::new(StubValidator)
-        };
+        let _ = capture_users;
+        let validator: Arc<dyn Validator> = Arc::new(StubValidator);
         let tunnels = registry.tunnels();
         let task = tokio::spawn(async move {
             let _ =
@@ -1625,6 +1850,7 @@ mod tests {
 
     struct ProxyHarness {
         registry: Registry,
+        sessions: SessionStore,
         control: FakeControl,
         admission: Arc<dyn RegistrationAdmission>,
         readiness: watch::Receiver<bool>,
@@ -1637,12 +1863,18 @@ mod tests {
     async fn spawn_proxy() -> ProxyHarness {
         let control = FakeControl::start().await;
         let registry = Registry::new();
+        let sessions = SessionStore::new(100, Duration::from_secs(3600));
         let (shutdown, shutdown_rx) = watch::channel(false);
         let ControlRuntime {
             admission,
             readiness,
             task,
-        } = spawn_control_supervisor(test_config(control.addr), registry.clone(), shutdown_rx);
+        } = spawn_control_supervisor(
+            test_config(control.addr),
+            registry.clone(),
+            sessions.clone(),
+            shutdown_rx,
+        );
         let (tunnel_port, tunnel_listener) = spawn_tunnel_listener(
             &registry,
             Arc::new(chan_tunnel_server::AllowAllAdmission),
@@ -1651,6 +1883,7 @@ mod tests {
         .await;
         ProxyHarness {
             registry,
+            sessions,
             control,
             admission,
             readiness,
@@ -1730,6 +1963,8 @@ mod tests {
                 devserver_id: "ds-9".into(),
                 scopes: vec!["tunnel".into()],
                 gateway_assertion_key: None,
+                admission_lease: Some("test".into()),
+                admission_lease_expires_at: Some(chrono::Utc::now() + chrono::Duration::days(1)),
             },
         )
     }
@@ -1778,6 +2013,7 @@ mod tests {
         let runtime = spawn_supervisor(
             test_config(addr),
             registry,
+            SessionStore::new(100, Duration::from_secs(3600)),
             shutdown_rx,
             BackoffObserver::recording(delays_tx),
         );
@@ -1849,6 +2085,70 @@ mod tests {
         // have disarmed the eviction, not merely delayed it.
         advance_paced(Duration::from_secs(60)).await;
         assert!(proxy.registry.get("alice", "ds-1").is_some());
+        client.stop().await;
+        proxy.stop().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn snapshot_convergence_has_a_distinct_hard_deadline_and_clears_sessions() {
+        let mut proxy = spawn_proxy().await;
+        let first = proxy.become_ready().await;
+        let client = dial_tunnel(proxy.tunnel_port, axum::Router::new()).await;
+        proxy.wait_registration().await;
+        proxy
+            .sessions
+            .issue(crate::session_store::SessionPrincipal {
+                subject_user_id: Uuid::new_v4(),
+                owner_user_id: Uuid::new_v4(),
+                devserver_id: "ds-1".into(),
+                audience: "https://alice--0123456789ab.p1.devserver.chan.app".into(),
+            })
+            .unwrap();
+        assert_eq!(proxy.sessions.len(), 1);
+
+        first.send(FakeCommand::Drop).await.unwrap();
+        proxy.wait_readiness(false).await;
+        advance_paced(Duration::from_secs(20)).await;
+        let (_, replacement) = proxy.control.next_session().await;
+        let (_, rows) = proxy.control.next_snapshot().await;
+        assert_eq!(rows, 1);
+
+        // The first paced step lets the supervisor consume SnapshotAccepted.
+        // Fifteen seconds then carries us beyond the old disconnect grace,
+        // proving that acceptance armed a distinct convergence deadline.
+        advance_paced(Duration::from_secs(15)).await;
+        assert!(proxy.registry.get("alice", "ds-1").is_some());
+        assert_eq!(proxy.sessions.len(), 1);
+        advance_paced(CONVERGENCE_GRACE_PERIOD - Duration::from_secs(10)).await;
+        settle().await;
+        assert!(proxy.registry.get("alice", "ds-1").is_none());
+        assert!(proxy.sessions.is_empty());
+        assert!(!*proxy.readiness.borrow());
+
+        drop(replacement);
+        let _ = tokio::time::timeout(Duration::from_secs(30), client.pump).await;
+        proxy.stop().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn normal_controller_convergence_finishes_before_the_hard_deadline() {
+        let mut proxy = spawn_proxy().await;
+        let first = proxy.become_ready().await;
+        let client = dial_tunnel(proxy.tunnel_port, axum::Router::new()).await;
+        proxy.wait_registration().await;
+
+        first.send(FakeCommand::Drop).await.unwrap();
+        proxy.wait_readiness(false).await;
+        advance_paced(Duration::from_secs(10)).await;
+        let (_, replacement) = proxy.control.next_session().await;
+        proxy.control.next_snapshot().await;
+        advance_paced(Duration::from_secs(30)).await;
+        assert!(proxy.registry.get("alice", "ds-1").is_some());
+        replacement.send(FakeCommand::FleetReady).await.unwrap();
+        proxy.wait_readiness(true).await;
+        advance_paced(CONVERGENCE_GRACE_PERIOD).await;
+        assert!(proxy.registry.get("alice", "ds-1").is_some());
+
         client.stop().await;
         proxy.stop().await;
     }
@@ -1945,6 +2245,15 @@ mod tests {
                 admission_epoch: 0,
             })
         }
+
+        async fn admit_registration(
+            &self,
+            hello: &Hello,
+            validated: &Validated,
+            _registration_id: Uuid,
+        ) -> Result<RegistrationPermit, ServerError> {
+            self.admit(hello, validated).await
+        }
     }
 
     /// Register one tunnel with a caller-chosen registration UUID by
@@ -2026,6 +2335,7 @@ mod tests {
                     config.as_ref(),
                     Uuid::new_v4(),
                     &registry,
+                    &SessionStore::new(100, Duration::from_secs(3600)),
                     &mut requests_rx,
                     &readiness_tx,
                     lifecycle_tx,

@@ -85,9 +85,9 @@ struct RemoteLaunchKey {
     prefix: String,
     /// Raw-tunnel devservers only: their per-tenant token is stable, and a
     /// rotation (devserver restart) invalidates the loaded page, so it forces
-    /// a retarget. Gateway windows blank this field -- their `?t=` is a
-    /// single-use 30s entry credential minted fresh per navigation, and the
-    /// page's standing auth is the devserver-gate cookie, so a re-mint must
+    /// a retarget. Gateway windows blank this field -- their entry credential
+    /// is single-use and minted fresh per navigation, and the page's standing
+    /// auth is the opaque devserver-gate cookie, so a re-mint must
     /// NOT retarget (that churn was a per-feed-push reload loop).
     token: String,
     kind: chan_server::WindowKind,
@@ -225,6 +225,13 @@ impl TauriNativeSurface {
                 Ok(url) => url,
                 Err(e) => return fail(e),
             };
+            if let Err(e) = crate::devserver::install_gateway_webview_session(
+                &app,
+                &conn,
+                retarget.then_some(label.as_str()),
+            ) {
+                return fail(e);
+            }
             let result = if retarget {
                 match serve::retarget_watched_remote_window(&app, &url, &record) {
                     // The webview vanished mid-gap: a close raced this
@@ -400,23 +407,43 @@ fn watch_ws_url(host: &str, port: u16) -> String {
 type GatewayWs =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
+fn gateway_ws_origin(conn: &DevserverConn) -> Result<&str, String> {
+    conn.gateway
+        .as_ref()
+        .map(|gateway| gateway.proxy_origin.as_str())
+        .ok_or_else(|| "not a gateway connection".to_string())
+}
+
 async fn gateway_ws_request(
     conn: &DevserverConn,
     path: &str,
-) -> Result<tokio_tungstenite::tungstenite::handshake::client::Request, String> {
+) -> Result<
+    (
+        tokio_tungstenite::tungstenite::handshake::client::Request,
+        String,
+    ),
+    String,
+> {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     let url = crate::devserver::gateway_ws_url(conn, path)?;
     let mut request = url
         .into_client_request()
         .map_err(|e| format!("bad gateway watch url: {e}"))?;
+    let cookie_header = crate::devserver::gateway_cookie_header(conn).await?;
     request.headers_mut().insert(
         "Cookie",
-        crate::devserver::gateway_cookie_header(conn)
-            .await?
+        cookie_header
+            .clone()
             .parse()
             .map_err(|e| format!("bad gateway cookie header: {e}"))?,
     );
-    Ok(request)
+    request.headers_mut().insert(
+        "Origin",
+        gateway_ws_origin(conn)?
+            .parse()
+            .map_err(|e| format!("bad gateway origin header: {e}"))?,
+    );
+    Ok((request, cookie_header))
 }
 
 fn ws_auth_shaped(e: &tokio_tungstenite::tungstenite::Error) -> bool {
@@ -428,12 +455,12 @@ fn ws_auth_shaped(e: &tokio_tungstenite::tungstenite::Error) -> bool {
 }
 
 async fn connect_gateway_ws(conn: &DevserverConn, path: &str) -> Result<GatewayWs, String> {
-    let request = gateway_ws_request(conn, path).await?;
+    let (request, cookie_header) = gateway_ws_request(conn, path).await?;
     match tokio_tungstenite::connect_async(request).await {
         Ok((ws, _)) => Ok(ws),
         Err(e) if ws_auth_shaped(&e) => {
-            crate::devserver::refresh_gateway_session(conn).await?;
-            let request = gateway_ws_request(conn, path).await?;
+            crate::devserver::refresh_gateway_session_if_current(conn, &cookie_header).await?;
+            let (request, _) = gateway_ws_request(conn, path).await?;
             tokio_tungstenite::connect_async(request)
                 .await
                 .map(|(ws, _)| ws)
@@ -869,6 +896,26 @@ mod tests {
     }
 
     #[test]
+    fn native_gateway_websocket_uses_the_exact_proxy_origin() {
+        let conn = DevserverConn {
+            host: "alice--0123456789ab.p1.devserver.chan.app".into(),
+            port: 443,
+            token: String::new(),
+            name: "alice".into(),
+            gateway: Some(Box::new(crate::devserver::GatewayConn::new(
+                "https://id.chan.app".into(),
+                "https://id.chan.app/desktop/v1/devserver/entry".into(),
+                "https://alice--0123456789ab.p1.devserver.chan.app".into(),
+                "pat".into(),
+            ))),
+        };
+        assert_eq!(
+            gateway_ws_origin(&conn).unwrap(),
+            "https://alice--0123456789ab.p1.devserver.chan.app"
+        );
+    }
+
+    #[test]
     fn remote_launch_key_ignores_feed_status_fields() {
         let a = rec();
         let mut b = a.clone();
@@ -916,8 +963,8 @@ mod tests {
 
     #[test]
     fn remote_launch_key_ignores_token_churn_for_gateway_windows() {
-        // A gateway window's `?t=` is a single-use 30s entry credential
-        // minted fresh per navigation; the page's standing auth is the
+        // A gateway window's entry credential is single-use and minted fresh
+        // per navigation; the page's standing auth is the opaque
         // devserver-gate cookie. A re-mint therefore must NOT change the
         // launch key -- keying on it made every feed push retarget every
         // open window into a reload loop.

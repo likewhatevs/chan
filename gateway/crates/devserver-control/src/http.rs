@@ -9,39 +9,51 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use devserver_control_proto::SessionRevocation;
 use futures_util::stream::{self, Stream};
-use gateway_common::validators::valid_username;
 use serde::Serialize;
-use subtle::ConstantTimeEq;
-use tokio::sync::watch;
+use tokio::sync::{watch, OwnedSemaphorePermit, Semaphore};
+use uuid::Uuid;
 
+use crate::config::{AdminCredentials, AdminScope};
 use crate::{ActorError, CommandOutcome, ControllerHandle, KillPlan, ProxyView, TunnelView};
 
 #[derive(Clone)]
 struct AppState {
     controller: ControllerHandle,
-    admin_token: Arc<[u8]>,
+    admin_credentials: Arc<AdminCredentials>,
+    watchers: Arc<Semaphore>,
 }
 
-pub fn router(controller: ControllerHandle, admin_token: String) -> Router {
+const MAX_SSE_WATCHERS: usize = 128;
+
+pub fn router(
+    controller: ControllerHandle,
+    admin_credentials: impl Into<AdminCredentials>,
+) -> Router {
     let state = AppState {
         controller,
-        admin_token: Arc::from(admin_token.into_bytes()),
+        admin_credentials: Arc::new(admin_credentials.into()),
+        watchers: Arc::new(Semaphore::new(MAX_SSE_WATCHERS)),
     };
     let admin = Router::new()
         .route("/admin/v1/tunnels", get(list_tunnels))
         .route("/admin/v1/tunnels/watch", get(watch_tunnels))
         .route(
-            "/admin/v1/tunnels/{user}/{devserver_id}/kill",
+            "/admin/v1/tunnels/{owner_user_id}/{devserver_id}/kill",
             post(kill_tunnel),
         )
-        .route("/admin/v1/users/{user}/tunnels", get(list_user_tunnels))
         .route(
-            "/admin/v1/users/{user}/tunnels/kill",
-            post(kill_user_tunnels),
+            "/admin/v1/owners/{owner_user_id}/tunnels",
+            get(list_owner_tunnels),
+        )
+        .route(
+            "/admin/v1/owners/{owner_user_id}/tunnels/kill",
+            post(kill_owner_tunnels),
         )
         .route("/admin/v1/proxies", get(list_proxies))
         .route("/admin/v1/proxies/watch", get(watch_proxies))
+        .route("/admin/v1/sessions/revoke", post(revoke_sessions))
         .route_layer(middleware::from_fn_with_state(state.clone(), admin_auth));
 
     Router::new()
@@ -67,7 +79,7 @@ async fn list_tunnels(State(state): State<AppState>) -> Result<Json<Vec<TunnelVi
         .controller
         .tunnels()
         .await
-        .map(Json)
+        .map(|rows| Json(redact_fleet_peer_addresses(&rows)))
         .map_err(admin_error)
 }
 
@@ -84,21 +96,17 @@ async fn list_proxies(State(state): State<AppState>) -> Result<Json<Vec<ProxyVie
 /// returns an empty array, not a 404, so callers do not special-case the
 /// steady state; a malformed username is a probe and gets the same 404
 /// shape as any unknown target.
-async fn list_user_tunnels(
+async fn list_owner_tunnels(
     State(state): State<AppState>,
-    Path(user): Path<String>,
+    Path(owner_user_id): Path<String>,
 ) -> Result<Json<Vec<TunnelView>>, Response> {
-    if !valid_username(&user) {
-        return Err(not_found());
-    }
+    let owner_user_id = Uuid::parse_str(&owner_user_id).map_err(|_| not_found())?;
     let tunnels = state
         .controller
-        .tunnels()
+        .owner_tunnels(owner_user_id)
         .await
         .map_err(|error| admin_error(error).into_response())?;
-    Ok(Json(
-        tunnels.into_iter().filter(|row| row.user == user).collect(),
-    ))
+    Ok(Json(tunnels))
 }
 
 /// Exact kill of one aggregate row. The state machine routes the command
@@ -106,11 +114,12 @@ async fn list_user_tunnels(
 /// cannot kill a successor registration for the same key.
 async fn kill_tunnel(
     State(state): State<AppState>,
-    Path((user, devserver_id)): Path<(String, String)>,
+    Path((owner_user_id, devserver_id)): Path<(String, String)>,
 ) -> Result<StatusCode, Response> {
+    let owner_user_id = Uuid::parse_str(&owner_user_id).map_err(|_| not_found())?;
     let plan = state
         .controller
-        .plan_tunnel_kill(&user, &devserver_id)
+        .plan_tunnel_kill(owner_user_id, &devserver_id)
         .await
         .map_err(|error| admin_error(error).into_response())?;
     let KillPlan::Issued(confirmations) = plan else {
@@ -133,16 +142,14 @@ async fn kill_tunnel(
 /// every confirmation so a partial failure reports the count that is
 /// actually gone; the operation stays idempotent and a retry kills any
 /// surviving rows.
-async fn kill_user_tunnels(
+async fn kill_owner_tunnels(
     State(state): State<AppState>,
-    Path(user): Path<String>,
+    Path(owner_user_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    if !valid_username(&user) {
-        return Err(not_found());
-    }
+    let owner_user_id = Uuid::parse_str(&owner_user_id).map_err(|_| not_found())?;
     let plan = state
         .controller
-        .plan_user_kill(&user)
+        .plan_owner_kill(owner_user_id)
         .await
         .map_err(|error| admin_error(error).into_response())?;
     let confirmations = match plan {
@@ -164,6 +171,52 @@ async fn kill_user_tunnels(
         return Err(partial_kill(killed));
     }
     Ok(Json(serde_json::json!({ "killed": killed })))
+}
+
+async fn revoke_sessions(
+    State(state): State<AppState>,
+    Json(revocation): Json<SessionRevocation>,
+) -> Result<Json<serde_json::Value>, Response> {
+    revocation.validate().map_err(|_| not_found())?;
+    let plan = state
+        .controller
+        .plan_session_revocation(revocation)
+        .await
+        .map_err(|error| admin_error(error).into_response())?;
+    let confirmations = plan.confirmations;
+    let connected_expected = confirmations.len();
+    let unreachable = plan.unreachable_proxies;
+    let authority_ready = plan.authority_ready;
+    let expected = connected_expected.saturating_add(unreachable);
+    let mut revoked = 0_usize;
+    let mut confirmed = 0_usize;
+    for outcome in futures_util::future::join_all(confirmations).await {
+        if let Ok(CommandOutcome::Confirmed { killed, .. }) = outcome {
+            revoked = revoked.saturating_add(killed);
+            confirmed += 1;
+        }
+    }
+    if confirmed != connected_expected || unreachable != 0 || !authority_ready {
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({
+                "error": "partial session revocation",
+                "revoked": revoked,
+                "proxies_confirmed": confirmed,
+                "proxies_expected": expected,
+                "proxies_unreachable": unreachable,
+                "fleet_authority_ready": authority_ready,
+            })),
+        )
+            .into_response());
+    }
+    Ok(Json(serde_json::json!({
+        "revoked": revoked,
+        "proxies_confirmed": confirmed,
+        "proxies_expected": expected,
+        "proxies_unreachable": unreachable,
+        "fleet_authority_ready": authority_ready,
+    })))
 }
 
 fn not_found() -> Response {
@@ -189,10 +242,18 @@ async fn watch_tunnels(
     if !*readiness.borrow() {
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
-    Ok(
-        Sse::new(snapshot_stream(state.controller.watch_tunnels(), readiness))
-            .keep_alive(KeepAlive::new().interval(Duration::from_secs(15))),
-    )
+    let permit = state
+        .watchers
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| StatusCode::TOO_MANY_REQUESTS)?;
+    Ok(Sse::new(snapshot_stream(
+        state.controller.watch_tunnels(),
+        readiness,
+        permit,
+        redact_fleet_peer_addresses,
+    ))
+    .keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
 }
 
 async fn watch_proxies(
@@ -202,22 +263,32 @@ async fn watch_proxies(
     if !*readiness.borrow() {
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
-    Ok(
-        Sse::new(snapshot_stream(state.controller.watch_proxies(), readiness))
-            .keep_alive(KeepAlive::new().interval(Duration::from_secs(15))),
-    )
+    let permit = state
+        .watchers
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| StatusCode::TOO_MANY_REQUESTS)?;
+    Ok(Sse::new(snapshot_stream(
+        state.controller.watch_proxies(),
+        readiness,
+        permit,
+        clone_snapshot,
+    ))
+    .keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
 }
 
 fn snapshot_stream<T>(
     values: watch::Receiver<Arc<Vec<T>>>,
     readiness: watch::Receiver<bool>,
+    permit: OwnedSemaphorePermit,
+    project: fn(&[T]) -> Vec<T>,
 ) -> impl Stream<Item = Result<Event, Infallible>>
 where
-    T: Serialize + Send + Sync + 'static,
+    T: Clone + Serialize + Send + Sync + 'static,
 {
     stream::unfold(
-        (values, readiness, true),
-        |(mut values, mut readiness, first)| async move {
+        (values, readiness, true, permit, project),
+        |(mut values, mut readiness, first, permit, project)| async move {
             let mut first = first;
             loop {
                 if !*readiness.borrow() {
@@ -226,8 +297,9 @@ where
                 if first {
                     first = false;
                     let snapshot = values.borrow_and_update().clone();
-                    let event = snapshot_event(snapshot.as_ref())?;
-                    return Some((Ok(event), (values, readiness, first)));
+                    let projected = project(snapshot.as_ref());
+                    let event = snapshot_event(&projected)?;
+                    return Some((Ok(event), (values, readiness, first, permit, project)));
                 }
 
                 tokio::select! {
@@ -242,13 +314,29 @@ where
                             return None;
                         }
                         let snapshot = values.borrow_and_update().clone();
-                        let event = snapshot_event(snapshot.as_ref())?;
-                        return Some((Ok(event), (values, readiness, first)));
+                        let projected = project(snapshot.as_ref());
+                        let event = snapshot_event(&projected)?;
+                        return Some((Ok(event), (values, readiness, first, permit, project)));
                     }
                 }
             }
         },
     )
+}
+
+fn clone_snapshot<T: Clone>(snapshot: &[T]) -> Vec<T> {
+    snapshot.to_vec()
+}
+
+fn redact_fleet_peer_addresses(snapshot: &[TunnelView]) -> Vec<TunnelView> {
+    snapshot
+        .iter()
+        .cloned()
+        .map(|mut row| {
+            row.peer_addr = None;
+            row
+        })
+        .collect()
 }
 
 fn snapshot_event<T: Serialize>(snapshot: &T) -> Option<Event> {
@@ -271,11 +359,30 @@ async fn admin_auth(
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "));
-    match provided {
-        Some(token) if bool::from(token.as_bytes().ct_eq(state.admin_token.as_ref())) => {
-            Ok(next.run(request).await)
-        }
-        _ => Err(StatusCode::UNAUTHORIZED),
+    let Some(scope) =
+        provided.and_then(|token| state.admin_credentials.authenticate(token.as_bytes()))
+    else {
+        return Err(StatusCode::UNAUTHORIZED);
+    };
+    if !scope_authorizes(scope, request.method(), request.uri().path()) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    Ok(next.run(request).await)
+}
+
+fn scope_authorizes(scope: AdminScope, method: &axum::http::Method, path: &str) -> bool {
+    if scope == AdminScope::Operator {
+        return true;
+    }
+    let segments: Vec<_> = path.trim_matches('/').split('/').collect();
+    match (method, segments.as_slice()) {
+        (&axum::http::Method::GET, ["admin", "v1", "owners", _, "tunnels"]) => true,
+        (&axum::http::Method::POST, ["admin", "v1", "owners", _, "tunnels", "kill"])
+        | (&axum::http::Method::POST, ["admin", "v1", "tunnels", _, _, "kill"])
+        | (&axum::http::Method::POST, ["admin", "v1", "sessions", "revoke"]) => true,
+        (&axum::http::Method::GET, ["admin", "v1", "tunnels"])
+        | (&axum::http::Method::GET, ["admin", "v1", "proxies"]) => scope == AdminScope::Profile,
+        _ => false,
     }
 }
 
@@ -301,6 +408,24 @@ mod tests {
         request_with_method(app, "POST", path, token).await
     }
 
+    async fn post_json(
+        app: Router,
+        path: &str,
+        token: Option<&str>,
+        body: serde_json::Value,
+    ) -> Response {
+        let mut request = axum::http::Request::builder()
+            .method("POST")
+            .uri(path)
+            .header(header::CONTENT_TYPE, "application/json");
+        if let Some(token) = token {
+            request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
+        }
+        app.oneshot(request.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap()
+    }
+
     async fn request_with_method(
         app: Router,
         method: &str,
@@ -319,8 +444,11 @@ mod tests {
     fn row(user: &str, devserver_id: &str, registration_id: Uuid) -> TunnelRow {
         TunnelRow {
             registration_id,
+            owner_user_id: crate::state::legacy_owner_user_id(user),
             user: user.into(),
             devserver_id: devserver_id.into(),
+            admission_lease: devserver_control_proto::AdmissionLease::parse("test").unwrap(),
+            admission_lease_expires_at: chrono::Utc::now() + chrono::Duration::days(365),
             peer_addr: None,
             connected_at: chrono::Utc::now(),
         }
@@ -399,7 +527,7 @@ mod tests {
 
     #[tokio::test]
     async fn health_is_live_while_ready_and_admin_reads_are_warming() {
-        let app = router(crate::spawn_controller(100), "secret".into());
+        let app = router(crate::spawn_controller(100), "secret".to_string());
         assert_eq!(
             request(app.clone(), "/healthz", None).await.status(),
             StatusCode::OK
@@ -428,9 +556,81 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn fresh_warming_controller_reports_session_revocation_as_partial() {
+        let app = router(crate::spawn_controller(100), "secret".to_string());
+        let response = post_json(
+            app,
+            "/admin/v1/sessions/revoke",
+            Some("secret"),
+            serde_json::json!({
+                "scope": "subject",
+                "subject_user_id": Uuid::new_v4(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let body: serde_json::Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(body["fleet_authority_ready"], false);
+        assert_eq!(body["proxies_confirmed"], 0);
+        assert_eq!(body["proxies_expected"], 0);
+    }
+
+    #[tokio::test]
+    async fn scoped_admin_credentials_reject_cross_scope_endpoints() {
+        let credentials = crate::config::AdminCredentials::for_test(
+            "operator-token",
+            "identity-token",
+            "profile-token",
+        );
+        let app = router(crate::spawn_controller(100), credentials);
+        let owner = "616c6963-6500-0000-0000-000000000001";
+
+        assert_eq!(
+            request(app.clone(), "/admin/v1/tunnels", Some("identity-token"))
+                .await
+                .status(),
+            StatusCode::FORBIDDEN,
+        );
+        assert_eq!(
+            request(
+                app.clone(),
+                &format!("/admin/v1/owners/{owner}/tunnels"),
+                Some("identity-token"),
+            )
+            .await
+            .status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+        );
+        assert_eq!(
+            request(
+                app.clone(),
+                "/admin/v1/tunnels/watch",
+                Some("profile-token"),
+            )
+            .await
+            .status(),
+            StatusCode::FORBIDDEN,
+        );
+        assert_eq!(
+            request(app.clone(), "/admin/v1/tunnels", Some("profile-token"))
+                .await
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+        );
+        assert_eq!(
+            request(app, "/admin/v1/tunnels/watch", Some("operator-token"),)
+                .await
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+        );
+    }
+
     #[tokio::test(start_paused = true)]
     async fn ready_admin_returns_aggregate_snapshots() {
-        let app = router(ready_controller().await, "secret".into());
+        let app = router(ready_controller().await, "secret".to_string());
         assert_eq!(
             request(app.clone(), "/readyz", None).await.status(),
             StatusCode::OK
@@ -451,19 +651,69 @@ mod tests {
         assert_eq!(rows[0]["proxy_id"], "p1");
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn fleet_tunnel_list_redacts_peer_pii_but_owner_detail_preserves_it() {
+        let mut tunnel = row("alice", "one", Uuid::new_v4());
+        tunnel.peer_addr = Some("203.0.113.7:4321".parse().unwrap());
+        let (controller, _session) = ready_controller_with(vec![tunnel]).await;
+        let app = router(controller, "secret".to_string());
+
+        let fleet = request(app.clone(), "/admin/v1/tunnels", Some("secret")).await;
+        let fleet: serde_json::Value =
+            serde_json::from_slice(&fleet.into_body().collect().await.unwrap().to_bytes()).unwrap();
+        assert!(fleet[0]["peer_addr"].is_null());
+
+        let owner = request(
+            app,
+            "/admin/v1/owners/616c6963-6500-0000-0000-000000000001/tunnels",
+            Some("secret"),
+        )
+        .await;
+        let owner: serde_json::Value =
+            serde_json::from_slice(&owner.into_body().collect().await.unwrap().to_bytes()).unwrap();
+        assert_eq!(owner[0]["peer_addr"], "203.0.113.7:4321");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sse_watcher_budget_is_shared_bounded_and_released_on_drop() {
+        let app = router(ready_controller().await, "secret".to_string());
+        let mut held = Vec::with_capacity(MAX_SSE_WATCHERS);
+        for index in 0..MAX_SSE_WATCHERS {
+            let path = if index % 2 == 0 {
+                "/admin/v1/tunnels/watch"
+            } else {
+                "/admin/v1/proxies/watch"
+            };
+            let response = request(app.clone(), path, Some("secret")).await;
+            assert_eq!(response.status(), StatusCode::OK, "watcher {index}");
+            held.push(response);
+        }
+
+        let refused = request(app.clone(), "/admin/v1/tunnels/watch", Some("secret")).await;
+        assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        drop(held.pop());
+        let reopened = request(app, "/admin/v1/proxies/watch", Some("secret")).await;
+        assert_eq!(reopened.status(), StatusCode::OK);
+    }
+
     #[tokio::test]
-    async fn kill_routes_and_user_read_are_warming_until_ready() {
-        let app = router(crate::spawn_controller(100), "secret".into());
+    async fn kill_routes_and_owner_read_are_warming_until_ready() {
+        let app = router(crate::spawn_controller(100), "secret".to_string());
         assert_eq!(
-            request(app.clone(), "/admin/v1/users/alice/tunnels", Some("secret"))
-                .await
-                .status(),
+            request(
+                app.clone(),
+                "/admin/v1/owners/616c6963-6500-0000-0000-000000000001/tunnels",
+                Some("secret"),
+            )
+            .await
+            .status(),
             StatusCode::SERVICE_UNAVAILABLE
         );
         assert_eq!(
             post(
                 app.clone(),
-                "/admin/v1/tunnels/alice/one/kill",
+                "/admin/v1/tunnels/616c6963-6500-0000-0000-000000000001/one/kill",
                 Some("secret")
             )
             .await
@@ -471,9 +721,13 @@ mod tests {
             StatusCode::SERVICE_UNAVAILABLE
         );
         assert_eq!(
-            post(app, "/admin/v1/users/alice/tunnels/kill", Some("secret"))
-                .await
-                .status(),
+            post(
+                app,
+                "/admin/v1/owners/616c6963-6500-0000-0000-000000000001/tunnels/kill",
+                Some("secret"),
+            )
+            .await
+            .status(),
             StatusCode::SERVICE_UNAVAILABLE
         );
     }
@@ -482,11 +736,11 @@ mod tests {
     async fn admin_404_matrix() {
         let (controller, _session) =
             ready_controller_with(vec![row("alice", "one", Uuid::new_v4())]).await;
-        let app = router(controller, "secret".into());
+        let app = router(controller, "secret".to_string());
 
         let invalid = request(
             app.clone(),
-            "/admin/v1/users/Invalid/tunnels",
+            "/admin/v1/owners/invalid/tunnels",
             Some("secret"),
         )
         .await;
@@ -496,13 +750,18 @@ mod tests {
             r#"{"error":"not found"}"#
         );
 
-        let empty = request(app.clone(), "/admin/v1/users/bob/tunnels", Some("secret")).await;
+        let empty = request(
+            app.clone(),
+            "/admin/v1/owners/626f6200-0000-0000-0000-000000000001/tunnels",
+            Some("secret"),
+        )
+        .await;
         assert_eq!(empty.status(), StatusCode::OK);
         assert_eq!(empty.into_body().collect().await.unwrap().to_bytes(), "[]");
 
         let unknown_user = post(
             app.clone(),
-            "/admin/v1/tunnels/bob/one/kill",
+            "/admin/v1/tunnels/626f6200-0000-0000-0000-000000000001/one/kill",
             Some("secret"),
         )
         .await;
@@ -514,13 +773,13 @@ mod tests {
 
         let unknown_devserver = post(
             app.clone(),
-            "/admin/v1/tunnels/alice/two/kill",
+            "/admin/v1/tunnels/616c6963-6500-0000-0000-000000000001/two/kill",
             Some("secret"),
         )
         .await;
         assert_eq!(unknown_devserver.status(), StatusCode::NOT_FOUND);
 
-        let invalid_kill = post(app, "/admin/v1/users/Invalid/tunnels/kill", Some("secret")).await;
+        let invalid_kill = post(app, "/admin/v1/owners/invalid/tunnels/kill", Some("secret")).await;
         assert_eq!(invalid_kill.status(), StatusCode::NOT_FOUND);
         assert_eq!(
             invalid_kill.into_body().collect().await.unwrap().to_bytes(),
@@ -534,11 +793,11 @@ mod tests {
         let (controller, mut session) =
             ready_controller_with(vec![row("alice", "one", registration_id)]).await;
         let proxy_id = ProxyId::parse("p1").unwrap();
-        let app = router(controller.clone(), "secret".into());
+        let app = router(controller.clone(), "secret".to_string());
 
         let pending = tokio::spawn(post(
             app,
-            "/admin/v1/tunnels/alice/one/kill",
+            "/admin/v1/tunnels/616c6963-6500-0000-0000-000000000001/one/kill",
             Some("secret"),
         ));
         let (command_id, registration_ids) = recv_kill_command(&mut session).await;
@@ -560,7 +819,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn user_kill_counts_killed_and_missing_and_retries_empty() {
+    async fn owner_kill_counts_killed_and_missing_and_retries_empty() {
         let killed = Uuid::new_v4();
         let missing = Uuid::new_v4();
         let bob_registration = Uuid::new_v4();
@@ -571,11 +830,11 @@ mod tests {
         ])
         .await;
         let proxy_id = ProxyId::parse("p1").unwrap();
-        let app = router(controller.clone(), "secret".into());
+        let app = router(controller.clone(), "secret".to_string());
 
         let pending = tokio::spawn(post(
             app.clone(),
-            "/admin/v1/users/alice/tunnels/kill",
+            "/admin/v1/owners/616c6963-6500-0000-0000-000000000001/tunnels/kill",
             Some("secret"),
         ));
         let (command_id, registration_ids) = recv_kill_command(&mut session).await;
@@ -600,7 +859,12 @@ mod tests {
         );
 
         // A retry has nothing left to kill and is a success, not an error.
-        let retry = post(app, "/admin/v1/users/alice/tunnels/kill", Some("secret")).await;
+        let retry = post(
+            app,
+            "/admin/v1/owners/616c6963-6500-0000-0000-000000000001/tunnels/kill",
+            Some("secret"),
+        )
+        .await;
         assert_eq!(retry.status(), StatusCode::OK);
         assert_eq!(
             retry.into_body().collect().await.unwrap().to_bytes(),
@@ -609,7 +873,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn user_kill_reports_partial_when_a_proxy_disconnects() {
+    async fn owner_kill_reports_partial_when_a_proxy_disconnects() {
         let controller = crate::spawn_controller(100);
         let (p1, s1) =
             begin_proxy(&controller, "p1", vec![row("alice", "one", Uuid::new_v4())]).await;
@@ -619,11 +883,11 @@ mod tests {
         keep_alive_until_ready(&controller, &mut sessions).await;
         assert!(controller.is_ready().await.unwrap());
         let mut sessions: std::collections::HashMap<_, _> = sessions.into_iter().collect();
-        let app = router(controller.clone(), "secret".into());
+        let app = router(controller.clone(), "secret".to_string());
 
         let pending = tokio::spawn(post(
             app,
-            "/admin/v1/users/alice/tunnels/kill",
+            "/admin/v1/owners/616c6963-6500-0000-0000-000000000001/tunnels/kill",
             Some("secret"),
         ));
         let s1 = sessions.get_mut(&p1).unwrap();

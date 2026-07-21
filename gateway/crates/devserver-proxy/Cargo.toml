@@ -32,9 +32,6 @@ http-body-util = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
 h2 = { workspace = true }
-# devserver-gate HS256 verify (entry tokens from identity) and mint
-# (session cookies). Shared envelope lives in gateway_common::devserver_gate.
-jsonwebtoken = { workspace = true }
 rand = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tokio-util = { workspace = true }

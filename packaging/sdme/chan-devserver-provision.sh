@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # chan-devserver-provision -- baked into the chan-devserver rootfs (see
 # chan-devserver.sdme) at /usr/local/bin. Run it ONCE inside a booted container
-# to stand up one tunnel-publishing `chan devserver` as a lingering
-# systemd --user service.
+# to stand up one tunnel-publishing `chan devserver` as a lingering systemd
+# --user service. One container is one externally shared trust domain; a second
+# Unix user is refused instead of pretending the shared kernel is isolation.
 #
 # The rootfs ships base tools (curl, ca-certificates, dbus-user-session, dialog)
 # but NOT `chan`. This script installs the released `chan` per-user via
@@ -36,7 +37,9 @@ set -euo pipefail
 
 die() { printf 'chan-devserver-provision: %s\n' "$*" >&2; exit 1; }
 
-usage() { sed -n '18,33p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() {
+  sed -n '/^# Usage:/,/^# The published host/p' "$0" | sed 's/^# \{0,1\}//'
+}
 
 # Emit `export VAR='val'; ` for each proxy var that is set (single-quote-escaped)
 # so they survive `su`'s environment reset when the chan install runs as the
@@ -81,58 +84,68 @@ fi
 
 [ -n "$USER_NAME" ] || die "no --user / CHAN_DEVSERVER_USER"
 [ -n "$TOKEN" ]     || die "no --token / CHAN_TUNNEL_TOKEN (and no terminal for a dialog prompt)"
-case "$TOKEN" in
-  chan_pat_*) : ;;
-  *) die "token does not look like a chan_pat_ PAT" ;;
-esac
+[[ "$USER_NAME" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] \
+  || die "user must match [a-z_][a-z0-9_-]{0,31}"
+[[ "$USER_NAME" != root ]] || die "root cannot own a chan devserver"
+[[ "$TOKEN" =~ ^chan_pat_[A-Za-z0-9_-]{43}$ ]] \
+  || die "token does not have the chan_pat_ base64url shape"
+
+# A grant reaches an interactive shell as this user. Pin the container to that
+# one trust domain before creating anything the new user could influence.
+STATE_DIR=/var/lib/chan-devserver
+OWNER_FILE=$STATE_DIR/owner
+while IFS=: read -r managed_user _ _ _ _ managed_home _; do
+  managed_unit=$managed_home/.config/systemd/user/chan-devserver.service
+  if [ -f "$managed_unit" ] && [ "$managed_user" != "$USER_NAME" ]; then
+    die "existing managed devserver belongs to '$managed_user'; use a separate container for '$USER_NAME'"
+  fi
+done < <(getent passwd)
+
+PINNED_USER=""
+if [ -f "$OWNER_FILE" ]; then
+  PINNED_USER=$(sed -n '1p' "$OWNER_FILE")
+  [ "$PINNED_USER" = "$USER_NAME" ] \
+    || die "container already belongs to trust-domain user '$PINNED_USER'; use a separate container for '$USER_NAME'"
+fi
 
 # 1. The user. systemd --user refuses to run for root, so this must be a
-#    regular login user. The running devserver hands logged-in users this
-#    shell, so make it usable: install + configure sudo, add them to the sudo
-#    group with a NOPASSWD rule, and set up ~/.local/bin plus the user-session
-#    env in their shell rc.
-if ! id -u "$USER_NAME" >/dev/null 2>&1; then
+#    regular login user. The running devserver hands users this shell, but it
+#    deliberately carries no sudo or other route to sibling or host secrets.
+if id -u "$USER_NAME" >/dev/null 2>&1; then
+  [ "$PINNED_USER" = "$USER_NAME" ] \
+    || die "refusing preexisting user '$USER_NAME' on an unowned container"
+else
+  [ -z "$PINNED_USER" ] \
+    || die "pinned user '$USER_NAME' is missing from the account database"
   useradd -m -s /bin/bash "$USER_NAME"
 fi
 UID_N="$(id -u "$USER_NAME")"
+GID_N="$(id -g "$USER_NAME")"
 HOME_DIR="$(getent passwd "$USER_NAME" | cut -d: -f6)"
 [ -n "$HOME_DIR" ] || die "no home directory for $USER_NAME"
+[ "$UID_N" -ne 0 ] || die "user '$USER_NAME' resolves to uid 0"
+[ "$GID_N" -ne 0 ] || die "user '$USER_NAME' resolves to gid 0"
 
-# sudo is installed HERE, not baked into the rootfs: the runtime overlay path
-# drops its setuid bit and sudo then refuses to run ("must be owned by uid 0
-# and have the setuid bit set"). Installing at runtime lets dpkg set setuid in
-# the live filesystem; re-assert it defensively on the resolved alternatives
-# target (Ubuntu 26.04 routes /usr/bin/sudo -> /etc/alternatives -> sudo.ws).
-if ! command -v sudo >/dev/null 2>&1; then
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get update -qq && apt-get install -y --no-install-recommends sudo \
-    || die "installing sudo failed (no network to the Ubuntu archive?)"
-fi
-SUDO_BIN="$(readlink -f "$(command -v sudo)" 2>/dev/null || true)"
-if [ -n "$SUDO_BIN" ] && [ -f "$SUDO_BIN" ]; then
-  chown root:root "$SUDO_BIN"
-  chmod u+s "$SUDO_BIN"
-fi
+# An interactive workspace shell inherits every supplementary group. Refuse all
+# of them instead of maintaining a brittle privileged-group denylist.
+for group_id in $(id -G "$USER_NAME"); do
+  [ "$group_id" = "$GID_N" ] \
+    || die "user '$USER_NAME' has unsafe supplemental group id $group_id"
+done
+[ ! -e "/etc/sudoers.d/chan-devserver-$USER_NAME" ] \
+  || die "user '$USER_NAME' has a legacy sudoers grant"
 
-adduser "$USER_NAME" sudo >/dev/null
-
-# Passwordless sudo via a drop-in. Validate with visudo BEFORE installing so a
-# malformed line can never wedge sudo, and use a dot-free filename (sudo skips
-# sudoers.d entries containing '.'). 0440 root:root is what sudo requires.
-SUDOERS="/etc/sudoers.d/chan-devserver-$USER_NAME"
-SUDOERS_TMP="$(mktemp)"
-printf '%s ALL=(ALL:ALL) NOPASSWD:ALL\n' "$USER_NAME" > "$SUDOERS_TMP"
-if visudo -cf "$SUDOERS_TMP" >/dev/null; then
-  install -m 0440 -o root -g root "$SUDOERS_TMP" "$SUDOERS"
-  rm -f "$SUDOERS_TMP"
-else
-  rm -f "$SUDOERS_TMP"
-  die "generated sudoers drop-in for $USER_NAME failed visudo validation"
+# Record ownership only after the requested OS identity has passed every
+# privilege check. A rejected root alias or group-bearing user cannot pin state.
+install -d -m 0700 -o root -g root "$STATE_DIR"
+if [ -z "$PINNED_USER" ]; then
+  (umask 077; printf '%s\n' "$USER_NAME" > "$OWNER_FILE")
+  chown root:root "$OWNER_FILE"
 fi
 
 # Make the user's interactive shells usable out of the box: ~/.local/bin on
 # PATH, and the user-session env so `systemctl --user` works without the caller
-# exporting it. The devserver-spawned shell and a plain `su`/`sudo -u` get no
+# exporting it. The devserver-spawned shell and a plain `su` get no
 # login session, so XDG_RUNTIME_DIR/DBUS_SESSION_BUS_ADDRESS are otherwise
 # unset; :=default only fills them when a real login session has not. The stock
 # ~/.profile also adds ~/.local/bin for LOGIN shells once the dir exists.
@@ -173,7 +186,7 @@ loginctl enable-linger "$USER_NAME"
 
 # Run a command against the user's own `systemctl --user` manager. su as root
 # needs no setuid and no login session; export the runtime dir + bus so
-# `systemctl --user` resolves the manager (a plain su/sudo shell has neither).
+# `systemctl --user` resolves the manager (a plain su shell has neither).
 as_user() {
   su -s /bin/sh -c \
     "export XDG_RUNTIME_DIR='/run/user/$UID_N' \

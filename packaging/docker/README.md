@@ -7,7 +7,7 @@ OCI images for chan and the chan-gateway services. Multi-stage builds: a builder
 | Image                            | Ports       |
 |----------------------------------|-------------|
 | `chan`                           | 8787        |
-| `chan-gateway-identity`          | 7000        |
+| `chan-gateway-identity`          | 7000 public, 7004 internal |
 | `chan-gateway-profile`           | 7001        |
 | `chan-gateway-devserver-proxy`   | 7002, 7100  |
 | `chan-gateway-devserver-control` | 7003, 7101  |
@@ -89,7 +89,7 @@ docker run --rm -e CHAN_TUNNEL_TOKEN=chan_pat_... chan:dev \
 
 ### gateway services
 
-The service binaries read configuration from environment variables (they do NOT source the systemd `EnvironmentFile`; that is a packaging concern). Each image sets only `BIND_ADDR=0.0.0.0:<port>` (the in-repo default is `127.0.0.1`, which is unreachable across containers). Everything else is injected at runtime; no secrets are baked in. The full variable contract is in `gateway/crates/*/packaging/*.env` and `gateway/README.md`.
+The service binaries read configuration from environment variables (they do NOT source the systemd `EnvironmentFile`; that is a packaging concern). Each image sets only `BIND_ADDR=0.0.0.0:<port>` (the in-repo default is `127.0.0.1`, which is unreachable across containers). Everything else is injected at runtime; no secrets are baked in. Non-loopback plaintext service URLs are refused unless `CHAN_GATEWAY_INTERNAL_TRANSPORT=protected-overlay` explicitly declares an authenticated encrypted container network. Do not set it on an ordinary plaintext bridge. The full variable contract is in `gateway/crates/*/packaging/*.env` and `gateway/README.md`.
 
 For orchestration (Postgres + the four services wired together) and the local sdme validation, use `packaging/kube/` -- see `packaging/kube/README.md`.
 
@@ -97,5 +97,5 @@ For orchestration (Postgres + the four services wired together) and the local sd
 
 - **Base images.** Builder `node:20-bookworm`, runtime `debian:bookworm-slim`. Both are Debian bookworm so the binary's glibc requirement never exceeds the runtime's glibc. Pin by digest for reproducible production builds.
 - **No runtime deps beyond glibc + ca-certificates.** The gateway is sqlx + rustls (no libpq, no openssl). chan-tunnel-client uses rustls-native-certs, so the chan image needs `ca-certificates` for the outbound tunnel TLS dial.
-- **Non-root.** Runtime images create and run as a non-root user (`chan`, `chan-gateway`), mirroring the systemd units' `User=`.
+- **Non-root.** Runtime images create and run as a non-root user (`chan`, `chan-gateway`). Container boundaries isolate gateway workloads; systemd packages use a distinct Unix identity for each service.
 - **Secrets stay out of the image.** Config and secrets arrive as environment variables / mounted files at runtime.

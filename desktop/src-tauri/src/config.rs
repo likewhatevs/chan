@@ -130,9 +130,13 @@ pub struct Devserver {
 
 /// Persisted consent for one shared devserver's exact gateway identity.
 /// Labels, proxy origins, and short discriminators are intentionally absent:
-/// only the gateway-authorized full `(owner, devserver_id)` tuple is stable.
+/// authority is keyed by immutable owner UUID plus the full devserver id.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NativeDevserverTrust {
+    /// None only on legacy records. Legacy username-keyed trust is retained
+    /// for readable config migration but never authorizes native IPC.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_user_id: Option<uuid::Uuid>,
     pub owner: String,
     pub devserver_id: String,
 }
@@ -174,10 +178,10 @@ pub struct Gateway {
 }
 
 impl Gateway {
-    pub fn trusts_native(&self, owner: &str, devserver_id: &str) -> bool {
-        self.native_trust
-            .iter()
-            .any(|trust| trust.owner == owner && trust.devserver_id == devserver_id)
+    pub fn trusts_native(&self, owner_user_id: uuid::Uuid, devserver_id: &str) -> bool {
+        self.native_trust.iter().any(|trust| {
+            trust.owner_user_id == Some(owner_user_id) && trust.devserver_id == devserver_id
+        })
     }
 }
 
@@ -187,7 +191,7 @@ impl Gateway {
 pub fn native_trust(
     store: &Arc<Mutex<ConfigStore>>,
     gateway_id: &str,
-    owner: &str,
+    owner_user_id: uuid::Uuid,
     devserver_id: &str,
 ) -> Result<bool, String> {
     let cfg = store.lock().unwrap().get().map_err(|e| e.to_string())?;
@@ -196,7 +200,7 @@ pub fn native_trust(
         .iter()
         .find(|gateway| gateway.id == gateway_id)
         .ok_or_else(|| format!("no gateway {gateway_id}"))?;
-    Ok(gateway.trusts_native(owner, devserver_id))
+    Ok(gateway.trusts_native(owner_user_id, devserver_id))
 }
 
 /// Persist or remove one exact shared-devserver trust tuple. Returns whether
@@ -204,6 +208,7 @@ pub fn native_trust(
 pub fn set_native_trust(
     store: &Arc<Mutex<ConfigStore>>,
     gateway_id: &str,
+    owner_user_id: uuid::Uuid,
     owner: &str,
     devserver_id: &str,
     trusted: bool,
@@ -215,19 +220,46 @@ pub fn set_native_trust(
         .iter_mut()
         .find(|gateway| gateway.id == gateway_id)
         .ok_or_else(|| format!("no gateway {gateway_id}"))?;
-    let present = gateway.trusts_native(owner, devserver_id);
+    let present = gateway.trusts_native(owner_user_id, devserver_id);
     if present == trusted {
         return Ok(false);
     }
     if trusted {
         gateway.native_trust.push(NativeDevserverTrust {
+            owner_user_id: Some(owner_user_id),
             owner: owner.to_string(),
             devserver_id: devserver_id.to_string(),
         });
     } else {
-        gateway
-            .native_trust
-            .retain(|trust| trust.owner != owner || trust.devserver_id != devserver_id);
+        gateway.native_trust.retain(|trust| {
+            trust.owner_user_id != Some(owner_user_id) || trust.devserver_id != devserver_id
+        });
+    }
+    store.save(&cfg).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+/// Cleanup-only removal for a roster row that disappeared before its UUID can
+/// be read from the new snapshot. This never grants authority.
+pub fn prune_native_trust_by_label(
+    store: &Arc<Mutex<ConfigStore>>,
+    gateway_id: &str,
+    owner: &str,
+    devserver_id: &str,
+) -> Result<bool, String> {
+    let mut store = store.lock().unwrap();
+    let mut cfg = store.get().map_err(|e| e.to_string())?;
+    let gateway = cfg
+        .gateways
+        .iter_mut()
+        .find(|gateway| gateway.id == gateway_id)
+        .ok_or_else(|| format!("no gateway {gateway_id}"))?;
+    let before = gateway.native_trust.len();
+    gateway
+        .native_trust
+        .retain(|trust| trust.owner != owner || trust.devserver_id != devserver_id);
+    if gateway.native_trust.len() == before {
+        return Ok(false);
     }
     store.save(&cfg).map_err(|e| e.to_string())?;
     Ok(true)
@@ -606,7 +638,8 @@ fn entry_from_roster_row(
         gateway_id: Some(gateway.id.clone()),
         gateway_url: gateway.url.clone(),
         shared: row.shared,
-        native_trust_required: row.shared && !gateway.trusts_native(&row.owner, &row.devserver_id),
+        native_trust_required: row.shared
+            && !gateway.trusts_native(row.owner_user_id, &row.devserver_id),
     }
 }
 
@@ -2515,11 +2548,15 @@ mod tests {
         shared: bool,
     ) -> crate::gateway::RosterDevserver {
         crate::gateway::RosterDevserver {
+            owner_user_id: if owner == "alice" {
+                uuid::Uuid::from_u128(1)
+            } else {
+                uuid::Uuid::from_u128(2)
+            },
             owner: owner.to_string(),
             devserver_id: id.to_string(),
             label: label.to_string(),
             online: true,
-            role: if shared { "viewer" } else { "owner" }.to_string(),
             shared,
             proxy_origin: Some("https://node.p1.devserver.chan.app".to_string()),
         }
@@ -2593,11 +2630,25 @@ mod tests {
 
         // Trust is the exact full tuple under this gateway. Once persisted it
         // survives a fresh config read and only that shared row flips.
+        assert!(set_native_trust(
+            &reg.store,
+            "gw-1a2b3c4d",
+            uuid::Uuid::from_u128(2),
+            "bob",
+            &"b".repeat(64),
+            true,
+        )
+        .unwrap());
         assert!(
-            set_native_trust(&reg.store, "gw-1a2b3c4d", "bob", &"b".repeat(64), true,).unwrap()
-        );
-        assert!(
-            !set_native_trust(&reg.store, "gw-1a2b3c4d", "bob", &"b".repeat(64), true,).unwrap(),
+            !set_native_trust(
+                &reg.store,
+                "gw-1a2b3c4d",
+                uuid::Uuid::from_u128(2),
+                "bob",
+                &"b".repeat(64),
+                true,
+            )
+            .unwrap(),
             "re-grant is idempotent"
         );
         let trusted = reg.list();
@@ -2613,9 +2664,15 @@ mod tests {
 
         // Deterministic across calls while nothing changes.
         assert_eq!(reg.list(), trusted);
-        assert!(
-            set_native_trust(&reg.store, "gw-1a2b3c4d", "bob", &"b".repeat(64), false,).unwrap()
-        );
+        assert!(set_native_trust(
+            &reg.store,
+            "gw-1a2b3c4d",
+            uuid::Uuid::from_u128(2),
+            "bob",
+            &"b".repeat(64),
+            false,
+        )
+        .unwrap());
         assert!(reg.list()[2].native_trust_required);
     }
 

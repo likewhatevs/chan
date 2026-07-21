@@ -13,9 +13,17 @@
 #       --from-literal=PROFILE_AUTH_TOKEN=$(openssl rand -hex 32) \
 #       --from-literal=PROFILE_ADMIN_TOKEN=$(openssl rand -hex 32) \
 #       --from-literal=IDENTITY_INTERNAL_TOKEN=$(openssl rand -hex 32) \
-#       --from-literal=DEVSERVER_GATE_SECRET=$(openssl rand -hex 32) \
-#       --from-literal=DEVSERVER_ADMIN_TOKEN=$(openssl rand -hex 32) \
-#       --from-literal=DEVSERVER_PROXY_TOKEN=$(openssl rand -hex 32) \
+#       --from-literal=DEVSERVER_ADMISSION_SIGNING_KEY=<base64url-key> \
+#       --from-literal=DEVSERVER_ADMISSION_VERIFYING_KEYS=<controller-base64url-key-ring> \
+#       --from-literal=DEVSERVER_OPERATOR_ADMIN_TOKENS=$(openssl rand -hex 32) \
+#       --from-literal=DEVSERVER_IDENTITY_ADMIN_TOKEN=$(openssl rand -hex 32) \
+#       --from-literal=DEVSERVER_PROFILE_ADMIN_TOKEN=$(openssl rand -hex 32) \
+#       --from-literal=DEVSERVER_IDENTITY_ADMIN_TOKENS=<same-identity-token> \
+#       --from-literal=DEVSERVER_PROFILE_ADMIN_TOKENS=<same-profile-token> \
+#       --from-literal=DEVSERVER_ENTRY_SIGNING_KEY=<base64url-entry-secret> \
+#       --from-literal=DEVSERVER_ENTRY_VERIFYING_KEYS=<base64url-entry-public> \
+#       --from-literal=DEVSERVER_PROXY_CREDENTIALS=p1=<token> \
+#       --from-literal=DEVSERVER_PROXY_TOKEN=<same-token> \
 #       --from-literal=GITHUB_CLIENT_ID=dev-placeholder \
 #       --from-literal=GITHUB_CLIENT_SECRET=dev-placeholder
 #   sudo sdme kube apply -f packaging/kube/sdme/gateway-pod.yaml --base-fs <base>
@@ -31,8 +39,9 @@ metadata:
     app.kubernetes.io/part-of: chan-gateway
 spec:
   restartPolicy: Always
+  automountServiceAccountToken: false
   containers:
-    # --- Postgres (profile + identity migrate against it on boot) -----------
+    # --- Postgres (identity's migration-only preflight owns DDL) ------------
     - name: postgres
       image: postgres:16
       imagePullPolicy: IfNotPresent
@@ -56,22 +65,58 @@ spec:
       # BIND_ADDR=0.0.0.0:7001 baked into the image. Tokens + DATABASE_URL from
       # the secret; the loopback admin URL inline (the controller owns the
       # aggregate /admin/v1/* tree).
-      envFrom:
-        - secretRef: { name: gateway-secrets }
       env:
+        - { name: BIND_ADDR, value: "127.0.0.1:7001" }
+        - { name: CHAN_GATEWAY_MIGRATIONS, value: external }
+        - name: DATABASE_URL
+          valueFrom: { secretKeyRef: { name: gateway-secrets, key: DATABASE_URL } }
+        - name: PROFILE_AUTH_TOKEN
+          valueFrom: { secretKeyRef: { name: gateway-secrets, key: PROFILE_AUTH_TOKEN } }
+        - name: PROFILE_ADMIN_TOKEN
+          valueFrom: { secretKeyRef: { name: gateway-secrets, key: PROFILE_ADMIN_TOKEN } }
+        - name: DEVSERVER_PROFILE_ADMIN_TOKEN
+          valueFrom: { secretKeyRef: { name: gateway-secrets, key: DEVSERVER_PROFILE_ADMIN_TOKEN } }
         - { name: DEVSERVER_ADMIN_URL, value: "http://127.0.0.1:7003" }
       readinessProbe:
         httpGet: { path: /healthz, port: 7001 }
         initialDelaySeconds: 3
         periodSeconds: 5
 
-    # --- identity (:7000 public sign-in) ------------------------------------
+    # --- identity (:7000 public sign-in, :7004 proxy-only internal) ----------
     - name: identity
       image: chan-gateway-identity:dev
       imagePullPolicy: IfNotPresent
-      envFrom:
-        - secretRef: { name: gateway-secrets }
+      # This local validation shape has no separate Job lifecycle. Run the
+      # exact production binary once in migration-only mode, then exec its
+      # external-migration app mode. A Postgres startup race restarts only this
+      # container; migrations remain idempotent.
+      command: ["/bin/sh", "-ec"]
+      args:
+        - |
+          CHAN_GATEWAY_MIGRATIONS=only /usr/local/bin/chan-gateway-identity
+          exec /usr/local/bin/chan-gateway-identity
       env:
+        - { name: BIND_ADDR, value: "127.0.0.1:7000" }
+        - { name: INTERNAL_BIND_ADDR, value: "127.0.0.1:7004" }
+        - { name: CHAN_GATEWAY_MIGRATIONS, value: external }
+        - name: DATABASE_URL
+          valueFrom: { secretKeyRef: { name: gateway-secrets, key: DATABASE_URL } }
+        - name: PROFILE_AUTH_TOKEN
+          valueFrom: { secretKeyRef: { name: gateway-secrets, key: PROFILE_AUTH_TOKEN } }
+        - name: IDENTITY_INTERNAL_TOKEN
+          valueFrom: { secretKeyRef: { name: gateway-secrets, key: IDENTITY_INTERNAL_TOKEN } }
+        - name: DEVSERVER_ADMISSION_SIGNING_KEY
+          valueFrom: { secretKeyRef: { name: gateway-secrets, key: DEVSERVER_ADMISSION_SIGNING_KEY } }
+        - name: DEVSERVER_ADMISSION_VERIFYING_KEYS
+          valueFrom: { secretKeyRef: { name: gateway-secrets, key: DEVSERVER_ADMISSION_VERIFYING_KEYS } }
+        - name: DEVSERVER_ENTRY_SIGNING_KEY
+          valueFrom: { secretKeyRef: { name: gateway-secrets, key: DEVSERVER_ENTRY_SIGNING_KEY } }
+        - name: DEVSERVER_IDENTITY_ADMIN_TOKEN
+          valueFrom: { secretKeyRef: { name: gateway-secrets, key: DEVSERVER_IDENTITY_ADMIN_TOKEN } }
+        - name: GITHUB_CLIENT_ID
+          valueFrom: { secretKeyRef: { name: gateway-secrets, key: GITHUB_CLIENT_ID } }
+        - name: GITHUB_CLIENT_SECRET
+          valueFrom: { secretKeyRef: { name: gateway-secrets, key: GITHUB_CLIENT_SECRET } }
         - { name: BASE_URL, value: "http://id.localtest.me" }
         - { name: DEVSERVER_PROXY_ORIGIN, value: "http://usr.localtest.me" }
         - { name: DEVSERVER_TUNNEL_ORIGIN, value: "http://usr.localtest.me" }
@@ -88,12 +133,22 @@ spec:
       image: chan-gateway-devserver-control:dev
       imagePullPolicy: IfNotPresent
       # BIND_ADDR=0.0.0.0:7003 + PROXY_BIND_ADDR=0.0.0.0:7101 baked in.
-      # Admin + proxy tokens come from the secret.
-      envFrom:
-        - secretRef: { name: gateway-secrets }
+      # Admin, proxy membership, and admission verification come from the secret.
       env:
+        - { name: BIND_ADDR, value: "127.0.0.1:7003" }
+        - { name: PROXY_BIND_ADDR, value: "127.0.0.1:7101" }
+        - name: DEVSERVER_OPERATOR_ADMIN_TOKENS
+          valueFrom: { secretKeyRef: { name: gateway-secrets, key: DEVSERVER_OPERATOR_ADMIN_TOKENS } }
+        - name: DEVSERVER_IDENTITY_ADMIN_TOKENS
+          valueFrom: { secretKeyRef: { name: gateway-secrets, key: DEVSERVER_IDENTITY_ADMIN_TOKENS } }
+        - name: DEVSERVER_PROFILE_ADMIN_TOKENS
+          valueFrom: { secretKeyRef: { name: gateway-secrets, key: DEVSERVER_PROFILE_ADMIN_TOKENS } }
+        - name: DEVSERVER_PROXY_CREDENTIALS
+          valueFrom: { secretKeyRef: { name: gateway-secrets, key: DEVSERVER_PROXY_CREDENTIALS } }
+        - name: DEVSERVER_ADMISSION_VERIFYING_KEYS
+          valueFrom: { secretKeyRef: { name: gateway-secrets, key: DEVSERVER_ADMISSION_VERIFYING_KEYS } }
         - { name: DEVSERVER_PROXY_BASE_URL_TEMPLATE, value: "http://{proxy_id}.usr.localtest.me" }
-        - { name: MAX_DEVSERVERS_PER_USER, value: "0" }
+        - { name: MAX_DEVSERVERS_PER_USER, value: "100" }
       readinessProbe:
         httpGet: { path: /readyz, port: 7003 }
         initialDelaySeconds: 3
@@ -104,13 +159,20 @@ spec:
       image: chan-gateway-devserver-proxy:dev
       imagePullPolicy: IfNotPresent
       # BIND_ADDR=0.0.0.0:7002 + TUNNEL_BIND_ADDR=0.0.0.0:7100 baked in.
-      envFrom:
-        - secretRef: { name: gateway-secrets }
       env:
+        - { name: BIND_ADDR, value: "127.0.0.1:7002" }
+        - { name: TUNNEL_BIND_ADDR, value: "127.0.0.1:7100" }
+        - name: IDENTITY_INTERNAL_TOKEN
+          valueFrom: { secretKeyRef: { name: gateway-secrets, key: IDENTITY_INTERNAL_TOKEN } }
+        - name: DEVSERVER_ENTRY_VERIFYING_KEYS
+          valueFrom: { secretKeyRef: { name: gateway-secrets, key: DEVSERVER_ENTRY_VERIFYING_KEYS } }
+        - name: DEVSERVER_PROXY_TOKEN
+          valueFrom: { secretKeyRef: { name: gateway-secrets, key: DEVSERVER_PROXY_TOKEN } }
         - { name: DEVSERVER_TUNNEL_ORIGIN, value: "http://usr.localtest.me" }
         - { name: DEVSERVER_PROXY_BASE_URL, value: "http://p1.usr.localtest.me" }
         - { name: DASHBOARD_URL, value: "http://id.localtest.me/workspaces" }
-        - { name: IDENTITY_URL, value: "http://127.0.0.1:7000" }
+        - { name: IDENTITY_URL, value: "http://127.0.0.1:7004" }
+        - { name: IDENTITY_PUBLIC_ORIGIN, value: "http://id.localtest.me" }
         - { name: DEVSERVER_CONTROL_URL, value: "http://127.0.0.1:7101" }
         - { name: DEVSERVER_PROXY_ID, value: "p1" }
       readinessProbe:

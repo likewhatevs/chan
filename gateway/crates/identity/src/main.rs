@@ -6,6 +6,37 @@ use sqlx::postgres::PgPoolOptions;
 use tower_sessions_sqlx_store::PostgresStore;
 use tracing_subscriber::EnvFilter;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MigrationMode {
+    Only,
+    External,
+}
+
+impl MigrationMode {
+    fn parse(raw: Option<&str>) -> anyhow::Result<Self> {
+        match raw {
+            Some("only") => Ok(Self::Only),
+            Some("external") => Ok(Self::External),
+            Some(value) => anyhow::bail!(
+                "CHAN_GATEWAY_MIGRATIONS must be exactly `only` or `external`, got {value:?}"
+            ),
+            None => anyhow::bail!(
+                "CHAN_GATEWAY_MIGRATIONS is required and must be `only` or `external`"
+            ),
+        }
+    }
+
+    fn from_env() -> anyhow::Result<Self> {
+        match std::env::var("CHAN_GATEWAY_MIGRATIONS") {
+            Ok(value) => Self::parse(Some(&value)),
+            Err(std::env::VarError::NotPresent) => Self::parse(None),
+            Err(std::env::VarError::NotUnicode(_)) => {
+                anyhow::bail!("CHAN_GATEWAY_MIGRATIONS must be valid UTF-8")
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     tracing_subscriber::fmt()
@@ -23,8 +54,18 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> anyhow::Result<()> {
+    if MigrationMode::from_env()? == MigrationMode::Only {
+        return run_migrations().await;
+    }
+
     let cfg = Config::from_env()?;
-    tracing::info!(bind = %cfg.bind_addr, base = %cfg.base_url, "starting identity-service");
+    let admission_signer = Config::admission_lease_signer_from_env()?;
+    tracing::info!(
+        public_bind = %cfg.bind_addr,
+        internal_bind = %cfg.internal_bind_addr,
+        base = %cfg.base_url,
+        "starting identity-service"
+    );
 
     // Keep the cap low so a shared Postgres (dev VM, lab cluster)
     // doesn't run out of non-superuser slots when several services
@@ -35,25 +76,71 @@ async fn run() -> anyhow::Result<()> {
         .connect(&cfg.database_url)
         .await?;
 
-    sqlx::migrate!("../../migrations").run(&pool).await?;
-
     let store = PostgresStore::new(pool.clone());
-    store.migrate().await?;
 
-    let api_tokens = ApiTokenService::new(pool);
+    let api_tokens = ApiTokenService::with_admission_signer(pool, admission_signer);
     let token_throttle = TokenThrottle::new();
 
-    let app = http::router(Arc::new(cfg.clone()), store, api_tokens, token_throttle);
-    let listener = tokio::net::TcpListener::bind(cfg.bind_addr).await?;
-    // ConnectInfo populates the peer-address extension some axum
-    // layers expect. Nothing in identity-service requires it today
-    // (the validate path throttles per token fingerprint, not per
-    // IP), but the extension is cheap to provide.
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    let (public, internal) =
+        http::routers(Arc::new(cfg.clone()), store, api_tokens, token_throttle);
+    let public_listener = tokio::net::TcpListener::bind(cfg.bind_addr).await?;
+    let internal_listener = tokio::net::TcpListener::bind(cfg.internal_bind_addr).await?;
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let shutdown_signal = shutdown.clone();
+    tokio::spawn(async move {
+        gateway_common::shutdown_signal().await;
+        shutdown_signal.cancel();
+    });
+
+    let public_server = axum::serve(
+        public_listener,
+        public.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .with_graceful_shutdown(gateway_common::shutdown_signal())
-    .await?;
+    .with_graceful_shutdown(shutdown.clone().cancelled_owned());
+    let internal_server = axum::serve(
+        internal_listener,
+        internal.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown.cancelled_owned());
+    tokio::try_join!(public_server, internal_server)?;
     Ok(())
+}
+
+async fn run_migrations() -> anyhow::Result<()> {
+    let database_url = std::env::var("DATABASE_URL")
+        .map_err(|_| anyhow::anyhow!("DATABASE_URL is required in migration-only mode"))?;
+    tracing::info!("running identity database migrations");
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .connect(&database_url)
+        .await?;
+    sqlx::migrate!("../../migrations").run(&pool).await?;
+    PostgresStore::new(pool).migrate().await?;
+    tracing::info!("identity database migrations complete");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MigrationMode, MigrationMode::*};
+
+    #[test]
+    fn migration_mode_accepts_only_exact_supported_values() {
+        assert_eq!(MigrationMode::parse(Some("only")).unwrap(), Only);
+        assert_eq!(MigrationMode::parse(Some("external")).unwrap(), External);
+    }
+
+    #[test]
+    fn migration_mode_fails_closed() {
+        for value in [
+            None,
+            Some(""),
+            Some("auto"),
+            Some(" external"),
+            Some("ONLY"),
+        ] {
+            assert!(MigrationMode::parse(value).is_err(), "accepted {value:?}");
+        }
+    }
 }

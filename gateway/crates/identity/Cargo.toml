@@ -17,6 +17,7 @@ path = "src/lib.rs"
 
 [dependencies]
 chan-tunnel-proto = { workspace = true }
+devserver-control-proto = { workspace = true }
 gateway-common = { workspace = true }
 
 anyhow = { workspace = true }
@@ -36,6 +37,7 @@ sqlx = { workspace = true }
 subtle = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
 tower-sessions = { workspace = true }
@@ -67,13 +69,18 @@ users manage their workspace URLs. Calls chan-gateway-profile over
 HTTP. Single static binary (frontend baked in via rust-embed)."""
 section = "net"
 priority = "optional"
-depends = "$auto, adduser"
+depends = "$auto, adduser, postgresql-client"
 maintainer-scripts = "packaging/"
 assets = [
     ["target/release/identity-service", "/usr/bin/chan-gateway-identity",  "755"],
     ["packaging/identity.env",           "/etc/chan-gateway/identity.env", "640"],
+    ["packaging/migrate.env",            "/etc/chan-gateway/migrate.env", "640"],
+    ["packaging/chan-gateway-migrate.service", "/lib/systemd/system/chan-gateway-migrate.service", "644"],
+    ["../../../packaging/gateway/scripts/prepare-database-roles.sh", "/usr/lib/chan-gateway/prepare-database-roles", "755"],
+    ["../../../packaging/gateway/scripts/reconcile-database-roles.sh", "/usr/lib/chan-gateway/reconcile-database-roles", "755"],
+    ["../../../packaging/gateway/scripts/check-database-ready.sh", "/usr/lib/chan-gateway/check-database-ready", "755"],
 ]
-conf-files = ["/etc/chan-gateway/identity.env"]
+conf-files = ["/etc/chan-gateway/identity.env", "/etc/chan-gateway/migrate.env"]
 
 [package.metadata.deb.systemd-units]
 unit-name = "chan-gateway-identity"

@@ -15,7 +15,6 @@ mod dial;
 
 pub use dial::{build_tls_config, dial, dial_with_tls};
 
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,7 +25,7 @@ use hyper_util::rt::TokioIo;
 use hyper_util::service::TowerToHyperService;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 use tokio_util::compat::{Compat, FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use url::Url;
 use yamux::{Config as YamuxConfig, Connection as YamuxConnection, Mode};
@@ -63,6 +62,9 @@ pub enum ClientError {
 /// a tunnel. Excess streams remain backpressured in yamux until an
 /// active handler exits.
 pub const DEFAULT_MAX_CONCURRENT_SUBSTREAMS: usize = 128;
+const LEASE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+const LEASE_REFRESH_RETRY_MIN: Duration = Duration::from_secs(5);
+const LEASE_REFRESH_RETRY_MAX: Duration = Duration::from_secs(30);
 
 impl From<chan_tunnel_proto::FrameError> for ClientError {
     fn from(e: chan_tunnel_proto::FrameError) -> Self {
@@ -83,7 +85,7 @@ impl From<chan_tunnel_proto::IoFrameError> for ClientError {
 /// `String` rather than borrowed: the dial loop may reconnect, and
 /// holding a borrow across reconnects forces the caller into
 /// awkward lifetimes.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ClientConfig {
     pub tunnel_url: Url,
     pub token: String,
@@ -131,6 +133,32 @@ pub struct ClientConfig {
     pub max_concurrent_substreams: usize,
 }
 
+impl std::fmt::Debug for ClientConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ClientConfig")
+            .field("tunnel_url", &url_without_userinfo(&self.tunnel_url))
+            .field("token", &"[REDACTED]")
+            .field("workspace", &self.workspace)
+            .field("name", &self.name)
+            .field("client_version", &self.client_version)
+            .field("initial_backoff", &self.initial_backoff)
+            .field("max_backoff", &self.max_backoff)
+            .field("dial_timeout", &self.dial_timeout)
+            .field("events", &self.events.as_ref().map(|_| "configured"))
+            .field("proxy", &self.proxy.as_ref().map(url_without_userinfo))
+            .field("max_concurrent_substreams", &self.max_concurrent_substreams)
+            .finish()
+    }
+}
+
+fn url_without_userinfo(url: &Url) -> Url {
+    let mut sanitized = url.clone();
+    let _ = sanitized.set_password(None);
+    let _ = sanitized.set_username("");
+    sanitized
+}
+
 impl Default for ClientConfig {
     fn default() -> Self {
         Self {
@@ -158,6 +186,8 @@ pub struct Registration {
     pub prefix: String,
     pub user: String,
     pub workspace: String,
+    /// Immutable owner id resolved by the gateway from the tunnel PAT.
+    pub owner_user_id: String,
 }
 
 /// Lifecycle events emitted by `run`. Callers subscribe via
@@ -229,6 +259,7 @@ where
         prefix: ok.prefix,
         user: ok.user,
         workspace: ok.workspace,
+        owner_user_id: ok.owner_user_id,
     };
     let yamux = YamuxConnection::new(socket.compat(), YamuxConfig::default(), Mode::Client);
     Ok((registration, yamux))
@@ -254,32 +285,136 @@ where
 
 /// Same as [`serve_substreams`], with an explicit concurrency cap.
 pub async fn serve_substreams_with_limit<S>(
-    mut conn: YamuxConnection<S>,
+    conn: YamuxConnection<S>,
     router: axum::Router,
     max_concurrent_substreams: usize,
 ) -> Result<(), ClientError>
 where
     S: FutAsyncRead + FutAsyncWrite + Unpin + Send + 'static,
 {
+    serve_substreams_inner(conn, router, max_concurrent_substreams, None).await
+}
+
+async fn serve_substreams_inner<S>(
+    mut conn: YamuxConnection<S>,
+    router: axum::Router,
+    max_concurrent_substreams: usize,
+    refresh_token: Option<String>,
+) -> Result<(), ClientError>
+where
+    S: FutAsyncRead + FutAsyncWrite + Unpin + Send + 'static,
+{
     let limit = max_concurrent_substreams.max(1);
     let permits = Arc::new(Semaphore::new(limit));
+    let mut inbound_permit = None;
+    let mut permit_wait = Box::pin(acquire_substream_permit(permits.clone()));
+    let (refresh_tx, mut refresh_rx) = mpsc::channel(1);
+    let mut refresh_delay = Box::pin(tokio::time::sleep(LEASE_REFRESH_INTERVAL));
+    let mut refresh_retry = LEASE_REFRESH_RETRY_MIN;
+    let mut refresh_pending = false;
     loop {
-        let permit = permits
-            .clone()
-            .acquire_owned()
-            .await
-            .expect("substream semaphore is never closed");
-        let next = futures::future::poll_fn(|cx| Pin::new(&mut conn).poll_next_inbound(cx)).await;
-        match next {
+        tokio::select! {
+            permit = &mut permit_wait, if inbound_permit.is_none() => {
+                inbound_permit = Some(permit);
+            }
+            result = refresh_rx.recv(), if refresh_pending => {
+                refresh_pending = false;
+                match result {
+                    Some(Ok(())) => {
+                        refresh_retry = LEASE_REFRESH_RETRY_MIN;
+                        refresh_delay.as_mut().reset(tokio::time::Instant::now() + LEASE_REFRESH_INTERVAL);
+                    }
+                    Some(Err(error)) => {
+                        tracing::warn!(error = %error, "admission lease refresh failed; retrying before expiry");
+                        let delay = jittered(refresh_retry);
+                        refresh_retry = (refresh_retry * 2).min(LEASE_REFRESH_RETRY_MAX);
+                        refresh_delay.as_mut().reset(tokio::time::Instant::now() + delay);
+                    }
+                    None => return Err(ClientError::TransportClosed),
+                }
+            }
+            _ = &mut refresh_delay, if refresh_token.is_some() && !refresh_pending => {
+                let stream = futures::future::poll_fn(|cx| {
+                    std::pin::Pin::new(&mut conn).poll_new_outbound(cx)
+                })
+                .await
+                .map_err(|_| ClientError::TransportClosed)?;
+                let token = refresh_token.clone().expect("select guard requires token");
+                let refresh_tx = refresh_tx.clone();
+                refresh_pending = true;
+                tokio::spawn(async move {
+                    let result = refresh_lease(stream, token).await;
+                    let _ = refresh_tx.send(result).await;
+                });
+            }
+            next = futures::future::poll_fn(|cx| std::pin::Pin::new(&mut conn).poll_next_inbound(cx)), if inbound_permit.is_some() => match next {
             Some(Ok(stream)) => {
                 let router = router.clone();
+                let permit = inbound_permit.take().expect("select guard requires a permit");
+                permit_wait
+                    .as_mut()
+                    .set(acquire_substream_permit(permits.clone()));
                 tokio::spawn(async move {
+                    #[cfg(test)]
+                    let _task_guard = SubstreamTaskGuard::new();
                     let _permit = permit;
                     serve_one_substream(stream, router).await;
                 });
             }
             Some(Err(_)) | None => return Ok(()),
+            }
         }
+    }
+}
+
+async fn acquire_substream_permit(permits: Arc<Semaphore>) -> OwnedSemaphorePermit {
+    permits
+        .acquire_owned()
+        .await
+        .expect("substream semaphore is never closed")
+}
+
+#[cfg(test)]
+static ACTIVE_SUBSTREAM_TASKS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+#[cfg(test)]
+static MAX_ACTIVE_SUBSTREAM_TASKS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+struct SubstreamTaskGuard;
+
+#[cfg(test)]
+impl SubstreamTaskGuard {
+    fn new() -> Self {
+        use std::sync::atomic::Ordering;
+
+        let active = ACTIVE_SUBSTREAM_TASKS.fetch_add(1, Ordering::SeqCst) + 1;
+        MAX_ACTIVE_SUBSTREAM_TASKS.fetch_max(active, Ordering::SeqCst);
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for SubstreamTaskGuard {
+    fn drop(&mut self) {
+        ACTIVE_SUBSTREAM_TASKS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+async fn refresh_lease(stream: yamux::Stream, token: String) -> Result<(), ClientError> {
+    let mut stream = stream.compat();
+    write_frame(
+        &mut stream,
+        &chan_tunnel_proto::LeaseRefreshRequest { token },
+    )
+    .await?;
+    let response: chan_tunnel_proto::LeaseRefreshResponse = read_frame(&mut stream).await?;
+    match response {
+        chan_tunnel_proto::LeaseRefreshResponse::Refreshed => Ok(()),
+        chan_tunnel_proto::LeaseRefreshResponse::Refused { message } => Err(
+            ClientError::Handshake(format!("lease refresh refused: {message}")),
+        ),
     }
 }
 
@@ -302,33 +437,7 @@ pub async fn run(cfg: ClientConfig, router: axum::Router) -> Result<(), ClientEr
             cfg.workspace
         )));
     }
-    match cfg.tunnel_url.scheme() {
-        "https" | "http" => {}
-        other => {
-            return Err(ClientError::InvalidUrl(format!(
-                "tunnel URL scheme must be https:// or http://, got {other}://"
-            )));
-        }
-    }
-    // h2c (http://) is fine for a local dev stack but ships the
-    // bearer token in cleartext; warn loudly when someone points it
-    // at a non-loopback host. Loopback detection is best-effort:
-    // hostname "localhost" and the standard 127.x / ::1 literals
-    // count; everything else gets the warning. We don't refuse
-    // outright because there are legitimate cases (private VPN,
-    // Tailscale, in-cluster service).
-    if cfg.tunnel_url.scheme() == "http" {
-        let host = cfg.tunnel_url.host_str().unwrap_or("");
-        let is_loopback =
-            host == "localhost" || host.starts_with("127.") || host == "::1" || host == "[::1]";
-        if !is_loopback {
-            tracing::warn!(
-                host = %host,
-                "tunnel URL is http://; bearer token will be sent in cleartext. \
-                 Use https:// for non-loopback hosts.",
-            );
-        }
-    }
+    dial::validate_tunnel_url(&cfg)?;
 
     // Build the TLS config once; rustls-native-certs walks the
     // OS trust store on every call (slow on macOS keychain) and
@@ -366,10 +475,12 @@ pub async fn run(cfg: ClientConfig, router: axum::Router) -> Result<(), ClientEr
                 );
                 emit(&cfg.events, TunnelEvent::Connected(registration.clone()));
                 backoff = cfg.initial_backoff;
-                if let Err(e) = serve_substreams_with_limit(
+                let session_router = router.clone().layer(axum::Extension(registration.clone()));
+                if let Err(e) = serve_substreams_inner(
                     yconn,
-                    router.clone(),
+                    session_router,
                     cfg.max_concurrent_substreams,
+                    Some(cfg.token.clone()),
                 )
                 .await
                 {
@@ -459,6 +570,8 @@ use axum::response::IntoResponse;
 #[cfg(test)]
 mod backoff_tests {
     use super::*;
+    use futures::AsyncWriteExt;
+    use std::sync::atomic::Ordering;
 
     #[test]
     fn jittered_within_band() {
@@ -473,5 +586,80 @@ mod backoff_tests {
     #[test]
     fn jittered_handles_zero() {
         assert_eq!(jittered(Duration::ZERO), Duration::ZERO);
+    }
+
+    #[test]
+    fn client_config_debug_redacts_pat_and_url_userinfo() {
+        let config = ClientConfig {
+            tunnel_url: Url::parse(
+                "https://tunnel-user-sentinel:tunnel-pass-sentinel@example.test/v1/tunnel",
+            )
+            .unwrap(),
+            token: "pat-secret-sentinel".into(),
+            proxy: Some(
+                Url::parse("http://proxy-user-sentinel:proxy-pass-sentinel@127.0.0.1:3128")
+                    .unwrap(),
+            ),
+            ..ClientConfig::default()
+        };
+        let debug = format!("{config:?}");
+        assert!(debug.contains("[REDACTED]"));
+        for secret in [
+            "pat-secret-sentinel",
+            "tunnel-user-sentinel",
+            "tunnel-pass-sentinel",
+            "proxy-user-sentinel",
+            "proxy-pass-sentinel",
+        ] {
+            assert!(!debug.contains(secret), "debug leaked {secret}: {debug}");
+        }
+    }
+
+    #[tokio::test]
+    async fn inbound_flood_never_spawns_work_beyond_the_permit_limit() {
+        ACTIVE_SUBSTREAM_TASKS.store(0, Ordering::SeqCst);
+        MAX_ACTIVE_SUBSTREAM_TASKS.store(0, Ordering::SeqCst);
+
+        let (client_io, server_io) = tokio::io::duplex(256 * 1024);
+        let client = YamuxConnection::new(client_io.compat(), YamuxConfig::default(), Mode::Client);
+        let mut server =
+            YamuxConnection::new(server_io.compat(), YamuxConfig::default(), Mode::Server);
+        let serving = tokio::spawn(serve_substreams_with_limit(client, axum::Router::new(), 1));
+
+        let mut remote_streams = Vec::new();
+        for _ in 0..32 {
+            let stream = futures::future::poll_fn(|cx| {
+                std::pin::Pin::new(&mut server).poll_new_outbound(cx)
+            })
+            .await
+            .unwrap();
+            remote_streams.push(stream);
+        }
+        for stream in &mut remote_streams {
+            stream.write_all(b"G").await.unwrap();
+        }
+        let pumping = tokio::spawn(async move {
+            let _ = futures::future::poll_fn(|cx| {
+                std::pin::Pin::new(&mut server).poll_next_inbound(cx)
+            })
+            .await;
+        });
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while ACTIVE_SUBSTREAM_TASKS.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the first inbound stream was not accepted");
+        for _ in 0..100 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(ACTIVE_SUBSTREAM_TASKS.load(Ordering::SeqCst), 1);
+        assert_eq!(MAX_ACTIVE_SUBSTREAM_TASKS.load(Ordering::SeqCst), 1);
+
+        drop(remote_streams);
+        pumping.abort();
+        serving.abort();
     }
 }

@@ -1,6 +1,41 @@
 # chan-gateway v0.74.0 control-plane implementation security review
 
-Status: complete. Decision: accept the hardening proposal with mandatory amendments; refuse the current implementation as release-ready. Reviewed `v074/ctl` at `6ada0579b5dd710a645aa3f12049cdd069224230` on 2026-07-21. The review changed no implementation code.
+Status: complete historical review, with the branch-tip reassessment below.
+The original decision was to accept the hardening proposal with mandatory
+amendments and refuse `v074/ctl` at
+`6ada0579b5dd710a645aa3f12049cdd069224230` as release-ready. That refusal was
+correct for the reviewed snapshot; it is superseded for the remediated,
+final-gated branch tip.
+
+## Branch-tip reassessment, 2026-07-21
+
+The mandatory findings were implemented and independently re-traced through
+the control, browser/API, tunnel, Desktop, database, and deployment paths. The
+branch now has cryptographic immutable admission, per-proxy and per-service
+credentials, opaque revocable browser sessions, durable transactional denial
+propagation, exact Origin and CSRF enforcement, request/stream cancellation,
+bounded authority during control loss, and isolated deployment examples.
+
+The adversarial follow-up found and closed additional release blockers that
+were not explicit in the original list: false revoke success after a drain
+timeout; authority loss between the 45-second proxy convergence deadline and a
+30-second controller marker; Desktop exhaustion after 16 windows; volatile
+revocation across profile restart; admin-delete bypass; a 24-hour configurable
+session ceiling; PAT revoke reservation/coalescing races; a quiet window
+anchored before commit; and account unblock while delete was pending.
+
+Position: **accept the remediated implementation for merge.** The complete
+gateway database workspace, gateway warnings-as-errors clippy, root pre-push
+gate, hardened three-node zone/matrix, live TLS/h2/sdme path, database-role
+test, and deployment-isolation checks are green. Remaining work is defense in
+depth or operations, not a known authorization or supported-deployment deal
+breaker: `__Host-`
+cookie names, transfer damping, richer audit/alerting and retry tooling,
+stronger quarantine for a consistently lying assigned proxy, controller HA,
+and routine deployment/resource refinements.
+
+The original review follows unchanged as the evidence for why the branch was
+previously refused.
 
 ## Executive decision
 

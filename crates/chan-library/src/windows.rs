@@ -78,7 +78,7 @@ impl WindowOrigin {
 
 /// One library-owned window: the authoritative record every client reconciles
 /// to. Assembled at read time from a [`PersistedWindow`] plus live state.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WindowRecord {
     /// Library-minted, persisted, opaque, stable across reconnect AND library
     /// restart. THE reconciliation key. Clients MUST NOT parse it. Unique
@@ -144,6 +144,28 @@ pub struct WindowRecord {
     /// existing rows stay native.
     #[serde(default, skip_serializing_if = "WindowOrigin::is_native")]
     pub origin: WindowOrigin,
+}
+
+impl std::fmt::Debug for WindowRecord {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WindowRecord")
+            .field("window_id", &self.window_id)
+            .field("library_id", &self.library_id)
+            .field("kind", &self.kind)
+            .field("title", &self.title)
+            .field("ordinal", &self.ordinal)
+            .field("workspace_path", &self.workspace_path)
+            .field("prefix", &self.prefix)
+            .field("token", &"[REDACTED]")
+            .field("persisted", &self.persisted)
+            .field("connected", &self.connected)
+            .field("active_transfer", &self.active_transfer)
+            .field("control", &self.control)
+            .field("hidden", &self.hidden)
+            .field("origin", &self.origin)
+            .finish()
+    }
 }
 
 /// The window-set watch frame: a full snapshot pushed on connect and on every
@@ -739,6 +761,9 @@ mod tests {
             })
         );
         assert_eq!(rec, serde_json::from_value(v).unwrap());
+        let debug = format!("{rec:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("tok_term"));
     }
 
     #[test]

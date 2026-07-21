@@ -54,6 +54,7 @@ use identity::token_throttle::TokenThrottle;
 
 struct TestEnv {
     router: Router,
+    public_router: Router,
     api_tokens: identity::api_tokens::ApiTokenService,
     schema: String,
     admin_url: String,
@@ -110,10 +111,17 @@ impl TestEnv {
             ProfileClient::new("http://127.0.0.1:65535/".parse().unwrap(), "unused".into())
                 .expect("profile client");
 
-        let api_tokens = identity::api_tokens::ApiTokenService::new(pool.clone());
+        let api_tokens = identity::api_tokens::ApiTokenService::with_admission_signer(
+            pool.clone(),
+            devserver_control_proto::AdmissionLeaseSigner::from_base64(
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            )
+            .unwrap(),
+        );
         let api_tokens_for_state = api_tokens.clone();
         let cfg = Arc::new(Config {
             bind_addr: "127.0.0.1:0".parse().unwrap(),
+            internal_bind_addr: "127.0.0.1:0".parse().unwrap(),
             base_url: "http://localhost:7000/".parse().unwrap(),
             devserver_proxy_origin: "https://proxy.example.test".parse().unwrap(),
             devserver_tunnel_origin: "https://tunnel.example.test".parse().unwrap(),
@@ -122,14 +130,34 @@ impl TestEnv {
             profile_client,
             internal_auth_token: "test-internal".to_string(),
             identity_admin_token: String::new(),
-            workspace_admin: None,
-            workspace_gate_secret: "test-workspace-gate-secret-32-bytes-aa".to_string(),
+            workspace_admin: gateway_common::devserver_control_client::DevserverControlClient::new(
+                "http://127.0.0.1:7002".parse().unwrap(),
+                "test-identity-admin-token".into(),
+            )
+            .unwrap(),
+            admission_lease_verifier: {
+                let signer = devserver_control_proto::AdmissionLeaseSigner::from_base64(
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                )
+                .unwrap();
+                devserver_control_proto::AdmissionLeaseVerifier::from_base64(
+                    &signer.verifying_key_base64(),
+                )
+                .unwrap()
+            },
+            entry_signer: gateway_common::devserver_gate::EntrySigner::from_base64(
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            )
+            .unwrap(),
             providers: vec![Arc::new(provider)],
         });
-        let router = http::router(cfg, store, api_tokens_for_state, TokenThrottle::new());
+        let (public_router, internal_router) =
+            http::routers(cfg, store, api_tokens_for_state, TokenThrottle::new());
+        let router = public_router.clone().merge(internal_router);
 
         Self {
             router,
+            public_router,
             api_tokens,
             schema,
             admin_url: url,
@@ -205,6 +233,22 @@ async fn json_post_with_auth(
         serde_json::from_slice(&bytes).unwrap_or(Value::Null)
     };
     (status, v)
+}
+
+#[tokio::test]
+async fn public_router_never_exposes_internal_token_validation() {
+    let env = TestEnv::new().await;
+    for path in ["/internal", "/internal/v1/tokens/validate"] {
+        let (status, _) = json_post_with_auth(
+            &env.public_router,
+            path,
+            "test-internal",
+            json!({"token": "chan_pat_sentinel"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "public path {path}");
+    }
+    env.cleanup().await;
 }
 
 #[tokio::test]
@@ -401,6 +445,7 @@ async fn pat_validate_endpoint_requires_internal_bearer() {
         )
         .await
         .expect("create");
+    let registration_id = Uuid::new_v4();
 
     // Missing bearer is rejected.
     let (s, _) = json_post(
@@ -426,7 +471,7 @@ async fn pat_validate_endpoint_requires_internal_bearer() {
         &env.router,
         "/internal/v1/tokens/validate",
         "test-internal",
-        json!({"token": created.secret}),
+        json!({"token": created.secret, "registration_id": registration_id, "proxy_id": "p1"}),
     )
     .await;
     assert_eq!(s, StatusCode::OK);
@@ -480,7 +525,7 @@ async fn pat_validate_endpoint_accepts_display_name() {
         &env.router,
         "/internal/v1/tokens/validate",
         "test-internal",
-        json!({"token": created.secret, "name": "office box"}),
+        json!({"token": created.secret, "name": "office box", "registration_id": Uuid::new_v4(), "proxy_id": "p1"}),
     )
     .await;
     assert_eq!(s, StatusCode::OK);

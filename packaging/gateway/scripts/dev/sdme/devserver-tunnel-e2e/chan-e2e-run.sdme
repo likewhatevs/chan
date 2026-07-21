@@ -8,11 +8,12 @@
 #   iproute2        `ip route` -> the host gateway a container dials for the
 #                   cross-zone/host-routed tunnel + the stub identity
 #   curl            in-container HTTP probes (host-side curl covers the rest)
-#   ca-certificates harmless; the e2e is http/h2c only (no TLS) so not required
+#   openssl/python  terminate TLS onto the proxy's loopback-only listeners
+#   ca-certificates trust the per-run CA from the devserver container
 #
 # Build: sudo sdme fs build -f chan-e2e-run chan-e2e-run.sdme
 FROM ubuntu
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        iproute2 iputils-ping curl ca-certificates hostname python3 && \
+        iproute2 iputils-ping curl ca-certificates hostname openssl python3 && \
     rm -rf /var/lib/apt/lists/*

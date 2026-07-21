@@ -1,6 +1,6 @@
 # profile-service: internal user/identity/workspace store in front of Postgres.
-# Not public; only sibling gateway services call it. Migrates on boot, so it
-# restarts until Postgres is reachable.
+# Not public; only sibling gateway services call it. The migration Job must
+# succeed before this workload is applied.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -19,6 +19,26 @@ spec:
         app.kubernetes.io/name: profile
         app.kubernetes.io/part-of: chan-gateway
     spec:
+      automountServiceAccountToken: false
+      initContainers:
+        - name: wait-for-database-migrations
+          image: postgres:16
+          command:
+            - sh
+            - -ec
+            - |
+              case "$EXPECTED_SQLX_MIGRATION" in ''|*[!0-9]*) exit 1 ;; esac
+              case "$DATABASE_ROLE_POLICY_VERSION" in ''|*[!0-9]*) exit 1 ;; esac
+              until [ "$(psql "$DATABASE_URL" --no-password -Atqc "SELECT migration_version = $EXPECTED_SQLX_MIGRATION AND role_policy_version = $DATABASE_ROLE_POLICY_VERSION FROM public.chan_gateway_deployment_state WHERE singleton")" = t ]; do
+                sleep 2
+              done
+          env:
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: chan-gateway-profile, key: DATABASE_URL } }
+            - name: EXPECTED_SQLX_MIGRATION
+              valueFrom: { configMapKeyRef: { name: chan-gateway-config, key: EXPECTED_SQLX_MIGRATION } }
+            - name: DATABASE_ROLE_POLICY_VERSION
+              valueFrom: { configMapKeyRef: { name: chan-gateway-config, key: DATABASE_ROLE_POLICY_VERSION } }
       containers:
         - name: profile
           # set <version> to the release tag you are deploying (see README.md).
@@ -27,7 +47,16 @@ spec:
           # from the shared ConfigMap/Secret (only the keys profile reads apply).
           envFrom:
             - configMapRef: { name: chan-gateway-config }
-            - secretRef: { name: chan-gateway-secrets }
+          env:
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: chan-gateway-profile, key: DATABASE_URL } }
+            - { name: CHAN_GATEWAY_MIGRATIONS, value: external }
+            - name: PROFILE_AUTH_TOKEN
+              valueFrom: { secretKeyRef: { name: chan-gateway-profile, key: PROFILE_AUTH_TOKEN } }
+            - name: PROFILE_ADMIN_TOKEN
+              valueFrom: { secretKeyRef: { name: chan-gateway-profile, key: PROFILE_ADMIN_TOKEN } }
+            - name: DEVSERVER_PROFILE_ADMIN_TOKEN
+              valueFrom: { secretKeyRef: { name: chan-gateway-profile, key: DEVSERVER_PROFILE_ADMIN_TOKEN } }
           ports:
             - containerPort: 7001
           readinessProbe:

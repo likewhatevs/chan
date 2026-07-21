@@ -15,38 +15,51 @@ metadata:
 data:
   # Explicit public origins. No service derives deployment hostnames; each
   # origin below is a complete scheme://host value. http for this no-TLS
-  # example stack; use https behind a TLS terminator.
+  # example stack. Public traffic terminates TLS before reaching the Services.
   # identity's canonical public origin.
-  BASE_URL: "http://id.localtest.me"
+  BASE_URL: "https://id.localtest.me"
+  # Exact Origin accepted by proxy entry-exchange POSTs.
+  IDENTITY_PUBLIC_ORIGIN: "https://id.localtest.me"
   # Proxy namespace origin advertised by discovery.
-  DEVSERVER_PROXY_ORIGIN: "http://usr.localtest.me"
+  DEVSERVER_PROXY_ORIGIN: "https://usr.localtest.me"
   # Tunnel ingress origin (`chan devserver --tunnel-url` dials its /v1/tunnel).
-  DEVSERVER_TUNNEL_ORIGIN: "http://usr.localtest.me"
+  DEVSERVER_TUNNEL_ORIGIN: "https://usr.localtest.me"
   # This proxy node's stable id and exact base origin. The origin must match
   # the controller's template expansion for the id.
   DEVSERVER_PROXY_ID: "p1"
-  DEVSERVER_PROXY_BASE_URL: "http://p1.usr.localtest.me"
+  DEVSERVER_PROXY_BASE_URL: "https://p1.usr.localtest.me"
   # Controller-side template with exactly one {proxy_id} placeholder.
-  DEVSERVER_PROXY_BASE_URL_TEMPLATE: "http://{proxy_id}.usr.localtest.me"
+  DEVSERVER_PROXY_BASE_URL_TEMPLATE: "https://{proxy_id}.usr.localtest.me"
   # Where the proxy redirects a browser that opens a devserver root
   # without a gate credential.
-  DASHBOARD_URL: "http://id.localtest.me/workspaces"
+  DASHBOARD_URL: "https://id.localtest.me/workspaces"
   # Session cookie Secure attribute. false so the cookie survives plain http in
-  # this example; MUST be true in production behind TLS.
-  COOKIE_SECURE: "false"
+  # this example; keep true outside the loopback-only sdme validation pod.
+  COOKIE_SECURE: "true"
 
   # Inter-service URLs (Service DNS + container port).
   PROFILE_SERVICE_URL: "http://chan-gateway-profile:7001"
-  IDENTITY_URL: "http://chan-gateway-identity:7000"
+  # Internal identity API. The public identity Service has no internal port.
+  IDENTITY_URL: "http://chan-gateway-identity-internal:7004"
   # identity + profile read the aggregate /admin/v1/* tree from the controller.
   DEVSERVER_ADMIN_URL: "http://chan-gateway-devserver-control:7003"
-  # Each proxy node opens its h2c control session here.
+  # Each proxy node opens its h2c control session here. Kubernetes NetworkPolicy
+  # does not encrypt it: the pod network MUST provide authenticated encryption.
   DEVSERVER_CONTROL_URL: "http://chan-gateway-devserver-control:7101"
+  # Exact opt-in for non-loopback plaintext internal URLs. Setting it asserts
+  # that the authenticated encrypted pod network is active; startup refuses
+  # those URLs otherwise.
+  CHAN_GATEWAY_INTERNAL_TRANSPORT: "protected-overlay"
 
   # Fleet-wide cap over active and pending devserver ids per user
-  # (0 = unlimited). Enforced by devserver-control.
-  MAX_DEVSERVERS_PER_USER: "0"
+  # (0 = unlimited and is not supported in production). Enforced by control.
+  MAX_DEVSERVERS_PER_USER: "100"
 
   # Postgres bootstrap (non-secret pieces; the password lives in the Secret).
-  POSTGRES_USER: "chan"
+  # Dedicated database owner used only by Postgres bootstrap and the migration
+  # Job. Runtime identity/profile URLs use separate non-DDL roles.
+  POSTGRES_USER: "chan_gateway_migrate"
   POSTGRES_DB: "chan_gateway"
+  # Must advance with gateway/migrations and the exact reconcile ACL matrix.
+  EXPECTED_SQLX_MIGRATION: "15"
+  DATABASE_ROLE_POLICY_VERSION: "1"

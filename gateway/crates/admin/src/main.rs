@@ -3,10 +3,9 @@
 //! Talks to profile-service's `/v1/admin/*` tree (plus the non-admin
 //! routes used for cross-service reads), devserver-control's
 //! `/admin/v1/*` tree (tunnel and proxy ps / kill / watch), and
-//! identity-service's `/admin/v1/tokens` (PAT mint). Authenticates
-//! with `CHAN_ADMIN_TOKEN`, which must match `PROFILE_ADMIN_TOKEN` on
-//! profile-service, `DEVSERVER_ADMIN_TOKEN` on devserver-control, and
-//! `IDENTITY_ADMIN_TOKEN` on identity-service.
+//! identity-service's `/admin/v1/tokens` (PAT mint). Each destination
+//! has an independent bearer; the CLI never reuses one service's
+//! credential against another service.
 //!
 //! Output is shell-friendly: human-readable tables on a TTY,
 //! `--json` everywhere for piping into jq. Exit codes:
@@ -53,13 +52,23 @@ struct Cli {
     #[arg(long, global = true, env = "CHAN_ADMIN_IDENTITY_URL")]
     identity_url: Option<String>,
 
-    /// Bearer matching profile-service's PROFILE_ADMIN_TOKEN and
-    /// devserver-control's DEVSERVER_ADMIN_TOKEN. Single-token deployments
-    /// share one secret across both services; deployments that
-    /// rotate them independently can override per-call with the
-    /// dedicated env vars.
-    #[arg(long, global = true, env = "CHAN_ADMIN_TOKEN")]
-    token: Option<String>,
+    /// Bearer matching profile-service's PROFILE_ADMIN_TOKEN.
+    #[arg(long, global = true, env = "CHAN_ADMIN_PROFILE_TOKEN")]
+    profile_token: Option<String>,
+
+    /// Bearer matching identity-service's IDENTITY_ADMIN_TOKEN.
+    #[arg(long, global = true, env = "CHAN_ADMIN_IDENTITY_TOKEN")]
+    identity_token: Option<String>,
+
+    /// Operator bearer for devserver-control. `--token` remains as a
+    /// compatibility alias, but is intentionally scoped to this one target.
+    #[arg(
+        long,
+        visible_alias = "token",
+        global = true,
+        env = "CHAN_ADMIN_OPERATOR_TOKEN"
+    )]
+    operator_token: Option<String>,
 
     /// Emit JSON instead of a human-readable table.
     #[arg(long, global = true)]
@@ -251,8 +260,8 @@ struct UserListArgs {
 enum TokenCmd {
     /// Mint a PAT for a user by email, without a browser flow. Goes
     /// to identity-service's /admin/v1/tokens, which is enabled only
-    /// where IDENTITY_ADMIN_TOKEN is set (CHAN_ADMIN_TOKEN must match
-    /// it). The secret prints exactly once.
+    /// where IDENTITY_ADMIN_TOKEN is set (CHAN_ADMIN_IDENTITY_TOKEN
+    /// must match it). The secret prints exactly once.
     Create {
         email: String,
         /// Scope to grant; repeat the flag for several. Defaults to
@@ -305,45 +314,35 @@ fn exit_code_for(e: &anyhow::Error) -> u8 {
 }
 
 async fn run(cli: Cli) -> anyhow::Result<()> {
-    let token = cli
-        .token
-        .clone()
-        .ok_or_else(|| anyhow!("CHAN_ADMIN_TOKEN not set; pass --token or export it"))?;
+    let profile_token = cli.profile_token.clone();
+    let identity_token = cli.identity_token.clone();
+    let operator_token = cli.operator_token.clone();
     let json = cli.json;
     match cli.cmd {
         Cmd::User {
             cmd: UserCmd::Block { ident, reason },
         } => {
-            // Block needs both clients: profile holds the canonical
-            // block + token revoke, the proxy fleet holds live tunnel
-            // registrations that must be severed so the cookie-
-            // session bypass (existing tunnels surviving an admin
-            // block) is closed. Profile first so a devserver-control
-            // outage doesn't leave the user un-blocked.
-            let profile = build_profile_client(cli.profile_url.as_deref(), &token)?;
+            // Profile owns the block transaction and uses its own scoped
+            // controller credential for tunnel/session revocation. The
+            // operator CLI does not receive or impersonate that identity.
+            let token = required_token(
+                profile_token.as_deref(),
+                "CHAN_ADMIN_PROFILE_TOKEN",
+                "--profile-token",
+            )?;
+            let profile = build_profile_client(cli.profile_url.as_deref(), token)?;
             let u = profile.resolve_user(&ident).await?;
             let blocked = profile.block_user(u.id, reason.as_deref()).await?;
             render_users(std::slice::from_ref(&blocked), json);
-            match build_workspace_client(cli.workspace_url.as_deref(), &token) {
-                Ok(workspace) => match workspace.kill_user_tunnels(&blocked.username).await {
-                    Ok(killed) if killed > 0 => {
-                        eprintln!("evicted {killed} live tunnel(s)");
-                    }
-                    Ok(_) => {}
-                    Err(e) => eprintln!(
-                        "warning: profile block applied but tunnel eviction failed: {e:#}"
-                    ),
-                },
-                Err(e) => {
-                    eprintln!(
-                        "warning: profile block applied but workspace client unavailable: {e:#}"
-                    )
-                }
-            }
             Ok(())
         }
         Cmd::User { cmd } => {
-            let client = build_profile_client(cli.profile_url.as_deref(), &token)?;
+            let token = required_token(
+                profile_token.as_deref(),
+                "CHAN_ADMIN_PROFILE_TOKEN",
+                "--profile-token",
+            )?;
+            let client = build_profile_client(cli.profile_url.as_deref(), token)?;
             user(&client, json, cmd).await
         }
         Cmd::Token {
@@ -357,7 +356,12 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         } => {
             // Minting goes to identity-service (the token issuer);
             // every other token op reads/writes through profile.
-            let client = build_identity_client(cli.identity_url.as_deref(), &token)?;
+            let token = required_token(
+                identity_token.as_deref(),
+                "CHAN_ADMIN_IDENTITY_TOKEN",
+                "--identity-token",
+            )?;
+            let client = build_identity_client(cli.identity_url.as_deref(), token)?;
             let minted = client
                 .create_token(&email, &scopes, label.as_deref(), expires_days)
                 .await?;
@@ -365,28 +369,65 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             Ok(())
         }
         Cmd::Token { cmd } => {
-            let client = build_profile_client(cli.profile_url.as_deref(), &token)?;
+            let token = required_token(
+                profile_token.as_deref(),
+                "CHAN_ADMIN_PROFILE_TOKEN",
+                "--profile-token",
+            )?;
+            let client = build_profile_client(cli.profile_url.as_deref(), token)?;
             token_cmd(&client, json, cmd).await
         }
         Cmd::Tunnel { cmd } => {
-            let client = build_workspace_client(cli.workspace_url.as_deref(), &token)?;
-            tunnel_cmd(&client, json, cmd).await
+            let operator_token = required_token(
+                operator_token.as_deref(),
+                "CHAN_ADMIN_OPERATOR_TOKEN",
+                "--operator-token",
+            )?;
+            let profile_token = required_token(
+                profile_token.as_deref(),
+                "CHAN_ADMIN_PROFILE_TOKEN",
+                "--profile-token",
+            )?;
+            let workspace = build_workspace_client(cli.workspace_url.as_deref(), operator_token)?;
+            let profile = build_profile_client(cli.profile_url.as_deref(), profile_token)?;
+            tunnel_cmd(&workspace, &profile, json, cmd).await
         }
         Cmd::Proxy { cmd } => {
-            let client = build_workspace_client(cli.workspace_url.as_deref(), &token)?;
+            let token = required_token(
+                operator_token.as_deref(),
+                "CHAN_ADMIN_OPERATOR_TOKEN",
+                "--operator-token",
+            )?;
+            let client = build_workspace_client(cli.workspace_url.as_deref(), token)?;
             proxy_cmd(&client, json, cmd).await
         }
         Cmd::Flag { cmd } => {
-            let client = build_profile_client(cli.profile_url.as_deref(), &token)?;
+            let token = required_token(
+                profile_token.as_deref(),
+                "CHAN_ADMIN_PROFILE_TOKEN",
+                "--profile-token",
+            )?;
+            let client = build_profile_client(cli.profile_url.as_deref(), token)?;
             flag_cmd(&client, json, cmd).await
         }
     }
+}
+
+fn required_token<'a>(
+    token: Option<&'a str>,
+    environment: &str,
+    flag: &str,
+) -> anyhow::Result<&'a str> {
+    token
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| anyhow!("{environment} not set; pass {flag} or export it"))
 }
 
 fn build_profile_client(url: Option<&str>, token: &str) -> anyhow::Result<AdminClient> {
     let url = url
         .map(|s| s.to_string())
         .unwrap_or_else(|| "http://127.0.0.1:7001".to_string());
+    validate_admin_url("CHAN_ADMIN_PROFILE_URL", &url)?;
     AdminClient::new(url, token.to_string()).context("build profile admin client")
 }
 
@@ -394,6 +435,7 @@ fn build_workspace_client(url: Option<&str>, token: &str) -> anyhow::Result<Work
     let url = url
         .map(|s| s.to_string())
         .unwrap_or_else(|| "http://127.0.0.1:7003".to_string());
+    validate_admin_url("CHAN_ADMIN_WORKSPACE_URL", &url)?;
     WorkspaceClient::new(url, token.to_string()).context("build devserver-control admin client")
 }
 
@@ -401,7 +443,15 @@ fn build_identity_client(url: Option<&str>, token: &str) -> anyhow::Result<Ident
     let url = url
         .map(|s| s.to_string())
         .unwrap_or_else(|| "http://127.0.0.1:7000".to_string());
+    validate_admin_url("CHAN_ADMIN_IDENTITY_URL", &url)?;
     IdentityClient::new(url, token.to_string()).context("build identity admin client")
+}
+
+fn validate_admin_url(name: &str, raw: &str) -> anyhow::Result<()> {
+    let url: url::Url = raw
+        .parse()
+        .with_context(|| format!("parse {name}: {raw}"))?;
+    gateway_common::internal_transport::require_protected_http_url(name, &url)
 }
 
 // ---------------------------------------------------------------------------
@@ -469,7 +519,7 @@ async fn user(c: &AdminClient, json: bool, cmd: UserCmd) -> anyhow::Result<()> {
                 return Err(anyhow!("aborted"));
             }
             c.delete_user(u.id).await?;
-            eprintln!("deleted {}", u.id);
+            eprintln!("deletion scheduled for {}", u.id);
         }
         UserCmd::Block { .. } => {
             // Handled in `run` so it can use both profile + workspace
@@ -784,7 +834,7 @@ impl AdminClient {
             .send()
             .await?;
         match res.status() {
-            StatusCode::NO_CONTENT => Ok(()),
+            StatusCode::ACCEPTED => Ok(()),
             StatusCode::NOT_FOUND => Err(ClientError::NotFound.into()),
             s => Err(upstream(s, res).await.into()),
         }
@@ -797,7 +847,7 @@ impl AdminClient {
             .send()
             .await?;
         match res.status() {
-            StatusCode::OK => Ok(res.json().await?),
+            StatusCode::OK | StatusCode::ACCEPTED => Ok(res.json().await?),
             StatusCode::NOT_FOUND => Err(ClientError::NotFound.into()),
             s => Err(upstream(s, res).await.into()),
         }
@@ -1036,7 +1086,7 @@ impl IdentityClient {
                  disabled (set IDENTITY_ADMIN_TOKEN on identity-service)",
             )),
             StatusCode::UNAUTHORIZED => Err(anyhow!(
-                "identity rejected the admin bearer; CHAN_ADMIN_TOKEN must \
+                "identity rejected the admin bearer; CHAN_ADMIN_IDENTITY_TOKEN must \
                  match identity-service's IDENTITY_ADMIN_TOKEN"
             )),
             StatusCode::BAD_REQUEST => Err(ClientError::BadInput(read_body(res).await).into()),
@@ -1107,10 +1157,10 @@ impl WorkspaceClient {
         }
     }
 
-    async fn kill(&self, user: &str, workspace: &str) -> anyhow::Result<()> {
+    async fn kill(&self, owner_user_id: Uuid, workspace: &str) -> anyhow::Result<()> {
         let path = format!(
             "/admin/v1/tunnels/{}/{}/kill",
-            urlencoding::encode_path(user),
+            owner_user_id,
             urlencoding::encode_path(workspace),
         );
         let res = self
@@ -1123,30 +1173,6 @@ impl WorkspaceClient {
         match res.status() {
             StatusCode::NO_CONTENT => Ok(()),
             StatusCode::NOT_FOUND => Err(ClientError::NotFound.into()),
-            s => Err(upstream(s, res).await.into()),
-        }
-    }
-
-    /// Bulk-evict every tunnel for a user. "Nothing to kill" is
-    /// success with `killed: 0`; idempotent retry is safe.
-    async fn kill_user_tunnels(&self, user: &str) -> anyhow::Result<usize> {
-        let path = format!(
-            "/admin/v1/users/{}/tunnels/kill",
-            urlencoding::encode_path(user),
-        );
-        let res = self
-            .http
-            .post(self.url(&path))
-            .header(header::AUTHORIZATION, format!("Bearer {}", self.token))
-            .timeout(std::time::Duration::from_secs(10))
-            .send()
-            .await?;
-        match res.status() {
-            StatusCode::OK => {
-                let body: KillUserTunnelsResponse = res.json().await?;
-                Ok(body.killed)
-            }
-            StatusCode::NO_CONTENT => Ok(0),
             s => Err(upstream(s, res).await.into()),
         }
     }
@@ -1218,7 +1244,12 @@ mod urlencoding {
     }
 }
 
-async fn tunnel_cmd(c: &WorkspaceClient, json: bool, cmd: TunnelCmd) -> anyhow::Result<()> {
+async fn tunnel_cmd(
+    c: &WorkspaceClient,
+    profile: &AdminClient,
+    json: bool,
+    cmd: TunnelCmd,
+) -> anyhow::Result<()> {
     match cmd {
         TunnelCmd::Ps { user } => {
             let mut tunnels = c.list().await?;
@@ -1228,7 +1259,8 @@ async fn tunnel_cmd(c: &WorkspaceClient, json: bool, cmd: TunnelCmd) -> anyhow::
             render_tunnels(&tunnels, json);
         }
         TunnelCmd::Kill { user, workspace } => {
-            c.kill(&user, &workspace).await?;
+            let owner = profile.resolve_user(&user).await?;
+            c.kill(owner.id, &workspace).await?;
             eprintln!("killed {user}/{workspace}");
         }
         TunnelCmd::Watch { user } => {
@@ -1383,11 +1415,6 @@ struct TokenAudit {
     action: String,
     ip: Option<String>,
     user_agent: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct KillUserTunnelsResponse {
-    killed: usize,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1706,4 +1733,101 @@ fn confirm(prompt: &str) -> anyhow::Result<bool> {
     let mut buf = String::new();
     stdin().read_line(&mut buf)?;
     Ok(matches!(buf.trim(), "y" | "Y" | "yes"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_token_flag_is_only_an_operator_alias() {
+        let cli = Cli::try_parse_from([
+            "chan-gateway-admin",
+            "--token",
+            "operator-secret",
+            "--profile-token",
+            "profile-secret",
+            "proxy",
+            "ps",
+        ])
+        .unwrap();
+        assert_eq!(cli.operator_token.as_deref(), Some("operator-secret"));
+        assert_eq!(cli.profile_token.as_deref(), Some("profile-secret"));
+        assert_eq!(cli.identity_token, None);
+    }
+
+    #[test]
+    fn scoped_token_flags_remain_distinct() {
+        let cli = Cli::try_parse_from([
+            "chan-gateway-admin",
+            "--operator-token",
+            "operator-secret",
+            "--profile-token",
+            "profile-secret",
+            "--identity-token",
+            "identity-secret",
+            "proxy",
+            "ps",
+        ])
+        .unwrap();
+        assert_eq!(cli.operator_token.as_deref(), Some("operator-secret"));
+        assert_eq!(cli.profile_token.as_deref(), Some("profile-secret"));
+        assert_eq!(cli.identity_token.as_deref(), Some("identity-secret"));
+    }
+
+    #[test]
+    fn empty_scoped_token_fails_closed() {
+        assert!(required_token(None, "TOKEN_ENV", "--token-flag").is_err());
+        assert!(required_token(Some(""), "TOKEN_ENV", "--token-flag").is_err());
+        assert_eq!(
+            required_token(Some("secret"), "TOKEN_ENV", "--token-flag").unwrap(),
+            "secret"
+        );
+    }
+
+    #[test]
+    fn privileged_admin_urls_require_verified_internal_transport() {
+        use gateway_common::internal_transport::{
+            require_protected_http_url_with_mode, PROTECTED_OVERLAY,
+        };
+
+        for allowed in ["http://127.0.0.1:7000", "http://[::1]:7000"] {
+            assert!(require_protected_http_url_with_mode(
+                "ADMIN_URL",
+                &allowed.parse().unwrap(),
+                None,
+            )
+            .is_ok());
+        }
+        for denied in [
+            "http://localhost:7000",
+            "http://127.0.0.1.example:7000",
+            "http://10.0.0.5:7000",
+        ] {
+            assert!(require_protected_http_url_with_mode(
+                "ADMIN_URL",
+                &denied.parse().unwrap(),
+                None,
+            )
+            .is_err());
+        }
+        assert!(require_protected_http_url_with_mode(
+            "ADMIN_URL",
+            &"http://10.0.0.5:7000".parse().unwrap(),
+            Some(PROTECTED_OVERLAY),
+        )
+        .is_ok());
+        assert!(require_protected_http_url_with_mode(
+            "ADMIN_URL",
+            &"http://10.0.0.5:7000".parse().unwrap(),
+            Some("protected_overlay"),
+        )
+        .is_err());
+        assert!(require_protected_http_url_with_mode(
+            "ADMIN_URL",
+            &"https://admin.internal.example".parse().unwrap(),
+            None,
+        )
+        .is_ok());
+    }
 }

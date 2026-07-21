@@ -128,21 +128,20 @@ pub struct DevserverGrant {
     pub grantee_email: String,
     #[serde(default)]
     pub grantee_user_id: Option<Uuid>,
-    pub role: String,
     pub created_at: DateTime<Utc>,
     #[serde(default)]
     pub accepted_at: Option<DateTime<Utc>>,
 }
 
-/// Reply from `GET /v1/users/{o}/devservers/{d}/access?as=<id>`.
-/// `role` is one of `owner`, `editor`, `viewer`.
+/// Binary shell-equivalent access decision for one exact devserver.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DevserverAccess {
-    pub role: String,
+    pub access: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OwnedDevserverSummary {
+    pub owner_user_id: Uuid,
     pub devserver_id: String,
     pub label: String,
     pub grant_count: i64,
@@ -159,7 +158,6 @@ pub struct IncomingShare {
     pub owner_avatar_url: Option<String>,
     pub devserver_id: String,
     pub label: String,
-    pub role: String,
     pub accepted_at: DateTime<Utc>,
 }
 
@@ -427,7 +425,51 @@ impl ProfileClient {
             .send()
             .await?;
         match res.status() {
-            StatusCode::NO_CONTENT => Ok(()),
+            StatusCode::ACCEPTED => Ok(()),
+            StatusCode::NOT_FOUND => Err(ProfileError::NotFound),
+            s => Err(upstream(s, res).await),
+        }
+    }
+
+    /// Block all new account activity while retaining the user row until the
+    /// caller has confirmed live data-plane revocation across the proxy fleet.
+    pub async fn mark_user_pending_delete(&self, id: Uuid) -> ProfileResult<()> {
+        let res = self
+            .req(
+                reqwest::Method::POST,
+                &format!("/v1/users/{id}/pending-delete"),
+            )
+            .send()
+            .await?;
+        match res.status() {
+            StatusCode::ACCEPTED => Ok(()),
+            StatusCode::NOT_FOUND => Err(ProfileError::NotFound),
+            s => Err(upstream(s, res).await),
+        }
+    }
+
+    /// Atomically verify PAT ownership, deny the token, audit the request, and
+    /// reserve durable subject revocation in profile's transaction.
+    pub async fn revoke_user_api_token(
+        &self,
+        user_id: Uuid,
+        token_id: Uuid,
+        ip: Option<&str>,
+        user_agent: Option<&str>,
+    ) -> ProfileResult<()> {
+        let res = self
+            .req(
+                reqwest::Method::POST,
+                &format!("/v1/users/{user_id}/tokens/{token_id}/revoke"),
+            )
+            .json(&serde_json::json!({
+                "ip": ip,
+                "user_agent": user_agent,
+            }))
+            .send()
+            .await?;
+        match res.status() {
+            StatusCode::ACCEPTED => Ok(()),
             StatusCode::NOT_FOUND => Err(ProfileError::NotFound),
             s => Err(upstream(s, res).await),
         }
@@ -602,17 +644,13 @@ impl ProfileClient {
         }
     }
 
-    /// Create-or-promote: re-adding the same email on the same
-    /// `(owner, devserver)` updates the role and keeps the existing
-    /// `created_at` / `grantee_user_id` / `accepted_at` on the server
-    /// side. A grant gives the WHOLE devserver. Returns the resulting
-    /// row in both cases.
+    /// Idempotently grant one email shell-equivalent access to the exact
+    /// devserver. Existing claim metadata is preserved server-side.
     pub async fn create_devserver_grant(
         &self,
         owner_id: Uuid,
         devserver_id: &str,
         grantee_email: &str,
-        role: &str,
     ) -> ProfileResult<DevserverGrant> {
         let res = self
             .req(
@@ -621,7 +659,6 @@ impl ProfileClient {
             )
             .json(&serde_json::json!({
                 "grantee_email": grantee_email,
-                "role": role,
             }))
             .send()
             .await?;
@@ -659,7 +696,7 @@ impl ProfileClient {
         &self,
         owner_id: Uuid,
         grant_id: Uuid,
-    ) -> ProfileResult<()> {
+    ) -> ProfileResult<bool> {
         let res = self
             .req(
                 reqwest::Method::DELETE,
@@ -668,7 +705,8 @@ impl ProfileClient {
             .send()
             .await?;
         match res.status() {
-            StatusCode::NO_CONTENT => Ok(()),
+            StatusCode::NO_CONTENT => Ok(false),
+            StatusCode::ACCEPTED => Ok(true),
             StatusCode::NOT_FOUND => Err(ProfileError::NotFound),
             s => Err(upstream(s, res).await),
         }

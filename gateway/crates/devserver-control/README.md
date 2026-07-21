@@ -19,16 +19,22 @@ The binary is `devserver-control-service`. No frontend: devserver-control ships 
 ```bash
 export BIND_ADDR=127.0.0.1:7003
 export PROXY_BIND_ADDR=127.0.0.1:7101
-export DEVSERVER_ADMIN_TOKEN=dev-admin-token
-export DEVSERVER_PROXY_TOKEN=dev-proxy-token
+export DEVSERVER_OPERATOR_ADMIN_TOKENS=operator-token-32-bytes-minimum-000
+export DEVSERVER_IDENTITY_ADMIN_TOKENS=identity-token-32-bytes-minimum-000
+export DEVSERVER_PROFILE_ADMIN_TOKENS=profile-token-32-bytes-minimum-0000
+export DEVSERVER_PROXY_CREDENTIALS='p1=proxy-token-32-bytes-minimum-000000'
+readarray -t admission_keys < <(python3 packaging/gateway/scripts/generate-admission-keypair.py)
+export DEVSERVER_ADMISSION_VERIFYING_KEYS="${admission_keys[1]}"
 export DEVSERVER_PROXY_BASE_URL_TEMPLATE='http://{proxy_id}.devserver.localtest.me:7002'
 cargo run -p devserver-control
 ```
 
 For the full local stack (with identity + profile + Postgres), prefer `packaging/gateway/scripts/dev/setup.sh` + `packaging/gateway/scripts/dev/run.sh`. Two listeners come up:
 
-- `BIND_ADDR` (7003): admin HTTP. `/healthz` and `/readyz` are unauthenticated; `/admin/v1/*` is Bearer-gated by `DEVSERVER_ADMIN_TOKEN`. Loopback in dev; reached only by peer services and the operator CLI.
-- `PROXY_BIND_ADDR` (7101): h2c. Each devserver-proxy node dials `POST /v1/proxies/connect` here with `DEVSERVER_PROXY_TOKEN` and holds the stream for the life of its control session.
+- `BIND_ADDR` (7003): admin HTTP. `/healthz` and `/readyz` are unauthenticated; `/admin/v1/*` is Bearer-gated by route-scoped operator, identity, and profile credentials.
+- `PROXY_BIND_ADDR` (7101): h2c. Each devserver-proxy node dials `POST /v1/proxies/connect` with its proxy-id-scoped credential and holds the stream for the life of its control session.
+
+Both listeners must be loopback unless the deployment explicitly sets `CHAN_GATEWAY_INTERNAL_TRANSPORT=overlay-encrypted`; that value is an assertion that the surrounding network provides confidentiality and peer isolation for these cleartext HTTP/h2c listeners.
 
 The template must expand each proxy's `DEVSERVER_PROXY_ID` to exactly that node's `DEVSERVER_PROXY_BASE_URL`; a mismatch closes the control session at the handshake. With the dev values above, a proxy runs with `DEVSERVER_PROXY_ID=p1` and `DEVSERVER_PROXY_BASE_URL=http://p1.devserver.localtest.me:7002`.
 
@@ -38,8 +44,11 @@ Required:
 
 | Name                                | Notes                             |
 |-------------------------------------|-----------------------------------|
-| `DEVSERVER_ADMIN_TOKEN`             | bearer for `/admin/v1/*`          |
-| `DEVSERVER_PROXY_TOKEN`             | bearer proxies present on connect |
+| `DEVSERVER_OPERATOR_ADMIN_TOKENS`   | one or two rotating full-access Bearers |
+| `DEVSERVER_IDENTITY_ADMIN_TOKENS`   | one or two rotating identity-scoped Bearers |
+| `DEVSERVER_PROFILE_ADMIN_TOKENS`    | one or two rotating profile-scoped Bearers |
+| `DEVSERVER_PROXY_CREDENTIALS`       | `proxy_id=token` allowlist; up to two per id |
+| `DEVSERVER_ADMISSION_VERIFYING_KEYS` | one or two rotating Ed25519 public keys |
 | `DEVSERVER_PROXY_BASE_URL_TEMPLATE` | one `{proxy_id}` origin template  |
 
 Optional:
@@ -48,14 +57,15 @@ Optional:
 |---------------------------|------------------|------------------------------|
 | `BIND_ADDR`               | `127.0.0.1:7003` | admin listener               |
 | `PROXY_BIND_ADDR`         | `127.0.0.1:7101` | proxy control listener (h2c) |
-| `MAX_DEVSERVERS_PER_USER` | `100` (`0` off)  | fleet-wide per-user cap      |
+| `MAX_DEVSERVERS_PER_USER` | `100`            | positive fleet-wide per-owner cap |
+| `CHAN_GATEWAY_INTERNAL_TRANSPORT` | unset | set exactly `overlay-encrypted` only behind a protected overlay |
 | `RUST_LOG`                | `info`           | tracing filter               |
 
-The two tokens are independent secrets and must stay distinct: one gates operator reads and kills, the other gates fleet membership.
+Every credential is visible ASCII, 32–256 bytes, and credentials may not be reused across proxy ids or admin scopes. Rotation accepts at most two values per authority.
 
 ## Routes
 
-Admin listener (`BIND_ADDR`); all `/admin/v1/*` routes Bearer-gated by `DEVSERVER_ADMIN_TOKEN`:
+Admin listener (`BIND_ADDR`); all `/admin/v1/*` routes Bearer-gated and scope-checked:
 
 | Method | Path                                         | Purpose             |
 |--------|----------------------------------------------|---------------------|
@@ -63,9 +73,10 @@ Admin listener (`BIND_ADDR`); all `/admin/v1/*` routes Bearer-gated by `DEVSERVE
 | GET    | `/readyz`                                    | 503 while warming   |
 | GET    | `/admin/v1/tunnels`                          | aggregate tunnels   |
 | GET    | `/admin/v1/tunnels/watch`                    | SSE snapshot stream |
-| POST   | `/admin/v1/tunnels/{user}/{devserver_id}/kill` | exact kill; 204   |
-| GET    | `/admin/v1/users/{user}/tunnels`             | one user's rows     |
-| POST   | `/admin/v1/users/{user}/tunnels/kill`        | user-wide kill      |
+| POST   | `/admin/v1/tunnels/{owner_user_id}/{devserver_id}/kill` | exact kill; 204 |
+| GET    | `/admin/v1/owners/{owner_user_id}/tunnels`   | one owner's indexed rows |
+| POST   | `/admin/v1/owners/{owner_user_id}/tunnels/kill` | owner-wide kill |
+| POST   | `/admin/v1/sessions/revoke`                  | exact or subject session revocation |
 | GET    | `/admin/v1/proxies`                          | proxy directory     |
 | GET    | `/admin/v1/proxies/watch`                    | SSE proxy stream    |
 
@@ -75,7 +86,7 @@ Proxy listener (`PROXY_BIND_ADDR`):
 |--------|-----------------------|------------------------------------|
 | POST   | `/v1/proxies/connect` | raw h2c control stream per proxy   |
 
-Aggregate reads return 503 until the controller is ready (at least one complete proxy snapshot plus reconciliation; see [`design.md`](design.md)). Kills route by registration UUID to the owning proxy only; a user-wide kill that only partly confirms answers 502 with the confirmed count and is safe to retry. See [`design.md`](design.md) for the session lifecycle, admission rules, reconciliation, and kill semantics.
+Aggregate reads return 503 until the controller is ready (a full convergence window plus reconciliation; see [`design.md`](design.md)). Kills route by registration UUID to the owning proxy only. Session revocation returns a partial 502 unless every connected proxy confirms bridge drain and no retained disconnected authority is unreachable. See [`design.md`](design.md) for lease authority, session lifecycle, resource/rate bounds, reconciliation, and command semantics.
 
 ## Design rationale
 

@@ -1,10 +1,22 @@
 # Gateway setup: local, mirroring production
 
-The gateway runs as a set of `sdme` containers on a private network zone, in production and locally alike. This guide stands up that same all-container stack on your machine (Linux directly, or macOS via a Lima VM), so what you validate locally is the shape production runs.
+The gateway can run as a set of `sdme` containers, but a private bridge alone
+is not a trusted transport. This guide describes the production-shaped layout
+for hosts that also provide an authenticated, encrypted service overlay.
 
 It mirrors the production definitions in the sibling `chan-prod-setup` repo. Per "show the pattern, copy little", it walks ONE worked service container end to end and points at `chan-prod-setup` for the rest, rather than duplicating every prod config here.
 
 > A faster inner loop exists for rapid iteration: `packaging/gateway/scripts/dev/run.sh` runs the services as host `cargo run` binaries over `*.localtest.me` (see [`packaging/gateway/scripts/dev/README.md`](../../packaging/gateway/scripts/dev/README.md)). That is handy while editing code, but it is NOT the prod-like shape. This guide is the all-container stack.
+
+> **Load-bearing transport requirement:** an ordinary sdme `--network-zone`
+> supplies network-namespace/L2 isolation, not authenticated encryption. It is
+> therefore not sufficient grounds for
+> `CHAN_GATEWAY_INTERNAL_TRANSPORT=protected-overlay`; never set that value just
+> to make a cleartext non-loopback bind pass validation. The all-container
+> commands below assume WireGuard, mTLS, or an equivalent authenticated and
+> encrypted overlay is already in place. Without one, use the checked-in local
+> runner: it keeps every cleartext Rust listener on literal loopback and puts
+> verified TLS edges in the same host namespace.
 
 ## Why the all-container, prod-like stack
 
@@ -18,7 +30,7 @@ flowchart TD
     lima["127.0.0.1:443 (Lima forwards the VM :443 to the macOS host)"]
     browser --> lima
 
-    subgraph zone["chan-svc zone (private bridge, inside Lima)"]
+    subgraph zone["chan-svc authenticated + encrypted service overlay"]
         nginx["chan-nginx: TLS terminator (the only published container, :80 / :443)"]
         chanid["chan-id :7000"]
         profile["chan-profile :7001"]
@@ -41,9 +53,9 @@ flowchart TD
     profile -->|"DATABASE_URL"| psql
 ```
 
-chan-nginx terminates TLS at the zone edge and fans the routes out across the `chan-svc` containers; this is the one route map for the stack (the nginx section below mirrors it). nginx never routes the devserver-control ports: :7003 (the aggregate admin tree) and :7101 (the h2c proxy-control listener) are zone-internal only.
+chan-nginx terminates TLS at the overlay edge and fans the routes out across the `chan-svc` containers; this is the one route map for the stack (the nginx section below mirrors it). The tunnel vhost must negotiate h2 externally before forwarding h2c to `:7100`; browser/public vhosts terminate ordinary HTTP. nginx never routes the devserver-control ports: :7003 (the aggregate admin tree) and :7101 (the h2c proxy-control listener) are overlay-internal only.
 
-Services bind their default ports (`7000/7001/7002/7100/7003/7101`) INSIDE their containers and resolve each other by container hostname on the `chan-svc` zone (for example identity reads `chan-profile:7001`). Nothing binds on the macOS host except what Lima forwards (nginx `:443`, and Postgres `:5432` for host-run tests). Because no gateway port lands on the macOS host, the macOS AirPlay `:7000` clash never arises and the code defaults stay at the 7000 range, identical to prod.
+Services bind their default ports (`7000/7001/7002/7100/7003/7101`) INSIDE their containers and resolve each other by overlay identity (for example identity reads `chan-profile:7001`). Every cleartext non-loopback service must set `CHAN_GATEWAY_INTERNAL_TRANSPORT=protected-overlay`, and that assertion is valid only after the encrypted overlay exists. Nothing binds on the macOS host except what Lima forwards (nginx `:443`, and Postgres `:5432` for host-run tests).
 
 ## Prerequisites: sdme
 
@@ -79,46 +91,28 @@ limactl shell default sudo sdme start chan-psql
 
 Services reach it as `chan-psql:5432` on the zone; the published `:5432` (via Lima host networking) lets host-side `cargo test` use `127.0.0.1:5432`. The dev `create` drops prod's `--hardened` and secret bind (the dev rootfs self-seeds); `--network-zone chan-svc` is what puts it on the zone.
 
-## The service containers (pattern + one worked example)
+## The service containers
 
-Each gateway service is its own container built from a tiny `.sdme` file that installs the matching `.deb` and enables its systemd unit. The prod files live in `chan-prod-setup/services/` (`chan-id.sdme`, `chan-profile.sdme`, `chan-devserver-control.sdme`, `chan-devserver-proxy.sdme`); a dev-sanitized copy differs only in where secrets come from. Worked example, identity:
+Each gateway service is its own container built from a tiny `.sdme` file that
+installs the matching `.deb` and enables its systemd unit. The prod files live
+in `chan-prod-setup/services/` (`chan-id.sdme`, `chan-profile.sdme`,
+`chan-devserver-control.sdme`, `chan-devserver-proxy.sdme`). Do not copy the
+old cleartext `*.localtest.me` example: public DNS origins are required to use
+TLS, even when they resolve into `127/8`. For a local stack, use the checked-in
+`packaging/gateway/scripts/dev/{setup,run}.sh` runner, which creates a local CA
+and keeps every cleartext Rust listener on a literal loopback address. A
+container topology must instead terminate TLS at the public edge and carry
+service-to-service cleartext only on an authenticated, encrypted overlay.
 
-```dockerfile
-# chan-id-dev.sdme: chan-gateway-identity (id.<domain> on :7000)
-FROM ubuntu
-RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY dist /tmp/dist
-RUN set -eux; \
-    deb=$(ls /tmp/dist/chan-gateway-identity_*.deb | head -1); \
-    apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y "$deb"; \
-    rm -rf /tmp/dist /var/lib/apt/lists/*; \
-    install -d /etc/systemd/system/chan-gateway-identity.service.d; \
-    # DEV: inline the env instead of prod's bind-mounted /run/chan-secrets.
-    # Hostname-based cross-service URLs resolve on the chan-svc zone.
-    printf '[Service]\n\
-Environment=BIND_ADDR=0.0.0.0:7000\n\
-Environment=BASE_URL=http://id.localtest.me\n\
-Environment=DEVSERVER_PROXY_ORIGIN=https://devserver.localtest.me\n\
-Environment=DEVSERVER_TUNNEL_ORIGIN=https://devserver.localtest.me\n\
-Environment=PROFILE_SERVICE_URL=http://chan-profile:7001\n\
-Environment=DEVSERVER_ADMIN_URL=http://chan-devserver-control:7003\n\
-Environment=COOKIE_SECURE=false\n\
-Environment=GITHUB_CLIENT_ID=...  GITHUB_CLIENT_SECRET=...\n' \
-        > /etc/systemd/system/chan-gateway-identity.service.d/dev-env.conf; \
-    systemctl enable chan-gateway-identity
-```
-
-Build, create on the zone, start:
-
-```sh
-limactl shell default sudo sdme fs build chan-id-dev chan-id-dev.sdme
-limactl shell default sudo sdme create --name chan-id -r chan-id-dev --network-zone chan-svc
-limactl shell default sudo sdme start chan-id
-```
-
-`chan-profile`, `chan-devserver-control`, and `chan-devserver-proxy` follow the identical shape: install their `.deb`, set their bind addr and the hostname-based URLs (`profile` needs `DATABASE_URL=postgres://chan:chan@chan-psql:5432/chan_gateway`; `devserver-control` needs `PROXY_BIND_ADDR=0.0.0.0:7101`, `DEVSERVER_PROXY_BASE_URL_TEMPLATE`, and the `DEVSERVER_ADMIN_TOKEN`/`DEVSERVER_PROXY_TOKEN` shared secrets; `devserver-proxy` needs `IDENTITY_URL=http://chan-id:7000`, `TUNNEL_BIND_ADDR=0.0.0.0:7100`, `DEVSERVER_CONTROL_URL=http://chan-devserver-control:7101`, `DEVSERVER_PROXY_ID` + `DEVSERVER_PROXY_BASE_URL`, `FORWARDED_PROTO=https`, and the `DEVSERVER_GATE_SECRET`/`IDENTITY_INTERNAL_TOKEN`/`DEVSERVER_PROXY_TOKEN` shared secrets). Generate the shared secrets with `openssl rand -hex 32` and reuse the matching value across the services that share each one. See `chan-prod-setup/services/` for the prod versions and `chan-prod-setup/bin/secrets-init.sh` for the full secret set.
+Use the checked-in env templates for the exact service contract:
+control has separate operator/identity/profile admin rings, a per-proxy
+credential map, and `DEVSERVER_ADMISSION_VERIFYING_KEYS`; proxy points
+`IDENTITY_URL` at identity's internal listener (`http://chan-id:7004`) and
+receives only its own controller bearer plus the entry-verifier ring. The
+database owner credential belongs only to the migration unit; identity and
+profile run with distinct app-role URLs and `CHAN_GATEWAY_MIGRATIONS=external`.
+See `chan-prod-setup/services/` for the prod topology, but reconcile its secrets
+against these templates before deployment.
 
 ## nginx container + TLS
 

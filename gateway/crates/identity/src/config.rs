@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Context;
+use devserver_control_proto::{AdmissionLeaseSigner, AdmissionLeaseVerifier};
 use url::Url;
 
 use crate::devserver_control_client::DevserverControlClient;
@@ -14,6 +15,7 @@ use crate::providers::{
 #[derive(Clone)]
 pub struct Config {
     pub bind_addr: SocketAddr,
+    pub internal_bind_addr: SocketAddr,
     pub base_url: Url,
     /// Canonical proxy namespace origin (`DEVSERVER_PROXY_ORIGIN`),
     /// e.g. `https://usr.chan.app`. Every controller-reported node
@@ -32,26 +34,43 @@ pub struct Config {
     /// Bearer gating the operator surface under /admin/v1/*. Empty
     /// (the default) disables the surface outright: the routes answer
     /// 404 as if they did not exist. chan-gateway-admin presents this
-    /// via CHAN_ADMIN_TOKEN.
+    /// via CHAN_ADMIN_IDENTITY_TOKEN.
     pub identity_admin_token: String,
-    /// Pre-built admin client for devserver-control. Required when
-    /// `DEVSERVER_ADMIN_TOKEN` is set; identity uses it on PAT revoke,
-    /// account delete, and `/api/me` (dashboard reads). `None` only
-    /// in dev / lab setups; the dashboard renders empty workspace lists
-    /// and revoke / delete skip the tunnel-kill best-effort hop.
-    pub workspace_admin: Option<DevserverControlClient>,
-    /// HMAC-SHA256 secret used to mint workspace-gate entry tokens.
-    /// Same value also configured on devserver-proxy. Required.
-    pub workspace_gate_secret: String,
+    /// Scope-specific controller client. Runtime startup fails closed when the
+    /// URL or identity-scoped bearer is absent.
+    pub workspace_admin: DevserverControlClient,
+    /// Public-key verifier for controller tunnel rows. Identity verifies every
+    /// row before it can authorize an entry or appear in the Desktop roster.
+    pub admission_lease_verifier: AdmissionLeaseVerifier,
+    /// Identity-only Ed25519 signer for short-lived entry credentials. Proxies
+    /// receive only the matching public verifier (with at most one old key
+    /// during rotation overlap).
+    pub entry_signer: gateway_common::devserver_gate::EntrySigner,
     pub providers: Vec<Arc<dyn Provider>>,
 }
 
 impl Config {
+    pub fn admission_lease_signer_from_env() -> anyhow::Result<AdmissionLeaseSigner> {
+        let key = std::env::var("DEVSERVER_ADMISSION_SIGNING_KEY")
+            .context("DEVSERVER_ADMISSION_SIGNING_KEY is required")?;
+        AdmissionLeaseSigner::from_base64(key.trim())
+            .context("DEVSERVER_ADMISSION_SIGNING_KEY must be canonical base64url for 32 bytes")
+    }
+
     pub fn from_env() -> anyhow::Result<Self> {
         let bind_addr: SocketAddr = std::env::var("BIND_ADDR")
             .unwrap_or_else(|_| "127.0.0.1:7000".to_string())
             .parse()
             .context("BIND_ADDR must be host:port")?;
+        gateway_common::internal_transport::require_protected_listener("BIND_ADDR", bind_addr)?;
+        let internal_bind_addr: SocketAddr = std::env::var("INTERNAL_BIND_ADDR")
+            .unwrap_or_else(|_| "127.0.0.1:7001".to_string())
+            .parse()
+            .context("INTERNAL_BIND_ADDR must be host:port")?;
+        gateway_common::internal_transport::require_protected_listener(
+            "INTERNAL_BIND_ADDR",
+            internal_bind_addr,
+        )?;
 
         let base_url = required_origin("BASE_URL")?;
         let devserver_proxy_origin = required_origin("DEVSERVER_PROXY_ORIGIN")?;
@@ -65,6 +84,10 @@ impl Config {
             .context("PROFILE_SERVICE_URL is required")?
             .parse()
             .context("PROFILE_SERVICE_URL must be a URL")?;
+        gateway_common::internal_transport::require_protected_http_url(
+            "PROFILE_SERVICE_URL",
+            &profile_url,
+        )?;
         let profile_token =
             std::env::var("PROFILE_AUTH_TOKEN").context("PROFILE_AUTH_TOKEN is required")?;
         let profile_client = ProfileClient::new(profile_url, profile_token)?;
@@ -83,26 +106,34 @@ impl Config {
         // disabled rather than guarded by an empty string.
         let identity_admin_token = std::env::var("IDENTITY_ADMIN_TOKEN").unwrap_or_default();
 
-        // DEVSERVER_ADMIN_TOKEN enables the admin-side calls (revoke,
-        // delete, /api/me workspaces merge); DEVSERVER_ADMIN_URL is
-        // required whenever the token is set.
-        let workspace_admin = std::env::var("DEVSERVER_ADMIN_TOKEN")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .map(|tok| -> anyhow::Result<DevserverControlClient> {
-                let admin_url: Url = std::env::var("DEVSERVER_ADMIN_URL")
-                    .context("DEVSERVER_ADMIN_URL is required when DEVSERVER_ADMIN_TOKEN is set")?
-                    .parse()
-                    .context("DEVSERVER_ADMIN_URL must be a URL")?;
-                DevserverControlClient::new(admin_url, tok)
-            })
-            .transpose()?;
-
-        let workspace_gate_secret =
-            std::env::var("DEVSERVER_GATE_SECRET").context("DEVSERVER_GATE_SECRET is required")?;
-        if workspace_gate_secret.is_empty() {
-            anyhow::bail!("DEVSERVER_GATE_SECRET must not be empty");
+        let admin_url: Url = std::env::var("DEVSERVER_ADMIN_URL")
+            .context("DEVSERVER_ADMIN_URL is required")?
+            .parse()
+            .context("DEVSERVER_ADMIN_URL must be a URL")?;
+        gateway_common::internal_transport::require_protected_http_url(
+            "DEVSERVER_ADMIN_URL",
+            &admin_url,
+        )?;
+        let devserver_identity_admin_token = std::env::var("DEVSERVER_IDENTITY_ADMIN_TOKEN")
+            .context("DEVSERVER_IDENTITY_ADMIN_TOKEN is required")?;
+        if devserver_identity_admin_token.is_empty() {
+            anyhow::bail!("DEVSERVER_IDENTITY_ADMIN_TOKEN must not be empty");
         }
+        let workspace_admin =
+            DevserverControlClient::new(admin_url, devserver_identity_admin_token)?;
+
+        let verifying_keys = std::env::var("DEVSERVER_ADMISSION_VERIFYING_KEYS")
+            .context("DEVSERVER_ADMISSION_VERIFYING_KEYS is required")?;
+        let admission_lease_verifier =
+            AdmissionLeaseVerifier::from_base64_rotation(verifying_keys.trim()).context(
+                "DEVSERVER_ADMISSION_VERIFYING_KEYS must contain one or two distinct canonical Ed25519 public keys",
+            )?;
+
+        let entry_signing_key = std::env::var("DEVSERVER_ENTRY_SIGNING_KEY")
+            .context("DEVSERVER_ENTRY_SIGNING_KEY is required")?;
+        let entry_signer =
+            gateway_common::devserver_gate::EntrySigner::from_base64(entry_signing_key.trim())
+                .context("DEVSERVER_ENTRY_SIGNING_KEY must be canonical base64url for 32 bytes")?;
 
         // IDENTITY_OAUTH_ENDPOINTS_BASE points the GitHub provider's
         // OAuth + API endpoints at an alternate origin so a local
@@ -155,6 +186,7 @@ impl Config {
 
         Ok(Self {
             bind_addr,
+            internal_bind_addr,
             base_url,
             devserver_proxy_origin,
             devserver_tunnel_origin,
@@ -164,7 +196,8 @@ impl Config {
             internal_auth_token,
             identity_admin_token,
             workspace_admin,
-            workspace_gate_secret,
+            admission_lease_verifier,
+            entry_signer,
             providers,
         })
     }
@@ -199,9 +232,10 @@ impl Config {
         &self,
         username: &str,
         devserver_id: &str,
+        proxy_id: &str,
         proxy_base_url: &str,
     ) -> std::result::Result<TenantOrigin, InvalidNodeBase> {
-        let node = self.validate_node_base(proxy_base_url)?;
+        let node = self.validate_node_base(proxy_base_url, proxy_id)?;
         let disc: String = devserver_id.chars().take(12).collect();
         let host = format!(
             "{}--{}.{}",
@@ -225,7 +259,11 @@ impl Config {
     /// controller already checked the base against its template;
     /// identity re-checks because a fleet row it cannot place inside
     /// the configured namespace must fail closed, never mint.
-    fn validate_node_base(&self, raw: &str) -> std::result::Result<Url, InvalidNodeBase> {
+    fn validate_node_base(
+        &self,
+        raw: &str,
+        expected_proxy_id: &str,
+    ) -> std::result::Result<Url, InvalidNodeBase> {
         let url: Url = raw
             .trim()
             .parse()
@@ -268,6 +306,12 @@ impl Config {
                 "host is not exactly one DNS label below the proxy apex",
             ));
         }
+        if child != expected_proxy_id {
+            return Err(InvalidNodeBase::new(
+                raw,
+                "node label does not match the signed proxy id",
+            ));
+        }
         Ok(url)
     }
 }
@@ -275,7 +319,7 @@ impl Config {
 /// One validated tenant origin: where entry URLs for one live
 /// devserver point. Constructed only from a controller-reported node
 /// base that passed the proxy-namespace check, so the entry `aud`,
-/// `proxy_origin`, and `entry_url` can never drift apart.
+/// `proxy_origin`, and the fixed exchange URL can never drift apart.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TenantOrigin {
     /// Full origin: `{scheme}://{owner}--{disc}.{node-host}[:port]`.
@@ -345,6 +389,7 @@ mod tests {
     fn test_cfg(apex: &str) -> Config {
         Config {
             bind_addr: "127.0.0.1:7000".parse().unwrap(),
+            internal_bind_addr: "127.0.0.1:7001".parse().unwrap(),
             base_url: "http://localhost:7000".parse().unwrap(),
             devserver_proxy_origin: apex.parse().unwrap(),
             devserver_tunnel_origin: "https://tunnel.example.test".parse().unwrap(),
@@ -353,8 +398,22 @@ mod tests {
             profile_client: ProfileClient::new("http://x/".parse().unwrap(), "x".into()).unwrap(),
             internal_auth_token: "x".into(),
             identity_admin_token: String::new(),
-            workspace_admin: None,
-            workspace_gate_secret: "x".into(),
+            workspace_admin: DevserverControlClient::new(
+                "http://127.0.0.1:7002".parse().unwrap(),
+                "test-identity-admin-token".into(),
+            )
+            .unwrap(),
+            admission_lease_verifier: {
+                let signer = AdmissionLeaseSigner::from_base64(
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                )
+                .unwrap();
+                AdmissionLeaseVerifier::from_base64(&signer.verifying_key_base64()).unwrap()
+            },
+            entry_signer: gateway_common::devserver_gate::EntrySigner::from_base64(
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            )
+            .unwrap(),
             providers: vec![],
         }
     }
@@ -366,6 +425,7 @@ mod tests {
             .tenant_origin_for(
                 "alice",
                 "0123456789abcdef0123456789abcdef",
+                "p1",
                 "https://p1.usr.chan.app",
             )
             .expect("valid node base");
@@ -375,13 +435,18 @@ mod tests {
         // Lowercased explicitly on both parts: the proxy's host parse
         // and the canonical aud are lowercase.
         let t = cfg
-            .tenant_origin_for("USER-1", "ABCDEFABCDEFABCDEF", "https://p1.usr.chan.app")
+            .tenant_origin_for(
+                "USER-1",
+                "ABCDEFABCDEFABCDEF",
+                "p1",
+                "https://p1.usr.chan.app",
+            )
             .expect("valid node base");
         assert_eq!(t.origin, "https://user-1--abcdefabcdef.p1.usr.chan.app");
 
         // Short (test-fixture) ids are used whole.
         let t = cfg
-            .tenant_origin_for("alice", "abc123", "https://p1.usr.chan.app")
+            .tenant_origin_for("alice", "abc123", "p1", "https://p1.usr.chan.app")
             .expect("valid node base");
         assert_eq!(t.origin, "https://alice--abc123.p1.usr.chan.app");
     }
@@ -393,14 +458,14 @@ mod tests {
         // the explicit suffix.
         let cfg = test_cfg("https://usr.chan.app:8443");
         let t = cfg
-            .tenant_origin_for("alice", "abc123", "https://p1.usr.chan.app:8443")
+            .tenant_origin_for("alice", "abc123", "p1", "https://p1.usr.chan.app:8443")
             .expect("non-default port node base");
         assert_eq!(t.origin, "https://alice--abc123.p1.usr.chan.app:8443");
         assert_eq!(t.authority, "alice--abc123.p1.usr.chan.app:8443");
 
         let cfg = test_cfg("http://usr.localtest.me:7002");
         let t = cfg
-            .tenant_origin_for("alice", "abc123", "http://p1.usr.localtest.me:7002")
+            .tenant_origin_for("alice", "abc123", "p1", "http://p1.usr.localtest.me:7002")
             .expect("http dev node base");
         assert_eq!(t.origin, "http://alice--abc123.p1.usr.localtest.me:7002");
     }
@@ -423,7 +488,7 @@ mod tests {
             "https://p1.usr.chan.app:8443",
         ] {
             assert!(
-                cfg.tenant_origin_for("alice", id, bad).is_err(),
+                cfg.tenant_origin_for("alice", id, "p1", bad).is_err(),
                 "{bad} must not mint"
             );
         }
@@ -442,7 +507,7 @@ mod tests {
             "https://p1.usr.chan.app/#frag",
         ] {
             assert!(
-                cfg.tenant_origin_for("alice", id, bad).is_err(),
+                cfg.tenant_origin_for("alice", id, "p1", bad).is_err(),
                 "{bad} must not mint"
             );
         }
