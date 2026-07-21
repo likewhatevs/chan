@@ -2,19 +2,20 @@ use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::response::Response;
-use axum::routing::get;
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures_util::stream::{self, Stream};
+use gateway_common::validators::valid_username;
 use serde::Serialize;
 use subtle::ConstantTimeEq;
 use tokio::sync::watch;
 
-use crate::{ActorError, ControllerHandle, ProxyView, TunnelView};
+use crate::{ActorError, CommandOutcome, ControllerHandle, KillPlan, ProxyView, TunnelView};
 
 #[derive(Clone)]
 struct AppState {
@@ -30,6 +31,15 @@ pub fn router(controller: ControllerHandle, admin_token: String) -> Router {
     let admin = Router::new()
         .route("/admin/v1/tunnels", get(list_tunnels))
         .route("/admin/v1/tunnels/watch", get(watch_tunnels))
+        .route(
+            "/admin/v1/tunnels/{user}/{devserver_id}/kill",
+            post(kill_tunnel),
+        )
+        .route("/admin/v1/users/{user}/tunnels", get(list_user_tunnels))
+        .route(
+            "/admin/v1/users/{user}/tunnels/kill",
+            post(kill_user_tunnels),
+        )
         .route("/admin/v1/proxies", get(list_proxies))
         .route("/admin/v1/proxies/watch", get(watch_proxies))
         .route_layer(middleware::from_fn_with_state(state.clone(), admin_auth));
@@ -68,6 +78,108 @@ async fn list_proxies(State(state): State<AppState>) -> Result<Json<Vec<ProxyVie
         .await
         .map(Json)
         .map_err(admin_error)
+}
+
+/// Per-user aggregate snapshot. A well-formed user with nothing live
+/// returns an empty array, not a 404, so callers do not special-case the
+/// steady state; a malformed username is a probe and gets the same 404
+/// shape as any unknown target.
+async fn list_user_tunnels(
+    State(state): State<AppState>,
+    Path(user): Path<String>,
+) -> Result<Json<Vec<TunnelView>>, Response> {
+    if !valid_username(&user) {
+        return Err(not_found());
+    }
+    let tunnels = state
+        .controller
+        .tunnels()
+        .await
+        .map_err(|error| admin_error(error).into_response())?;
+    Ok(Json(
+        tunnels.into_iter().filter(|row| row.user == user).collect(),
+    ))
+}
+
+/// Exact kill of one aggregate row. The state machine routes the command
+/// by the registration UUID read at issue time, so a delayed command
+/// cannot kill a successor registration for the same key.
+async fn kill_tunnel(
+    State(state): State<AppState>,
+    Path((user, devserver_id)): Path<(String, String)>,
+) -> Result<StatusCode, Response> {
+    let plan = state
+        .controller
+        .plan_tunnel_kill(&user, &devserver_id)
+        .await
+        .map_err(|error| admin_error(error).into_response())?;
+    let KillPlan::Issued(confirmations) = plan else {
+        return Err(not_found());
+    };
+    let confirmation = confirmations
+        .into_iter()
+        .next()
+        .expect("exact kill issues exactly one command");
+    match confirmation.await {
+        Ok(CommandOutcome::Confirmed { .. }) => Ok(StatusCode::NO_CONTENT),
+        // A dropped sender means the command settled without a reachable
+        // waiter (actor restart); the proxy may have executed the kill,
+        // so the honest answer is partial rather than success.
+        Ok(_) | Err(_) => Err(partial_kill(0)),
+    }
+}
+
+/// User-wide kill, fanned out as one command per owning proxy. Await
+/// every confirmation so a partial failure reports the count that is
+/// actually gone; the operation stays idempotent and a retry kills any
+/// surviving rows.
+async fn kill_user_tunnels(
+    State(state): State<AppState>,
+    Path(user): Path<String>,
+) -> Result<Json<serde_json::Value>, Response> {
+    if !valid_username(&user) {
+        return Err(not_found());
+    }
+    let plan = state
+        .controller
+        .plan_user_kill(&user)
+        .await
+        .map_err(|error| admin_error(error).into_response())?;
+    let confirmations = match plan {
+        KillPlan::Issued(confirmations) => confirmations,
+        KillPlan::NotFound => Vec::new(),
+    };
+    let mut killed = 0;
+    let mut partial = false;
+    for outcome in futures_util::future::join_all(confirmations).await {
+        match outcome {
+            Ok(CommandOutcome::Confirmed {
+                killed: gone,
+                missing,
+            }) => killed += gone + missing,
+            Ok(_) | Err(_) => partial = true,
+        }
+    }
+    if partial {
+        return Err(partial_kill(killed));
+    }
+    Ok(Json(serde_json::json!({ "killed": killed })))
+}
+
+fn not_found() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "error": "not found" })),
+    )
+        .into_response()
+}
+
+fn partial_kill(killed: usize) -> Response {
+    (
+        StatusCode::BAD_GATEWAY,
+        Json(serde_json::json!({ "error": "partial kill", "killed": killed })),
+    )
+        .into_response()
 }
 
 async fn watch_tunnels(
@@ -176,13 +288,26 @@ fn admin_error(error: ActorError) -> StatusCode {
 mod tests {
     use super::*;
     use axum::body::Body;
-    use devserver_control_proto::{CanonicalOrigin, ProxyId, ServerFrame};
+    use devserver_control_proto::{CanonicalOrigin, ProxyId, ServerFrame, TunnelRow};
     use http_body_util::BodyExt;
     use tower::ServiceExt;
     use uuid::Uuid;
 
     async fn request(app: Router, path: &str, token: Option<&str>) -> Response {
-        let mut request = axum::http::Request::builder().uri(path);
+        request_with_method(app, "GET", path, token).await
+    }
+
+    async fn post(app: Router, path: &str, token: Option<&str>) -> Response {
+        request_with_method(app, "POST", path, token).await
+    }
+
+    async fn request_with_method(
+        app: Router,
+        method: &str,
+        path: &str,
+        token: Option<&str>,
+    ) -> Response {
+        let mut request = axum::http::Request::builder().method(method).uri(path);
         if let Some(token) = token {
             request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
         }
@@ -191,36 +316,85 @@ mod tests {
             .unwrap()
     }
 
-    async fn ready_controller() -> ControllerHandle {
-        let controller = crate::spawn_controller(100);
-        let proxy_id = ProxyId::parse("p1").unwrap();
-        let mut session = controller
+    fn row(user: &str, devserver_id: &str, registration_id: Uuid) -> TunnelRow {
+        TunnelRow {
+            registration_id,
+            user: user.into(),
+            devserver_id: devserver_id.into(),
+            peer_addr: None,
+            connected_at: chrono::Utc::now(),
+        }
+    }
+
+    async fn begin_proxy(
+        controller: &ControllerHandle,
+        id: &str,
+        rows: Vec<TunnelRow>,
+    ) -> (ProxyId, crate::ProxyControlSession) {
+        let proxy_id = ProxyId::parse(id).unwrap();
+        let session = controller
             .begin_session(
                 proxy_id.clone(),
-                CanonicalOrigin::parse("https://p1.proxy.example.test").unwrap(),
+                CanonicalOrigin::parse(&format!("https://{id}.proxy.example.test")).unwrap(),
                 env!("CARGO_PKG_VERSION").into(),
                 Uuid::new_v4(),
             )
             .await
             .unwrap();
         controller
-            .accept_snapshot(proxy_id.clone(), session.incarnation, 0, Vec::new())
+            .accept_snapshot(proxy_id.clone(), session.incarnation, 0, rows)
             .await
             .unwrap();
+        (proxy_id, session)
+    }
+
+    async fn keep_alive_until_ready(
+        controller: &ControllerHandle,
+        sessions: &mut [(ProxyId, crate::ProxyControlSession)],
+    ) {
         for _ in 0..6 {
             tokio::time::advance(crate::HEARTBEAT_INTERVAL).await;
-            let nonce = loop {
-                if let ServerFrame::Ping { nonce } = session.commands.recv().await.unwrap() {
-                    break nonce;
-                }
-            };
-            controller
-                .pong(proxy_id.clone(), session.incarnation, nonce)
-                .await
-                .unwrap();
+            for (proxy_id, session) in sessions.iter_mut() {
+                let nonce = loop {
+                    if let ServerFrame::Ping { nonce } = session.commands.recv().await.unwrap() {
+                        break nonce;
+                    }
+                };
+                controller
+                    .pong(proxy_id.clone(), session.incarnation, nonce)
+                    .await
+                    .unwrap();
+            }
         }
+    }
+
+    async fn ready_controller() -> ControllerHandle {
+        ready_controller_with(Vec::new()).await.0
+    }
+
+    async fn ready_controller_with(
+        rows: Vec<TunnelRow>,
+    ) -> (ControllerHandle, crate::ProxyControlSession) {
+        let controller = crate::spawn_controller(100);
+        let (proxy_id, session) = begin_proxy(&controller, "p1", rows).await;
+        let mut sessions = vec![(proxy_id, session)];
+        keep_alive_until_ready(&controller, &mut sessions).await;
         assert!(controller.is_ready().await.unwrap());
-        controller
+        let (_, session) = sessions.pop().unwrap();
+        (controller, session)
+    }
+
+    async fn recv_kill_command(session: &mut crate::ProxyControlSession) -> (Uuid, Vec<Uuid>) {
+        loop {
+            let frame = session.commands.recv().await.unwrap();
+            if let ServerFrame::KillRegistrations {
+                command_id,
+                registration_ids,
+            } = frame
+            {
+                return (command_id, registration_ids);
+            }
+        }
     }
 
     #[tokio::test]
@@ -275,5 +449,204 @@ mod tests {
         let rows: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(rows.as_array().unwrap().len(), 1);
         assert_eq!(rows[0]["proxy_id"], "p1");
+    }
+
+    #[tokio::test]
+    async fn kill_routes_and_user_read_are_warming_until_ready() {
+        let app = router(crate::spawn_controller(100), "secret".into());
+        assert_eq!(
+            request(app.clone(), "/admin/v1/users/alice/tunnels", Some("secret"))
+                .await
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            post(
+                app.clone(),
+                "/admin/v1/tunnels/alice/one/kill",
+                Some("secret")
+            )
+            .await
+            .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            post(app, "/admin/v1/users/alice/tunnels/kill", Some("secret"))
+                .await
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn admin_404_matrix() {
+        let (controller, _session) =
+            ready_controller_with(vec![row("alice", "one", Uuid::new_v4())]).await;
+        let app = router(controller, "secret".into());
+
+        let invalid = request(
+            app.clone(),
+            "/admin/v1/users/Invalid/tunnels",
+            Some("secret"),
+        )
+        .await;
+        assert_eq!(invalid.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            invalid.into_body().collect().await.unwrap().to_bytes(),
+            r#"{"error":"not found"}"#
+        );
+
+        let empty = request(app.clone(), "/admin/v1/users/bob/tunnels", Some("secret")).await;
+        assert_eq!(empty.status(), StatusCode::OK);
+        assert_eq!(empty.into_body().collect().await.unwrap().to_bytes(), "[]");
+
+        let unknown_user = post(
+            app.clone(),
+            "/admin/v1/tunnels/bob/one/kill",
+            Some("secret"),
+        )
+        .await;
+        assert_eq!(unknown_user.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            unknown_user.into_body().collect().await.unwrap().to_bytes(),
+            r#"{"error":"not found"}"#
+        );
+
+        let unknown_devserver = post(
+            app.clone(),
+            "/admin/v1/tunnels/alice/two/kill",
+            Some("secret"),
+        )
+        .await;
+        assert_eq!(unknown_devserver.status(), StatusCode::NOT_FOUND);
+
+        let invalid_kill = post(app, "/admin/v1/users/Invalid/tunnels/kill", Some("secret")).await;
+        assert_eq!(invalid_kill.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            invalid_kill.into_body().collect().await.unwrap().to_bytes(),
+            r#"{"error":"not found"}"#
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn exact_kill_returns_204_when_the_proxy_confirms() {
+        let registration_id = Uuid::new_v4();
+        let (controller, mut session) =
+            ready_controller_with(vec![row("alice", "one", registration_id)]).await;
+        let proxy_id = ProxyId::parse("p1").unwrap();
+        let app = router(controller.clone(), "secret".into());
+
+        let pending = tokio::spawn(post(
+            app,
+            "/admin/v1/tunnels/alice/one/kill",
+            Some("secret"),
+        ));
+        let (command_id, registration_ids) = recv_kill_command(&mut session).await;
+        assert_eq!(registration_ids, vec![registration_id]);
+        controller
+            .command_result(
+                proxy_id,
+                session.incarnation,
+                command_id,
+                registration_ids,
+                Vec::new(),
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+        let response = pending.await.unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(controller.tunnels().await.unwrap().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn user_kill_counts_killed_and_missing_and_retries_empty() {
+        let killed = Uuid::new_v4();
+        let missing = Uuid::new_v4();
+        let bob_registration = Uuid::new_v4();
+        let (controller, mut session) = ready_controller_with(vec![
+            row("alice", "one", killed),
+            row("alice", "two", missing),
+            row("bob", "one", bob_registration),
+        ])
+        .await;
+        let proxy_id = ProxyId::parse("p1").unwrap();
+        let app = router(controller.clone(), "secret".into());
+
+        let pending = tokio::spawn(post(
+            app.clone(),
+            "/admin/v1/users/alice/tunnels/kill",
+            Some("secret"),
+        ));
+        let (command_id, registration_ids) = recv_kill_command(&mut session).await;
+        assert_eq!(registration_ids.len(), 2);
+        assert!(!registration_ids.contains(&bob_registration));
+        controller
+            .command_result(
+                proxy_id,
+                session.incarnation,
+                command_id,
+                vec![killed],
+                vec![missing],
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+        let response = pending.await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.into_body().collect().await.unwrap().to_bytes(),
+            r#"{"killed":2}"#
+        );
+
+        // A retry has nothing left to kill and is a success, not an error.
+        let retry = post(app, "/admin/v1/users/alice/tunnels/kill", Some("secret")).await;
+        assert_eq!(retry.status(), StatusCode::OK);
+        assert_eq!(
+            retry.into_body().collect().await.unwrap().to_bytes(),
+            r#"{"killed":0}"#
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn user_kill_reports_partial_when_a_proxy_disconnects() {
+        let controller = crate::spawn_controller(100);
+        let (p1, s1) =
+            begin_proxy(&controller, "p1", vec![row("alice", "one", Uuid::new_v4())]).await;
+        let (p2, s2) =
+            begin_proxy(&controller, "p2", vec![row("alice", "two", Uuid::new_v4())]).await;
+        let mut sessions = vec![(p1.clone(), s1), (p2.clone(), s2)];
+        keep_alive_until_ready(&controller, &mut sessions).await;
+        assert!(controller.is_ready().await.unwrap());
+        let mut sessions: std::collections::HashMap<_, _> = sessions.into_iter().collect();
+        let app = router(controller.clone(), "secret".into());
+
+        let pending = tokio::spawn(post(
+            app,
+            "/admin/v1/users/alice/tunnels/kill",
+            Some("secret"),
+        ));
+        let s1 = sessions.get_mut(&p1).unwrap();
+        let (command_id, registration_ids) = recv_kill_command(s1).await;
+        controller
+            .command_result(
+                p1.clone(),
+                s1.incarnation,
+                command_id,
+                registration_ids,
+                Vec::new(),
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+        let p2_incarnation = sessions.get(&p2).unwrap().incarnation;
+        controller.disconnect(p2, p2_incarnation).await.unwrap();
+
+        let response = pending.await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            response.into_body().collect().await.unwrap().to_bytes(),
+            r#"{"error":"partial kill","killed":1}"#
+        );
     }
 }

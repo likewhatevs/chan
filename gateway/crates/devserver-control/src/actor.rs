@@ -9,7 +9,8 @@ use tokio::time::{Instant, MissedTickBehavior};
 use uuid::Uuid;
 
 use crate::{
-    ControllerState, Effect, ProxyView, SessionIncarnation, SessionKey, StateError, TunnelView,
+    CommandOutcome, ControllerState, Effect, ProxyView, SessionIncarnation, SessionKey, StateError,
+    TunnelView,
 };
 
 const ACTOR_QUEUE_CAPACITY: usize = 1024;
@@ -33,6 +34,17 @@ pub struct ProxyControlSession {
 pub enum MutationStatus {
     Applied,
     Resyncing,
+}
+
+/// Plan returned to an admin kill request. Each receiver in `Issued`
+/// resolves when the corresponding kill command settles (result, timeout,
+/// or owning-session loss), so the HTTP handler never blocks the actor
+/// loop while awaiting proxy confirmations.
+pub enum KillPlan {
+    /// No aggregate row matched the target key.
+    NotFound,
+    /// One kill command per owning proxy session.
+    Issued(Vec<oneshot::Receiver<CommandOutcome>>),
 }
 
 enum Command {
@@ -120,6 +132,15 @@ enum Command {
     Proxies {
         reply: oneshot::Sender<Result<Vec<ProxyView>, StateError>>,
     },
+    KillTunnel {
+        user: String,
+        devserver_id: String,
+        reply: oneshot::Sender<Result<KillPlan, StateError>>,
+    },
+    KillUserTunnels {
+        user: String,
+        reply: oneshot::Sender<Result<KillPlan, StateError>>,
+    },
 }
 
 type StateReply = oneshot::Sender<Result<MutationStatus, StateError>>;
@@ -139,6 +160,7 @@ pub fn spawn_controller_owned(
     let task = tokio::spawn(async move {
         let mut state = ControllerState::new(max_devservers_per_user);
         let mut sessions = HashMap::new();
+        let mut waiters = HashMap::new();
         let mut ticker = tokio::time::interval(TICK_INTERVAL);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
@@ -149,10 +171,10 @@ pub fn spawn_controller_owned(
                     let Some(command) = command else {
                         break;
                     };
-                    handle_command(command, &mut state, &mut sessions)
+                    handle_command(command, &mut state, &mut sessions, &mut waiters)
                 }
             };
-            apply_effects(&mut state, &mut sessions, effects);
+            apply_effects(&mut state, &mut sessions, &mut waiters, effects);
             publish_watches(
                 &state,
                 &readiness_watch_tx,
@@ -177,6 +199,7 @@ fn handle_command(
     command: Command,
     state: &mut ControllerState,
     sessions: &mut HashMap<SessionKey, mpsc::Sender<ServerFrame>>,
+    waiters: &mut HashMap<Uuid, oneshot::Sender<CommandOutcome>>,
 ) -> Vec<Effect> {
     let now = Instant::now();
     let wall_now = Utc::now();
@@ -343,7 +366,54 @@ fn handle_command(
             let _ = reply.send(state.read_proxies());
             Vec::new()
         }
+        Command::KillTunnel {
+            user,
+            devserver_id,
+            reply,
+        } => {
+            let (command_id, effects) = match state.begin_exact_kill(&user, &devserver_id, now) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    let _ = reply.send(Err(error));
+                    return Vec::new();
+                }
+            };
+            let plan = match command_id {
+                Some(command_id) => KillPlan::Issued(vec![register_waiter(waiters, command_id)]),
+                None => KillPlan::NotFound,
+            };
+            let _ = reply.send(Ok(plan));
+            effects
+        }
+        Command::KillUserTunnels { user, reply } => {
+            let (command_ids, effects) = match state.begin_user_kill(&user, now) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    let _ = reply.send(Err(error));
+                    return Vec::new();
+                }
+            };
+            let confirmations = command_ids
+                .into_iter()
+                .map(|command_id| register_waiter(waiters, command_id))
+                .collect();
+            let _ = reply.send(Ok(KillPlan::Issued(confirmations)));
+            effects
+        }
     }
+}
+
+/// Waiters register inside the command handler, before `apply_effects`
+/// runs, so a command that settles immediately (dead session queue, an
+/// already-expired command) still resolves its waiter instead of losing
+/// the settle effect.
+fn register_waiter(
+    waiters: &mut HashMap<Uuid, oneshot::Sender<CommandOutcome>>,
+    command_id: Uuid,
+) -> oneshot::Receiver<CommandOutcome> {
+    let (tx, rx) = oneshot::channel();
+    waiters.insert(command_id, tx);
+    rx
 }
 
 fn finish(reply: StateReply, result: Result<Vec<Effect>, StateError>) -> Vec<Effect> {
@@ -380,6 +450,7 @@ fn finish_unit(reply: StateReply, result: Result<(), StateError>) -> Vec<Effect>
 fn apply_effects(
     state: &mut ControllerState,
     sessions: &mut HashMap<SessionKey, mpsc::Sender<ServerFrame>>,
+    waiters: &mut HashMap<Uuid, oneshot::Sender<CommandOutcome>>,
     effects: Vec<Effect>,
 ) {
     let mut effects: VecDeque<_> = effects.into();
@@ -399,6 +470,17 @@ fn apply_effects(
                 Effect::Retire { session, reason } => {
                     if let Some(sender) = sessions.remove(&session) {
                         let _ = sender.try_send(ServerFrame::Shutdown { reason });
+                    }
+                }
+                Effect::CommandSettled {
+                    command_id,
+                    outcome,
+                } => {
+                    // Commands issued without an admin waiter (replacement
+                    // and unclaimed-row kills) settle with no registered
+                    // waiter; the removal is the whole handling.
+                    if let Some(waiter) = waiters.remove(&command_id) {
+                        let _ = waiter.send(outcome);
                     }
                 }
             }
@@ -652,6 +734,29 @@ impl ControllerHandle {
             .map_err(ActorError::State)
     }
 
+    pub async fn plan_tunnel_kill(
+        &self,
+        user: &str,
+        devserver_id: &str,
+    ) -> Result<KillPlan, ActorError> {
+        self.request(|reply| Command::KillTunnel {
+            user: user.to_string(),
+            devserver_id: devserver_id.to_string(),
+            reply,
+        })
+        .await?
+        .map_err(ActorError::State)
+    }
+
+    pub async fn plan_user_kill(&self, user: &str) -> Result<KillPlan, ActorError> {
+        self.request(|reply| Command::KillUserTunnels {
+            user: user.to_string(),
+            reply,
+        })
+        .await?
+        .map_err(ActorError::State)
+    }
+
     pub fn watch_tunnels(&self) -> watch::Receiver<Arc<Vec<TunnelView>>> {
         self.tunnel_watch.clone()
     }
@@ -833,6 +938,227 @@ mod tests {
         assert_eq!(tunnels.borrow()[0].proxy_id, "p1");
     }
 
+    fn row(user: &str, devserver_id: &str, registration_id: Uuid) -> TunnelRow {
+        TunnelRow {
+            registration_id,
+            user: user.into(),
+            devserver_id: devserver_id.into(),
+            peer_addr: None,
+            connected_at: Utc::now(),
+        }
+    }
+
+    async fn keep_alive_sessions_until_ready(
+        actor: &ControllerHandle,
+        sessions: &mut [(ProxyId, ProxyControlSession)],
+    ) {
+        for _ in 0..6 {
+            tokio::time::advance(crate::HEARTBEAT_INTERVAL).await;
+            for (proxy_id, session) in sessions.iter_mut() {
+                let mut nonce = None;
+                for _ in 0..8 {
+                    let frame =
+                        tokio::time::timeout(crate::HEARTBEAT_INTERVAL, session.commands.recv())
+                            .await
+                            .expect("controller command wait timed out")
+                            .expect("controller command channel closed");
+                    if let ServerFrame::Ping { nonce: ping_nonce } = frame {
+                        nonce = Some(ping_nonce);
+                        break;
+                    }
+                }
+                actor
+                    .pong(
+                        proxy_id.clone(),
+                        session.incarnation,
+                        nonce.expect("controller did not send a Ping within eight frames"),
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+        tokio::task::yield_now().await;
+    }
+
+    async fn recv_kill(session: &mut ProxyControlSession) -> (Uuid, Vec<Uuid>) {
+        loop {
+            let frame = tokio::time::timeout(crate::HEARTBEAT_INTERVAL, session.commands.recv())
+                .await
+                .expect("kill command wait timed out")
+                .expect("controller command channel closed");
+            if let ServerFrame::KillRegistrations {
+                command_id,
+                registration_ids,
+            } = frame
+            {
+                return (command_id, registration_ids);
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn user_kill_fans_out_and_resolves_when_both_proxies_confirm() {
+        let actor = spawn_controller(100);
+        let p1 = ProxyId::parse("p1").unwrap();
+        let p2 = ProxyId::parse("p2").unwrap();
+        let registration_one = Uuid::new_v4();
+        let registration_two = Uuid::new_v4();
+        let mut sessions = Vec::new();
+        for (proxy_id, origin, devserver_id, registration_id) in [
+            (
+                p1.clone(),
+                "https://p1.proxy.example.test",
+                "one",
+                registration_one,
+            ),
+            (
+                p2.clone(),
+                "https://p2.proxy.example.test",
+                "two",
+                registration_two,
+            ),
+        ] {
+            let session = actor
+                .begin_session(
+                    proxy_id.clone(),
+                    CanonicalOrigin::parse(origin).unwrap(),
+                    env!("CARGO_PKG_VERSION").into(),
+                    Uuid::new_v4(),
+                )
+                .await
+                .unwrap();
+            actor
+                .accept_snapshot(
+                    proxy_id.clone(),
+                    session.incarnation,
+                    0,
+                    vec![row("alice", devserver_id, registration_id)],
+                )
+                .await
+                .unwrap();
+            sessions.push((proxy_id, session));
+        }
+        keep_alive_sessions_until_ready(&actor, &mut sessions).await;
+        assert!(actor.is_ready().await.unwrap());
+
+        let plan = actor.plan_user_kill("alice").await.unwrap();
+        let KillPlan::Issued(confirmations) = plan else {
+            panic!("alice has live rows");
+        };
+        assert_eq!(confirmations.len(), 2);
+
+        let mut reported = Vec::new();
+        for (proxy_id, session) in &mut sessions {
+            let (command_id, registration_ids) = recv_kill(session).await;
+            assert_eq!(registration_ids.len(), 1);
+            actor
+                .command_result(
+                    proxy_id.clone(),
+                    session.incarnation,
+                    command_id,
+                    registration_ids.clone(),
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .await
+                .unwrap();
+            reported.push(registration_ids[0]);
+        }
+        for confirmation in confirmations {
+            assert_eq!(
+                confirmation.await.unwrap(),
+                CommandOutcome::Confirmed {
+                    killed: 1,
+                    missing: 0
+                }
+            );
+        }
+        reported.sort();
+        let mut expected = vec![registration_one, registration_two];
+        expected.sort();
+        assert_eq!(reported, expected);
+        assert!(actor.tunnels().await.unwrap().is_empty());
+
+        // No aggregate row matches after the kill: the plan reports not
+        // found instead of issuing another command.
+        assert!(matches!(
+            actor.plan_tunnel_kill("alice", "one").await.unwrap(),
+            KillPlan::NotFound
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn kill_timeout_settles_waiter_without_wedging_actor() {
+        let actor = spawn_controller(100);
+        let registration_id = Uuid::new_v4();
+        let mut session = actor
+            .begin_session(
+                proxy(),
+                CanonicalOrigin::parse("https://p1.proxy.example.test").unwrap(),
+                env!("CARGO_PKG_VERSION").into(),
+                Uuid::new_v4(),
+            )
+            .await
+            .unwrap();
+        actor
+            .accept_snapshot(
+                proxy(),
+                session.incarnation,
+                0,
+                vec![row("alice", "one", registration_id)],
+            )
+            .await
+            .unwrap();
+        keep_alive_until_ready(&actor, &mut session).await;
+
+        let plan = actor.plan_tunnel_kill("alice", "one").await.unwrap();
+        let KillPlan::Issued(mut confirmations) = plan else {
+            panic!("alice/one has a live row");
+        };
+        let confirmation = confirmations.pop().unwrap();
+
+        tokio::time::advance(crate::COMMAND_TIMEOUT + Duration::from_secs(2)).await;
+        assert_eq!(confirmation.await.unwrap(), CommandOutcome::TimedOut);
+        assert!(actor.is_ready().await.unwrap());
+        assert_eq!(actor.tunnels().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn session_disconnect_mid_kill_settles_its_waiters() {
+        let actor = spawn_controller(100);
+        let registration_id = Uuid::new_v4();
+        let mut session = actor
+            .begin_session(
+                proxy(),
+                CanonicalOrigin::parse("https://p1.proxy.example.test").unwrap(),
+                env!("CARGO_PKG_VERSION").into(),
+                Uuid::new_v4(),
+            )
+            .await
+            .unwrap();
+        actor
+            .accept_snapshot(
+                proxy(),
+                session.incarnation,
+                0,
+                vec![row("alice", "one", registration_id)],
+            )
+            .await
+            .unwrap();
+        keep_alive_until_ready(&actor, &mut session).await;
+
+        let plan = actor.plan_user_kill("alice").await.unwrap();
+        let KillPlan::Issued(mut confirmations) = plan else {
+            panic!("alice has a live row");
+        };
+        let confirmation = confirmations.pop().unwrap();
+        actor
+            .disconnect(proxy(), session.incarnation)
+            .await
+            .unwrap();
+        assert_eq!(confirmation.await.unwrap(), CommandOutcome::SessionLost);
+    }
+
     #[test]
     fn full_session_command_queue_disconnects_instead_of_dropping_state() {
         let now = Instant::now();
@@ -856,6 +1182,7 @@ mod tests {
         apply_effects(
             &mut state,
             &mut sessions,
+            &mut HashMap::new(),
             vec![Effect::Send {
                 session: key,
                 frame: ServerFrame::Ping { nonce: 2 },

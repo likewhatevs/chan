@@ -124,6 +124,29 @@ pub(crate) enum Effect {
         session: SessionKey,
         reason: String,
     },
+    CommandSettled {
+        command_id: Uuid,
+        outcome: CommandOutcome,
+    },
+}
+
+/// Terminal state of a Runtime-purpose kill command. The state machine
+/// cannot hold waiters, so it reports each settle through
+/// `Effect::CommandSettled` and the actor resolves the oneshot it
+/// registered when the command was issued.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandOutcome {
+    /// Every targeted registration was reported killed or already missing.
+    Confirmed {
+        killed: usize,
+        missing: usize,
+    },
+    /// The proxy reported a failure, or the result did not account for
+    /// every targeted registration exactly once.
+    Failed,
+    TimedOut,
+    /// The owning session ended before the command settled.
+    SessionLost,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -308,12 +331,9 @@ impl ControllerState {
             claim.session == key && claim.registration_id == row.registration_id
         });
         if !matching_claim {
-            return Ok(self.issue_kill(
-                key,
-                vec![row.registration_id],
-                CommandPurpose::Runtime,
-                now,
-            ));
+            let (_, effects) =
+                self.issue_kill(key, vec![row.registration_id], CommandPurpose::Runtime, now);
+            return Ok(effects);
         }
         self.pending.remove(&tunnel_key);
 
@@ -333,12 +353,13 @@ impl ControllerState {
                 .values()
                 .all(|current| current.row.registration_id != old.row.registration_id)
             {
-                effects.extend(self.issue_kill(
+                let (_, kill) = self.issue_kill(
                     old.session,
                     vec![old.row.registration_id],
                     CommandPurpose::Runtime,
                     now,
-                ));
+                );
+                effects.extend(kill);
             }
         }
         Ok(effects)
@@ -555,7 +576,18 @@ impl ControllerState {
             }
             return Ok(self.finish_reconciliation_if_complete(now));
         }
-        Ok(Vec::new())
+        let outcome = if invalid || incomplete || !failed.is_empty() {
+            CommandOutcome::Failed
+        } else {
+            CommandOutcome::Confirmed {
+                killed: killed.len(),
+                missing: missing.len(),
+            }
+        };
+        Ok(vec![Effect::CommandSettled {
+            command_id,
+            outcome,
+        }])
     }
 
     pub fn disconnect(
@@ -603,6 +635,11 @@ impl ControllerState {
                     reconciliation.failed = true;
                     reconciliation_expired = true;
                 }
+            } else {
+                effects.push(Effect::CommandSettled {
+                    command_id,
+                    outcome: CommandOutcome::TimedOut,
+                });
             }
         }
         if reconciliation_expired {
@@ -708,6 +745,83 @@ impl ControllerState {
         self.ready
             .then(|| self.proxy_views())
             .ok_or(StateError::NotReady)
+    }
+
+    /// Exact admin kill for one `(user, devserver_id)` key. The command
+    /// targets the registration UUID read at issue time, never the key, so
+    /// a delayed command cannot kill a successor registration. Returns the
+    /// command id when a row was found so the actor can register a waiter
+    /// before applying the send effect.
+    pub fn begin_exact_kill(
+        &mut self,
+        user: &str,
+        devserver_id: &str,
+        now: Instant,
+    ) -> Result<(Option<Uuid>, Vec<Effect>), StateError> {
+        if !self.ready {
+            return Err(StateError::NotReady);
+        }
+        let key = (user.to_string(), devserver_id.to_string());
+        let Some(owned) = self.tunnels.get(&key) else {
+            return Ok((None, Vec::new()));
+        };
+        let session = owned.session.clone();
+        let registration_id = owned.row.registration_id;
+        if !self.owns_aggregate_rows(&session) {
+            return Ok((None, Vec::new()));
+        }
+        let (command_id, effects) =
+            self.issue_kill(session, vec![registration_id], CommandPurpose::Runtime, now);
+        Ok((Some(command_id), effects))
+    }
+
+    /// User-wide admin kill. Pending admission claims for the user are
+    /// cancelled before any command is issued (fleet admission rule 7); a
+    /// late `TunnelUp` for a cancelled claim arrives without a matching
+    /// claim and is killed by the unclaimed-row path. Authoritative rows
+    /// group by current owning session, one command per proxy. Returns the
+    /// issued command ids so the actor can register waiters before
+    /// applying the send effects.
+    pub fn begin_user_kill(
+        &mut self,
+        user: &str,
+        now: Instant,
+    ) -> Result<(Vec<Uuid>, Vec<Effect>), StateError> {
+        if !self.ready {
+            return Err(StateError::NotReady);
+        }
+        self.pending.retain(|(owner, _), _| owner != user);
+
+        let mut grouped: BTreeMap<SessionKey, Vec<Uuid>> = BTreeMap::new();
+        for ((owner, _), owned) in &self.tunnels {
+            if owner == user && self.owns_aggregate_rows(&owned.session) {
+                grouped
+                    .entry(owned.session.clone())
+                    .or_default()
+                    .push(owned.row.registration_id);
+            }
+        }
+        let mut command_ids = Vec::new();
+        let mut effects = Vec::new();
+        for (session, registration_ids) in grouped {
+            let (command_id, kill) =
+                self.issue_kill(session, registration_ids, CommandPurpose::Runtime, now);
+            command_ids.push(command_id);
+            effects.extend(kill);
+        }
+        Ok((command_ids, effects))
+    }
+
+    /// Aggregate rows are only ever published from Active sessions:
+    /// `force_resync` and session removal retract a session's rows before
+    /// its status can leave Active. A kill must route to a session that
+    /// still owns the row, so a stale or Joining owner is treated as not
+    /// found rather than commanding a session that no longer carries the
+    /// registration.
+    fn owns_aggregate_rows(&self, session: &SessionKey) -> bool {
+        self.proxies.get(&session.proxy_id).is_some_and(|proxy| {
+            proxy.incarnation == session.incarnation && proxy.status == ProxyStatus::Active
+        })
     }
 
     fn require_key(
@@ -979,24 +1093,14 @@ impl ControllerState {
         let mut command_ids = HashSet::new();
         let mut effects = Vec::new();
         for (session, registration_ids) in grouped {
-            let command_id = Uuid::new_v4();
-            command_ids.insert(command_id);
-            self.commands.insert(
-                command_id,
-                PendingCommand {
-                    session: session.clone(),
-                    registration_ids: registration_ids.iter().copied().collect(),
-                    purpose: CommandPurpose::Reconciliation,
-                    expires_at: now + COMMAND_TIMEOUT,
-                },
-            );
-            effects.push(Effect::Send {
+            let (command_id, kill) = self.issue_kill(
                 session,
-                frame: ServerFrame::KillRegistrations {
-                    command_id,
-                    registration_ids,
-                },
-            });
+                registration_ids,
+                CommandPurpose::Reconciliation,
+                now,
+            );
+            command_ids.insert(command_id);
+            effects.extend(kill);
         }
         self.reconciliation = Some(Reconciliation {
             kind,
@@ -1120,7 +1224,7 @@ impl ControllerState {
         registration_ids: Vec<Uuid>,
         purpose: CommandPurpose,
         now: Instant,
-    ) -> Vec<Effect> {
+    ) -> (Uuid, Vec<Effect>) {
         let command_id = Uuid::new_v4();
         self.commands.insert(
             command_id,
@@ -1131,13 +1235,16 @@ impl ControllerState {
                 expires_at: now + COMMAND_TIMEOUT,
             },
         );
-        vec![Effect::Send {
-            session,
-            frame: ServerFrame::KillRegistrations {
-                command_id,
-                registration_ids,
-            },
-        }]
+        (
+            command_id,
+            vec![Effect::Send {
+                session,
+                frame: ServerFrame::KillRegistrations {
+                    command_id,
+                    registration_ids,
+                },
+            }],
+        )
     }
 
     fn remove_session(&mut self, key: &SessionKey, now: Instant) -> Vec<Effect> {
@@ -1157,13 +1264,22 @@ impl ControllerState {
             .iter()
             .filter_map(|(command_id, command)| (command.session == *key).then_some(*command_id))
             .collect();
+        let mut effects = Vec::new();
         for command_id in removed_commands {
-            self.commands.remove(&command_id);
+            let Some(command) = self.commands.remove(&command_id) else {
+                continue;
+            };
+            if command.purpose == CommandPurpose::Runtime {
+                effects.push(Effect::CommandSettled {
+                    command_id,
+                    outcome: CommandOutcome::SessionLost,
+                });
+            }
             if let Some(reconciliation) = self.reconciliation.as_mut() {
                 reconciliation.command_ids.remove(&command_id);
             }
         }
-        let effects = self.finish_reconciliation_if_complete(now);
+        effects.extend(self.finish_reconciliation_if_complete(now));
         self.leave_readiness_if_no_active_sessions();
         effects
     }
@@ -2347,6 +2463,304 @@ mod tests {
         assert!(state.is_ready());
         assert_eq!(state.tunnel_views().len(), 1);
         assert_eq!(state.tunnel_views()[0].proxy_id, "p1");
+    }
+
+    #[test]
+    fn user_kill_cancels_pending_claims_before_commanding() {
+        let now = Instant::now();
+        let mut state = ControllerState::new(100);
+        let registration_id = Uuid::new_v4();
+        let (id, incarnation, _) = ready_one(
+            &mut state,
+            "p1",
+            vec![row("alice", "one", registration_id)],
+            now,
+        );
+        let active_at = now + CONVERGENCE_WINDOW;
+        let claimed_registration = Uuid::new_v4();
+        let admit = state
+            .request_admission(
+                &id,
+                incarnation,
+                Uuid::new_v4(),
+                claimed_registration,
+                "alice".into(),
+                "two".into(),
+                active_at,
+                Utc::now(),
+            )
+            .unwrap();
+        assert!(has_decision(&admit, AdmissionDecision::Admit));
+        assert_eq!(state.pending.len(), 1);
+
+        let (command_ids, effects) = state.begin_user_kill("alice", active_at).unwrap();
+        assert!(state.pending.is_empty());
+        let command_id = kill_command(&effects, "p1", registration_id);
+        assert_eq!(command_ids, vec![command_id]);
+
+        // The cancelled claim no longer activates its registration: a late
+        // TunnelUp takes the unclaimed path and is killed outright.
+        let late = state
+            .tunnel_up(
+                &id,
+                incarnation,
+                1,
+                row("alice", "two", claimed_registration),
+                active_at,
+                Utc::now(),
+            )
+            .unwrap();
+        kill_command(&late, "p1", claimed_registration);
+        assert_eq!(state.tunnel_views().len(), 1);
+    }
+
+    #[test]
+    fn exact_kill_on_unknown_key_issues_nothing() {
+        let now = Instant::now();
+        let mut state = ControllerState::new(100);
+        let (_id, _incarnation, _) = ready_one(
+            &mut state,
+            "p1",
+            vec![row("alice", "one", Uuid::new_v4())],
+            now,
+        );
+        let active_at = now + CONVERGENCE_WINDOW;
+        for (user, devserver_id) in [("alice", "two"), ("bob", "one")] {
+            let (command_id, effects) = state
+                .begin_exact_kill(user, devserver_id, active_at)
+                .unwrap();
+            assert!(command_id.is_none());
+            assert!(effects.is_empty());
+        }
+        assert!(state.commands.is_empty());
+    }
+
+    #[test]
+    fn kills_require_readiness() {
+        let now = Instant::now();
+        let mut state = ControllerState::new(100);
+        let (id, incarnation) = begin(&mut state, "p1", now);
+        snapshot(
+            &mut state,
+            &id,
+            incarnation,
+            vec![row("alice", "one", Uuid::new_v4())],
+            now,
+        );
+        assert!(matches!(
+            state.begin_exact_kill("alice", "one", now),
+            Err(StateError::NotReady)
+        ));
+        assert!(matches!(
+            state.begin_user_kill("alice", now),
+            Err(StateError::NotReady)
+        ));
+    }
+
+    #[test]
+    fn runtime_command_settles_confirmed_on_result() {
+        let now = Instant::now();
+        let mut state = ControllerState::new(100);
+        let registration_id = Uuid::new_v4();
+        let (id, incarnation, _) = ready_one(
+            &mut state,
+            "p1",
+            vec![row("alice", "one", registration_id)],
+            now,
+        );
+        let active_at = now + CONVERGENCE_WINDOW;
+        let (command_id, _) = state.begin_exact_kill("alice", "one", active_at).unwrap();
+        let command_id = command_id.expect("row exists");
+        let effects = state
+            .command_result(
+                &id,
+                incarnation,
+                command_id,
+                vec![registration_id],
+                Vec::new(),
+                Vec::new(),
+                active_at,
+                Utc::now(),
+            )
+            .unwrap();
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::CommandSettled {
+                command_id: settled,
+                outcome: CommandOutcome::Confirmed {
+                    killed: 1,
+                    missing: 0
+                },
+            } if *settled == command_id
+        )));
+        assert!(state.tunnel_views().is_empty());
+    }
+
+    #[test]
+    fn runtime_command_settles_failed_on_reported_failure() {
+        let now = Instant::now();
+        let mut state = ControllerState::new(100);
+        let registration_id = Uuid::new_v4();
+        let (id, incarnation, _) = ready_one(
+            &mut state,
+            "p1",
+            vec![row("alice", "one", registration_id)],
+            now,
+        );
+        let active_at = now + CONVERGENCE_WINDOW;
+        let (command_id, _) = state.begin_exact_kill("alice", "one", active_at).unwrap();
+        let command_id = command_id.expect("row exists");
+        let effects = state
+            .command_result(
+                &id,
+                incarnation,
+                command_id,
+                Vec::new(),
+                Vec::new(),
+                vec![registration_id],
+                active_at,
+                Utc::now(),
+            )
+            .unwrap();
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::CommandSettled {
+                command_id: settled,
+                outcome: CommandOutcome::Failed,
+            } if *settled == command_id
+        )));
+    }
+
+    #[test]
+    fn runtime_command_settles_timed_out_on_expiry() {
+        let now = Instant::now();
+        let mut state = ControllerState::new(100);
+        let registration_id = Uuid::new_v4();
+        let (id, incarnation, _) = ready_one(
+            &mut state,
+            "p1",
+            vec![row("alice", "one", registration_id)],
+            now,
+        );
+        let active_at = now + CONVERGENCE_WINDOW;
+        let (command_id, _) = state.begin_exact_kill("alice", "one", active_at).unwrap();
+        let command_id = command_id.expect("row exists");
+        let timeout_at = active_at + COMMAND_TIMEOUT;
+        state
+            .record_activity(&id, incarnation, timeout_at, Utc::now())
+            .unwrap();
+        let effects = state.tick(timeout_at, Utc::now());
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::CommandSettled {
+                command_id: settled,
+                outcome: CommandOutcome::TimedOut,
+            } if *settled == command_id
+        )));
+        assert!(state.commands.is_empty());
+    }
+
+    #[test]
+    fn runtime_command_settles_session_lost_on_session_death() {
+        let now = Instant::now();
+        let mut state = ControllerState::new(100);
+        let registration_id = Uuid::new_v4();
+        let (id, incarnation, _) = ready_one(
+            &mut state,
+            "p1",
+            vec![row("alice", "one", registration_id)],
+            now,
+        );
+        let active_at = now + CONVERGENCE_WINDOW;
+        let (command_id, _) = state.begin_exact_kill("alice", "one", active_at).unwrap();
+        let command_id = command_id.expect("row exists");
+        let effects = state.disconnect(&id, incarnation, active_at).unwrap();
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::CommandSettled {
+                command_id: settled,
+                outcome: CommandOutcome::SessionLost,
+            } if *settled == command_id
+        )));
+        assert!(state.commands.is_empty());
+    }
+
+    #[test]
+    fn user_kill_with_no_rows_issues_nothing() {
+        let now = Instant::now();
+        let mut state = ControllerState::new(100);
+        let (_id, _incarnation, _) = ready_one(&mut state, "p1", Vec::new(), now);
+        let (command_ids, effects) = state
+            .begin_user_kill("alice", now + CONVERGENCE_WINDOW)
+            .unwrap();
+        assert!(command_ids.is_empty());
+        assert!(effects.is_empty());
+    }
+
+    #[test]
+    fn user_kill_groups_registrations_by_owning_session() {
+        let now = Instant::now();
+        let mut state = ControllerState::new(100);
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        let bob_registration = Uuid::new_v4();
+        let (p1, p1_incarnation) = begin(&mut state, "p1", now);
+        snapshot(
+            &mut state,
+            &p1,
+            p1_incarnation,
+            vec![
+                row("alice", "one", first),
+                row("alice", "two", second),
+                row("bob", "one", bob_registration),
+            ],
+            now,
+        );
+        let (p2, p2_incarnation) = begin(&mut state, "p2", now);
+        let third = Uuid::new_v4();
+        snapshot(
+            &mut state,
+            &p2,
+            p2_incarnation,
+            vec![row("alice", "three", third)],
+            now,
+        );
+        for (proxy, incarnation) in [(&p1, p1_incarnation), (&p2, p2_incarnation)] {
+            state
+                .record_activity(proxy, incarnation, now + CONVERGENCE_WINDOW, Utc::now())
+                .unwrap();
+        }
+        state.tick(now + CONVERGENCE_WINDOW, Utc::now());
+        assert!(state.is_ready());
+
+        let (command_ids, effects) = state
+            .begin_user_kill("alice", now + CONVERGENCE_WINDOW)
+            .unwrap();
+        assert_eq!(command_ids.len(), 2);
+        let mut per_session: HashMap<String, Vec<Uuid>> = HashMap::new();
+        for effect in &effects {
+            let Effect::Send {
+                session,
+                frame:
+                    ServerFrame::KillRegistrations {
+                        registration_ids, ..
+                    },
+            } = effect
+            else {
+                continue;
+            };
+            per_session.insert(session.proxy_id.clone(), registration_ids.clone());
+        }
+        assert_eq!(per_session.len(), 2);
+        let p1_ids = per_session.get("p1").expect("p1 command");
+        assert_eq!(p1_ids.len(), 2);
+        assert!(p1_ids.contains(&first));
+        assert!(p1_ids.contains(&second));
+        assert_eq!(per_session.get("p2").expect("p2 command"), &vec![third]);
+        // bob's row is never targeted.
+        let targeted: HashSet<Uuid> = per_session.values().flatten().copied().collect();
+        assert!(!targeted.contains(&bob_registration));
+        assert_eq!(state.tunnel_views().len(), 4);
     }
 
     fn kill_command(effects: &[Effect], proxy_id: &str, registration_id: Uuid) -> Uuid {
