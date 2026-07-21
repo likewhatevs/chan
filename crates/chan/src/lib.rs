@@ -172,14 +172,17 @@ bare `chan workspace add` only registers, while serving mounts the
 workspace so the editor, terminal, search, graph, and a devserver can
 reach it. The path is always explicit -- a bare `chan open` is an error.
 
-Where it serves follows the shell's parentage. From a chan-desktop
-terminal it hands the workspace to a native window and exits; from a
-`chan devserver` terminal it registers the workspace with that devserver
-and exits; from a plain shell it binds a local server and stays in the
-foreground until Ctrl-C. --standalone / --desktop / --devserver force
-one target. A handoff that cannot land (nothing running, version skew,
-mount error, CHAN_NO_DESKTOP_HANDOFF / CHAN_NO_DEVSERVER_HANDOFF) falls
-through to a standalone server, so the workspace is never left unserved.
+Where it serves follows the shell's parentage and the live same-user
+instances on the box. A chan-desktop terminal stays with the desktop; a
+`chan devserver` terminal stays with that devserver. From a plain shell,
+one live desktop or devserver wins automatically. With both kinds live,
+the standalone CLI prefers the devserver and the desktop CLI preserves
+its desktop behavior. With neither, the standalone CLI binds a local
+server and stays in the foreground until Ctrl-C. --standalone, --desktop,
+and --devserver force one target. --devserver=<port|url> names one local
+devserver explicitly. A missing explicit devserver or an ambiguous set is
+refused rather than guessed; other failed handoffs fall through to a
+standalone server.
 
 The standalone server binds 127.0.0.1:8787 by default (::1 with -6),
 prints "chan is ready:" and the tokened URL on stderr, and opens the
@@ -530,16 +533,24 @@ enum Command {
         /// --devserver.
         #[arg(long, conflicts_with_all = ["standalone", "devserver"], verbatim_doc_comment)]
         desktop: bool,
-        /// Force the local-devserver registration: register this workspace
-        /// with a running same-user devserver, which mounts it and owns its
-        /// writer lock, then exit. Overrides the shell-parentage default.
-        /// Falls through to a standalone server when no devserver is reachable
-        /// (skew, error, or CHAN_NO_DEVSERVER_HANDOFF). Refused from inside a
-        /// devserver shell -- nesting a devserver in a devserver is
-        /// unsupported; omit the flag to register with the current one.
-        /// Mutually exclusive with --standalone / --desktop.
-        #[arg(long, conflicts_with_all = ["standalone", "desktop"], verbatim_doc_comment)]
-        devserver: bool,
+        /// Force local-devserver registration. A bare --devserver selects the
+        /// only live same-user devserver, or the unique one whose library root
+        /// matches this CLI's CHAN_HOME. --devserver=<port|url> selects one
+        /// explicitly and refuses when it is not live. Refused from inside a
+        /// devserver shell -- nesting a devserver in a devserver is unsupported;
+        /// omit the flag to register with the current one. Mutually exclusive
+        /// with --standalone / --desktop.
+        #[arg(
+            long,
+            value_name = "PORT|URL",
+            num_args = 0..=1,
+            default_missing_value = "auto",
+            require_equals = true,
+            value_parser = parse_devserver_selector,
+            conflicts_with_all = ["standalone", "desktop"],
+            verbatim_doc_comment
+        )]
+        devserver: Option<DevserverSelector>,
     },
     /// Show which registered workspaces are served, and by what
     #[command(long_about = help::CHAN_PS)]
@@ -1133,12 +1144,14 @@ where
 /// desktop-aware subcommands behave.
 ///
 /// - [`Personality::Standalone`] -- the `chan` binary from install.sh (and
-///   the `cs -> chan` symlink). `chan open` always runs its own server and
-///   opens the browser; it never hands off to a running chan-desktop.
+///   the `cs -> chan` symlink). With both a desktop and devserver live,
+///   `chan open` prefers the devserver; with neither it runs its own server
+///   and opens the browser.
 ///   `chan upgrade` replaces the CLI tarball in place.
 /// - [`Personality::Desktop`] -- chan-desktop invoked as `chan` (via the
 ///   `~/.local/bin/chan` shim). `chan open` integrates with the desktop:
-///   it hands the workspace to the running desktop, or launches the GUI.
+///   it prefers a live devserver when no desktop is running, otherwise hands
+///   the workspace to the desktop or launches the GUI.
 ///   `chan upgrade` drives the desktop's `tauri-plugin-updater`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Personality {
@@ -2377,6 +2390,45 @@ struct ServeArgs {
     verbose: bool,
 }
 
+/// Optional value accepted by `chan open --devserver[=<port|url>]`.
+/// `Auto` is the bare flag; a URL is normalized to its effective port because
+/// local discovery identifies instances by their bound port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DevserverSelector {
+    Auto,
+    Port(u16),
+}
+
+fn parse_devserver_selector(raw: &str) -> std::result::Result<DevserverSelector, String> {
+    if raw == "auto" {
+        return Ok(DevserverSelector::Auto);
+    }
+    if !raw.is_empty() && raw.bytes().all(|b| b.is_ascii_digit()) {
+        let port = raw
+            .parse::<u16>()
+            .map_err(|_| format!("invalid devserver port {raw:?}: expected 1..=65535"))?;
+        return if port == 0 {
+            Err("invalid devserver port 0: expected 1..=65535".into())
+        } else {
+            Ok(DevserverSelector::Port(port))
+        };
+    }
+    if !raw.contains("://") {
+        return Err(format!(
+            "invalid devserver selector {raw:?}: expected a port or URL"
+        ));
+    }
+    let url =
+        reqwest::Url::parse(raw).map_err(|e| format!("invalid devserver URL {raw:?}: {e}"))?;
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| format!("devserver URL {raw:?} has no port"))?;
+    if port == 0 {
+        return Err("invalid devserver port 0: expected 1..=65535".into());
+    }
+    Ok(DevserverSelector::Port(port))
+}
+
 /// The explicit, mutually exclusive `chan open` target flags. clap's
 /// `conflicts_with_all` rejects more than one at parse time; the routing
 /// resolver ([`decide_open_route`]) guards the same invariant.
@@ -2384,7 +2436,7 @@ struct ServeArgs {
 struct OpenFlags {
     standalone: bool,
     desktop: bool,
-    devserver: bool,
+    devserver: Option<DevserverSelector>,
 }
 
 /// Where `chan open` routes a workspace: bind a standalone server here, hand
@@ -2403,7 +2455,7 @@ enum Parentage {
     /// A chan-desktop terminal: its control socket answers `Desktop`.
     Desktop,
     /// A `chan devserver` terminal: its control socket answers `Devserver`.
-    Devserver,
+    Devserver { pid: u32 },
     /// No chan parent detected (a plain shell, not chan-spawned), an
     /// unreachable holder, or a standalone serve -- the load-bearing
     /// "undetectable -> standalone" case.
@@ -2422,29 +2474,36 @@ enum RouteError {
     NestedDevserver,
 }
 
-/// Resolve a `chan open` routing decision from the explicit flags, the shell's
-/// parentage, whether the desktop handoff is forced, and whether a chan
-/// control socket is present in the environment. PURE: the I/O (parentage
-/// probe, the actual handoff / registration) lives in the caller.
+/// Side-effect-free liveness snapshot supplied to [`decide_open_route`].
+/// The resolver needs only presence/count; concrete devserver selection is a
+/// separate pure step after the target kind is chosen.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct LiveInstances {
+    desktop: bool,
+    devservers: usize,
+}
+
+/// Resolve a `chan open` routing decision from explicit flags, shell parentage,
+/// binary personality, chan-context presence, and a live-instance snapshot.
+/// PURE: every probe and the actual handoff/registration live in the caller.
 ///
 /// Precedence: an explicit flag wins (subject to the nested-devserver
 /// refusal); otherwise a devserver parentage registers with that devserver
 /// (a stronger signal than a forced-desktop env var inherited into the
-/// shell), a desktop parentage hands off, and an undetectable parentage binds
-/// a standalone server -- unless `forced_desktop` (a `Personality::Desktop`
-/// binary or `CHAN_DESKTOP_HANDOFF=1`, the desktop shim's contract) elects the
-/// desktop handoff for that otherwise-standalone case. `forced_desktop` only
-/// elects the handoff when NO chan control socket is present
-/// (`chan_context_present` false): a present-but-unidentified socket (a wedged
-/// or timed-out probe) means we are in some chan context, so prefer standalone
-/// over a possibly-leaked `CHAN_DESKTOP_HANDOFF` rather than misroute it.
+/// shell), and desktop parentage hands off. With no identified parent, one live
+/// kind wins; with both kinds live, the desktop personality chooses desktop and
+/// the standalone personality chooses a devserver. With neither live, the
+/// historical standalone/desktop-personality behavior remains. A present but
+/// unidentified control socket preserves the conservative standalone fallback
+/// only when no live instance supplies a stronger signal.
 fn decide_open_route(
     flags: OpenFlags,
     parentage: Parentage,
     forced_desktop: bool,
     chan_context_present: bool,
+    live: LiveInstances,
 ) -> Result<OpenTarget, RouteError> {
-    let explicit = match (flags.standalone, flags.desktop, flags.devserver) {
+    let explicit = match (flags.standalone, flags.desktop, flags.devserver.is_some()) {
         (false, false, false) => None,
         (true, false, false) => Some(OpenTarget::Standalone),
         (false, true, false) => Some(OpenTarget::Desktop),
@@ -2453,7 +2512,7 @@ fn decide_open_route(
     };
 
     if let Some(target) = explicit {
-        if target == OpenTarget::Devserver && parentage == Parentage::Devserver {
+        if target == OpenTarget::Devserver && matches!(parentage, Parentage::Devserver { .. }) {
             return Err(RouteError::NestedDevserver);
         }
         return Ok(target);
@@ -2463,21 +2522,129 @@ fn decide_open_route(
         // In a devserver shell: register with the current devserver. This
         // beats a forced-desktop env var that leaked into the session, which
         // is what routed a devserver shell to chan-desktop before.
-        Parentage::Devserver => OpenTarget::Devserver,
+        Parentage::Devserver { .. } => OpenTarget::Devserver,
         Parentage::Desktop => OpenTarget::Desktop,
-        // No identified parent. The desktop shim / Desktop personality forces
-        // the handoff (the Windows bundle's console chan.exe depends on it)
-        // ONLY for a truly plain shell; a present-but-unidentified control
-        // socket prefers standalone so a devserver shell whose probe wedged is
-        // not misrouted to desktop. Otherwise bind a standalone server.
-        Parentage::None => {
-            if forced_desktop && !chan_context_present {
-                OpenTarget::Desktop
-            } else {
-                OpenTarget::Standalone
-            }
-        }
+        // No identified parent. A sole live instance wins regardless of binary
+        // personality. With both kinds live, the standalone personality prefers
+        // a devserver and the desktop personality preserves its desktop contract.
+        // With neither live, the desktop personality may launch the GUI. A
+        // present-but-unidentified chan socket retains the conservative
+        // standalone fallback only when no live target can correct the guess.
+        Parentage::None => match (live.desktop, live.devservers > 0) {
+            (true, false) => OpenTarget::Desktop,
+            (false, true) => OpenTarget::Devserver,
+            (true, true) if forced_desktop => OpenTarget::Desktop,
+            (true, true) => OpenTarget::Devserver,
+            (false, false) if chan_context_present => OpenTarget::Standalone,
+            (false, false) if forced_desktop => OpenTarget::Desktop,
+            (false, false) => OpenTarget::Standalone,
+        },
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DevserverSelectionError {
+    NotFound { port: u16 },
+    Ambiguous,
+}
+
+/// CLI-owned snapshot of a discovered instance. Keeping selection on this
+/// value type makes the resolver independent of the transport handle carried
+/// by `chan-server`'s discovery result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DevserverCandidate {
+    instance_index: usize,
+    pid: u32,
+    library_root: PathBuf,
+    port: u16,
+    version: String,
+}
+
+fn devserver_candidates(
+    instances: &[chan_server::devserver_handoff::Instance],
+) -> Vec<DevserverCandidate> {
+    instances
+        .iter()
+        .enumerate()
+        .map(|(instance_index, instance)| DevserverCandidate {
+            instance_index,
+            pid: instance.pid,
+            library_root: instance.library_root.clone(),
+            port: instance.port,
+            version: instance.version.clone(),
+        })
+        .collect()
+}
+
+/// Resolve one concrete devserver without guessing. An explicit selector wins;
+/// otherwise a devserver parent pid is stronger than the CLI's library root,
+/// which is stronger than an arbitrary candidate order.
+fn select_devserver<'a>(
+    instances: &'a [DevserverCandidate],
+    selector: Option<DevserverSelector>,
+    parent_pid: Option<u32>,
+    library_root: &Path,
+) -> std::result::Result<Option<&'a DevserverCandidate>, DevserverSelectionError> {
+    if let Some(DevserverSelector::Port(port)) = selector {
+        let mut matches = instances.iter().filter(|instance| instance.port == port);
+        let selected = matches.next();
+        return match (selected, matches.next()) {
+            (None, _) => Err(DevserverSelectionError::NotFound { port }),
+            (Some(_), Some(_)) => Err(DevserverSelectionError::Ambiguous),
+            (Some(instance), None) => Ok(Some(instance)),
+        };
+    }
+
+    match instances {
+        [] => return Ok(None),
+        [instance] => return Ok(Some(instance)),
+        _ => {}
+    }
+
+    if let Some(pid) = parent_pid {
+        let mut matches = instances.iter().filter(|instance| instance.pid == pid);
+        if let Some(instance) = matches.next() {
+            if matches.next().is_none() {
+                return Ok(Some(instance));
+            }
+            return Err(DevserverSelectionError::Ambiguous);
+        }
+    }
+
+    let mut matches = instances
+        .iter()
+        .filter(|instance| same_path(&instance.library_root, library_root));
+    match (matches.next(), matches.next()) {
+        (Some(instance), None) => Ok(Some(instance)),
+        _ => Err(DevserverSelectionError::Ambiguous),
+    }
+}
+
+fn sorted_devservers(instances: &[DevserverCandidate]) -> Vec<&DevserverCandidate> {
+    let mut sorted: Vec<_> = instances.iter().collect();
+    sorted.sort_by(|a, b| {
+        a.port
+            .cmp(&b.port)
+            .then_with(|| a.library_root.cmp(&b.library_root))
+            .then_with(|| a.version.cmp(&b.version))
+            .then_with(|| a.pid.cmp(&b.pid))
+    });
+    sorted
+}
+
+fn devserver_candidates_text(instances: &[DevserverCandidate]) -> String {
+    let mut text = String::new();
+    for instance in sorted_devservers(instances) {
+        use std::fmt::Write as _;
+        let _ = write!(
+            text,
+            "\n  port {}  library {}  chan {}",
+            instance.port,
+            instance.library_root.display(),
+            instance.version,
+        );
+    }
+    text
 }
 
 /// The chan control socket exported into a chan-spawned terminal
@@ -2529,8 +2696,9 @@ async fn probe_parentage(socket: &Path, timeout: Duration) -> Parentage {
         }) => Parentage::Desktop,
         Ok(chan_shell::Identity {
             kind: chan_shell::ServeKind::Devserver,
+            pid,
             ..
-        }) => Parentage::Devserver,
+        }) => Parentage::Devserver { pid },
         // A standalone holder, or a reply we cannot parse: not a context that
         // changes the default.
         _ => Parentage::None,
@@ -2637,7 +2805,7 @@ async fn cmd_open_devserver(
 /// serving kind ⇒ not a devserver context (so a plain shell or a desktop
 /// terminal proceeds to the handoff).
 async fn in_devserver_context() -> bool {
-    detect_parentage().await == Parentage::Devserver
+    matches!(detect_parentage().await, Parentage::Devserver { .. })
 }
 
 async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
@@ -2679,42 +2847,83 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
             std::process::exit(70);
         }
     }
-    // Routing decision. `chan open` resolves ONE target -- standalone serve,
-    // desktop handoff, or devserver registration -- then dispatches, falling
-    // THROUGH to a working standalone serve on any handoff/registration failure
-    // so a workspace is never left unserved. The target is an explicit
-    // --standalone/--desktop/--devserver flag, else the shell's parentage
-    // default (a desktop terminal hands off, a devserver terminal registers, an
-    // undetectable shell binds standalone). `Personality::Desktop` and
-    // `CHAN_DESKTOP_HANDOFF=1` (`handoff_forced`, the desktop shim's contract
-    // -- the Windows console chan.exe depends on it) force the desktop target
-    // when no parent is detected. The decision runs BEFORE any state mutation
-    // (like the VCS gate): a refused route must create nothing.
+    // Resolve parentage and live local instances before choosing one target.
+    // Explicit standalone/desktop skips probes it does not need; discovery is
+    // lazy on their eventual bind-collision path. Selection refusal happens
+    // before the workspace root or registry is mutated.
     let forced_desktop =
         personality == Personality::Desktop || chan_server::handoff::handoff_forced();
-    // Whether we are in any chan context, independent of whether its kind
-    // resolves -- a present-but-unidentified socket steers the no-parent
-    // default to standalone over a leaked CHAN_DESKTOP_HANDOFF.
     let chan_context_present = chan_control_socket().is_some();
-    // The parentage probe is an `Identify` round-trip; skip it when an explicit
-    // --standalone/--desktop already decides the route (parentage only matters
-    // for the no-flag default and the --devserver nested-shell refusal).
     let parentage = if flags.standalone || flags.desktop {
         Parentage::None
     } else {
         detect_parentage().await
     };
-    let target = match decide_open_route(flags, parentage, forced_desktop, chan_context_present) {
-        Ok(target) => target,
-        Err(RouteError::NestedDevserver) => anyhow::bail!(
-            "you are already in a devserver; omit --devserver to register with \
+    let no_explicit_target = !flags.standalone && !flags.desktop && flags.devserver.is_none();
+    let devserver_opt_out = chan_server::devserver_handoff::devserver_handoff_opt_out();
+    let desktop_opt_out = chan_server::handoff::handoff_opt_out();
+    let need_devservers = !devserver_opt_out
+        && (flags.devserver.is_some()
+            || no_explicit_target
+                && matches!(parentage, Parentage::None | Parentage::Devserver { .. }));
+    let mut devservers = if need_devservers {
+        Some(chan_server::devserver_handoff::discover_devservers().await)
+    } else {
+        None
+    };
+    let mut candidates = devservers
+        .as_deref()
+        .map(devserver_candidates)
+        .unwrap_or_default();
+    let desktop_live = !desktop_opt_out
+        && no_explicit_target
+        && parentage == Parentage::None
+        && chan_server::handoff::desktop_is_live().await;
+    let live = LiveInstances {
+        desktop: desktop_live,
+        devservers: candidates.len(),
+    };
+    let target =
+        match decide_open_route(flags, parentage, forced_desktop, chan_context_present, live) {
+            Ok(target) => target,
+            Err(RouteError::NestedDevserver) => anyhow::bail!(
+                "you are already in a devserver; omit --devserver to register with \
              it, or use --standalone / --desktop"
-        ),
-        // clap's `conflicts_with_all` rejects this at parse time; bail with the
-        // same intent if it ever reaches here.
-        Err(RouteError::MultipleTargets) => {
-            anyhow::bail!("choose at most one of --standalone, --desktop, --devserver")
+            ),
+            // clap's `conflicts_with_all` rejects this at parse time; bail with the
+            // same intent if it ever reaches here.
+            Err(RouteError::MultipleTargets) => {
+                anyhow::bail!("choose at most one of --standalone, --desktop, --devserver")
+            }
+        };
+
+    let parent_pid = match parentage {
+        Parentage::Devserver { pid } => Some(pid),
+        Parentage::Desktop | Parentage::None => None,
+    };
+    let library_root = lib
+        .config_path()
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(chan_workspace::paths::config_dir);
+    let library_root = absolutize_serve_root(library_root);
+    let selected_devserver = if target == OpenTarget::Devserver && !devserver_opt_out {
+        match select_devserver(&candidates, flags.devserver, parent_pid, &library_root) {
+            Ok(instance) => instance.map(|instance| instance.instance_index),
+            Err(DevserverSelectionError::NotFound { port }) => anyhow::bail!(
+                "no live local devserver matches --devserver={port}.{}\nUse `chan open \
+                 --devserver` to select automatically, or start the requested instance.",
+                devserver_candidates_text(&candidates),
+            ),
+            Err(DevserverSelectionError::Ambiguous) => anyhow::bail!(
+                "multiple local devservers are live and no unique target was found for library \
+                 {}.{}\nChoose one with --devserver=<port|url>.",
+                library_root.display(),
+                devserver_candidates_text(&candidates),
+            ),
         }
+    } else {
+        None
     };
 
     // Create the workspace root only AFTER the route is settled, so a refused
@@ -2734,7 +2943,28 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
         // instead. Every fallback (no desktop, refused, skew, GUI-absent,
         // CHAN_NO_DESKTOP_HANDOFF) drops through to the standalone path below.
         OpenTarget::Desktop => {
-            if let Some(outcome) = maybe_handoff_to_desktop(&root, forced_desktop).await {
+            let desktop_known_live = desktop_live || parentage == Parentage::Desktop;
+            if let Some(outcome) =
+                maybe_handoff_to_desktop(&root, forced_desktop, desktop_known_live).await
+            {
+                if outcome.is_ok()
+                    && forced_desktop
+                    && parentage == Parentage::None
+                    && live.desktop
+                    && live.devservers > 0
+                    && !candidates.is_empty()
+                {
+                    for instance in sorted_devservers(&candidates) {
+                        println!(
+                            "chan: local devserver on port {} (library {}, chan {}) was not \
+                                 selected; use --devserver={} to choose it.",
+                            instance.port,
+                            instance.library_root.display(),
+                            instance.version,
+                            instance.port,
+                        );
+                    }
+                }
                 return outcome;
             }
         }
@@ -2744,13 +2974,21 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
         // attempt, serve standalone); every non-registered outcome drops
         // through to the standalone path below.
         OpenTarget::Devserver => {
-            if !chan_server::devserver_handoff::devserver_handoff_opt_out() {
+            if let Some(instance_index) = selected_devserver {
+                let instance = &devservers
+                    .as_ref()
+                    .expect("selected devserver came from discovery")[instance_index];
                 use chan_server::devserver_handoff::Outcome;
-                match chan_server::devserver_handoff::try_register_devserver(&root).await {
+                match chan_server::devserver_handoff::try_register_devserver(instance, &root).await
+                {
                     Outcome::Registered { prefix: _ } => {
                         println!(
-                            "chan: registered {} with the local devserver",
-                            root.display()
+                            "chan: registered {} with local devserver on port {} (library {}, chan \
+                             {})",
+                            root.display(),
+                            instance.port,
+                            instance.library_root.display(),
+                            instance.version,
                         );
                         return Ok(());
                     }
@@ -2766,8 +3004,13 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
                              ({message}); starting a standalone server."
                         );
                     }
-                    // No devserver discovered: the load-bearing default path.
-                    Outcome::NoDevserver => {}
+                    Outcome::NoDevserver => {
+                        if let Some(DevserverSelector::Port(port)) = flags.devserver {
+                            anyhow::bail!(
+                                "local devserver selected by --devserver={port} is no longer live"
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -2837,15 +3080,20 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
         // deployments where the operator is not the workspace owner.
         settings_disabled: no_settings,
     };
-    // A standalone `chan open` defaults to `DEFAULT_PORT` (8787) -- the SAME
-    // default as `chan devserver`. When a devserver already owns that port but
-    // its handoff did NOT mount this workspace (version skew, mount error, or
-    // the registration was opted out), the fall-through standalone bind here
-    // collides. Recognize that exact case and print an actionable hint instead
-    // of a bare "address already in use", which otherwise reads as a chan bug.
+    // A standalone `chan open` and a devserver share DEFAULT_PORT. On collision,
+    // use the discovery snapshot to distinguish one of this user's devservers
+    // from an unrelated holder. Explicit standalone/desktop routes discover
+    // lazily here so their healthy startup path pays no probe cost.
     let serve_result = chan_server::serve(lib, workspace, config).await;
     if let Err(err) = &serve_result {
-        if let Some(hint) = devserver_port_collision_hint(addr.port(), err) {
+        if devserver_port_collision_hint(addr.port(), err, &[]).is_some() && devservers.is_none() {
+            devservers = Some(chan_server::devserver_handoff::discover_devservers().await);
+            candidates = devservers
+                .as_deref()
+                .map(devserver_candidates)
+                .unwrap_or_default();
+        }
+        if let Some(hint) = devserver_port_collision_hint(addr.port(), err, &candidates) {
             return Err(anyhow::anyhow!(hint));
         }
     }
@@ -2854,11 +3102,14 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
 
 /// Actionable hint for the one bind failure a user is most likely to hit and
 /// least likely to diagnose: `chan open` falling through to a standalone bind
-/// on `DEFAULT_PORT` while a `chan devserver` already owns it. Returns `Some`
-/// only for an `AddrInUse` on exactly that port; every other error falls
-/// through to the generic "running server on {addr}" context unchanged (no
-/// behaviour change -- this is purely a clearer message).
-fn devserver_port_collision_hint(port: u16, err: &chan_server::Error) -> Option<String> {
+/// on `DEFAULT_PORT`. Returns `Some` only for an `AddrInUse` on exactly that
+/// port; every other error keeps the generic server context. A discovered
+/// same-user devserver is named only when it reports the collided port.
+fn devserver_port_collision_hint(
+    port: u16,
+    err: &chan_server::Error,
+    instances: &[DevserverCandidate],
+) -> Option<String> {
     if port != DEFAULT_PORT {
         return None;
     }
@@ -2868,11 +3119,20 @@ fn devserver_port_collision_hint(port: u16, err: &chan_server::Error) -> Option<
     if io_err.kind() != std::io::ErrorKind::AddrInUse {
         return None;
     }
+    if let Some(instance) = instances.iter().find(|instance| instance.port == port) {
+        return Some(format!(
+            "port {DEFAULT_PORT} is already in use, and your local devserver on that port \
+             (library {}, chan {}) did not mount this workspace. Re-run with \
+             `--devserver={DEFAULT_PORT}` to register there, or `--port N` to bind a \
+             standalone server elsewhere.",
+            instance.library_root.display(),
+            instance.version,
+        ));
+    }
     Some(format!(
-        "port {DEFAULT_PORT} is already in use -- most likely held by a running \
-         `chan devserver` (its default port). The handoff did not mount this \
-         workspace there, so `chan open` fell through to a standalone server and \
-         could not bind. Re-run with `--port N` to use a different port."
+        "port {DEFAULT_PORT} is already in use, but no devserver of yours was discovered \
+         on that port. Another process or another user's devserver may hold it. Re-run \
+         with `--port N` to bind a standalone server elsewhere."
     ))
 }
 
@@ -4573,17 +4833,21 @@ async fn recent_launchd_log() -> String {
 ///   standalone server path. These are the cases where a browser/URL is the
 ///   only sensible outcome.
 ///
-/// The caller already restricted this to the Desktop personality and excluded
-/// tunnel mode. Here we add the GUI-session + explicit-opt-out gates, then
-/// hand off to a running desktop or launch one.
-async fn maybe_handoff_to_desktop(root: &Path, launch_if_absent: bool) -> Option<Result<()>> {
+/// The caller already chose the desktop target. Here we add the explicit
+/// opt-out and require a GUI session only when no running desktop was already
+/// proven, then hand off or let the desktop personality launch the app.
+async fn maybe_handoff_to_desktop(
+    root: &Path,
+    launch_if_absent: bool,
+    desktop_known_live: bool,
+) -> Option<Result<()>> {
     // Explicit opt-out for automation, and the headless auto-skip: over SSH
     // (no GUI session) there's no window to show, so a printed URL is the
     // only useful outcome. Both keep the load-bearing standalone path.
     if chan_server::handoff::handoff_opt_out() {
         return None;
     }
-    if !chan_server::handoff::gui_session_present() {
+    if !desktop_known_live && !chan_server::handoff::gui_session_present() {
         return None;
     }
 
@@ -6321,25 +6585,40 @@ mod tests {
     fn devserver_collision_hint_only_on_default_port_addr_in_use() {
         use std::io::{Error as IoError, ErrorKind};
         let in_use = || chan_server::Error::Io(IoError::from(ErrorKind::AddrInUse));
+        let matching = DevserverCandidate {
+            instance_index: 0,
+            pid: 41,
+            library_root: PathBuf::from("/home/me/.chan"),
+            port: DEFAULT_PORT,
+            version: "0.74.0".into(),
+        };
+        let other_port = DevserverCandidate {
+            port: 9999,
+            ..matching.clone()
+        };
 
-        // Default port + AddrInUse → the actionable hint, naming the port and
-        // the `--port` escape hatch.
-        let hint = devserver_port_collision_hint(DEFAULT_PORT, &in_use()).expect("hint");
+        let hint =
+            devserver_port_collision_hint(DEFAULT_PORT, &in_use(), &[matching]).expect("hint");
         assert!(hint.contains(&DEFAULT_PORT.to_string()), "{hint}");
+        assert!(hint.contains("your local devserver"), "{hint}");
+        assert!(hint.contains("/home/me/.chan"), "{hint}");
+        assert!(hint.contains("--devserver=8787"), "{hint}");
         assert!(hint.contains("--port"), "{hint}");
 
-        // A non-default port is not special-cased (the collision is specific to
-        // the shared devserver default) → falls through.
-        assert!(devserver_port_collision_hint(9999, &in_use()).is_none());
+        // A live devserver on another port does not explain this collision.
+        let hint =
+            devserver_port_collision_hint(DEFAULT_PORT, &in_use(), &[other_port]).expect("hint");
+        assert!(hint.contains("no devserver of yours"), "{hint}");
+        assert!(hint.contains("another user's"), "{hint}");
+        assert!(!hint.contains("did not mount"), "{hint}");
 
-        // A different io error on the default port is not the collision → falls
-        // through to the generic context.
+        assert!(devserver_port_collision_hint(9999, &in_use(), &[]).is_none());
+
         let denied = chan_server::Error::Io(IoError::from(ErrorKind::PermissionDenied));
-        assert!(devserver_port_collision_hint(DEFAULT_PORT, &denied).is_none());
+        assert!(devserver_port_collision_hint(DEFAULT_PORT, &denied, &[]).is_none());
 
-        // A non-io error on the default port falls through too.
         let cfg = chan_server::Error::Config("nope".into());
-        assert!(devserver_port_collision_hint(DEFAULT_PORT, &cfg).is_none());
+        assert!(devserver_port_collision_hint(DEFAULT_PORT, &cfg, &[]).is_none());
     }
 
     #[test]
@@ -6397,53 +6676,58 @@ mod tests {
     const NO_FLAGS: OpenFlags = OpenFlags {
         standalone: false,
         desktop: false,
-        devserver: false,
+        devserver: None,
     };
 
-    /// `decide_open_route` with the realistic context-presence implied by
-    /// parentage: a desktop / devserver parent exports a control socket; a
-    /// `None` parentage here stands for a plain shell with none. The
-    /// present-but-unidentified case is exercised explicitly in
-    /// `route_present_unidentified_prefers_standalone`.
     fn route(
         flags: OpenFlags,
         parentage: Parentage,
         forced_desktop: bool,
+        live: LiveInstances,
     ) -> Result<OpenTarget, RouteError> {
         let present = parentage != Parentage::None;
-        decide_open_route(flags, parentage, forced_desktop, present)
+        decide_open_route(flags, parentage, forced_desktop, present, live)
     }
 
     #[test]
     fn route_explicit_flag_forces_its_target() {
-        // Each explicit flag forces its target regardless of parentage.
-        for parentage in [Parentage::Desktop, Parentage::Devserver, Parentage::None] {
+        for parentage in [
+            Parentage::Desktop,
+            Parentage::Devserver { pid: 42 },
+            Parentage::None,
+        ] {
             let standalone = OpenFlags {
                 standalone: true,
                 ..NO_FLAGS
             };
             assert_eq!(
-                route(standalone, parentage, false),
+                route(standalone, parentage, false, LiveInstances::default()),
                 Ok(OpenTarget::Standalone)
             );
             let desktop = OpenFlags {
                 desktop: true,
                 ..NO_FLAGS
             };
-            assert_eq!(route(desktop, parentage, false), Ok(OpenTarget::Desktop));
+            assert_eq!(
+                route(desktop, parentage, false, LiveInstances::default()),
+                Ok(OpenTarget::Desktop)
+            );
         }
-        // --devserver forces the devserver target everywhere EXCEPT inside a
-        // devserver shell, where it is refused (covered separately).
         let devserver = OpenFlags {
-            devserver: true,
+            devserver: Some(DevserverSelector::Auto),
             ..NO_FLAGS
         };
         assert_eq!(
-            route(devserver, Parentage::Desktop, false),
+            route(
+                devserver,
+                Parentage::Desktop,
+                false,
+                LiveInstances::default()
+            ),
             Ok(OpenTarget::Devserver)
         );
         assert_eq!(
-            route(devserver, Parentage::None, false),
+            route(devserver, Parentage::None, false, LiveInstances::default()),
             Ok(OpenTarget::Devserver)
         );
     }
@@ -6457,46 +6741,82 @@ mod tests {
             ..NO_FLAGS
         };
         assert_eq!(
-            route(standalone, Parentage::None, true),
+            route(standalone, Parentage::None, true, LiveInstances::default()),
             Ok(OpenTarget::Standalone)
         );
         assert_eq!(
-            route(standalone, Parentage::Desktop, true),
-            Ok(OpenTarget::Standalone)
-        );
-    }
-
-    #[test]
-    fn route_parentage_default_no_flag() {
-        // No flag: parentage picks the default.
-        assert_eq!(
-            route(NO_FLAGS, Parentage::Desktop, false),
-            Ok(OpenTarget::Desktop)
-        );
-        assert_eq!(
-            route(NO_FLAGS, Parentage::Devserver, false),
-            Ok(OpenTarget::Devserver)
-        );
-        assert_eq!(
-            route(NO_FLAGS, Parentage::None, false),
+            route(
+                standalone,
+                Parentage::Desktop,
+                true,
+                LiveInstances::default()
+            ),
             Ok(OpenTarget::Standalone)
         );
     }
 
     #[test]
-    fn route_forced_desktop_only_elects_when_undetectable() {
-        // forced_desktop elects the desktop target only for a truly plain shell
-        // (no control socket) -- the Windows bundle's plain console.
-        assert_eq!(
-            route(NO_FLAGS, Parentage::None, true),
-            Ok(OpenTarget::Desktop)
-        );
-        // A live devserver parentage BEATS a forced-desktop env var that leaked
-        // into the shell -- the original devserver-shell-to-desktop bug.
-        assert_eq!(
-            route(NO_FLAGS, Parentage::Devserver, true),
-            Ok(OpenTarget::Devserver)
-        );
+    fn route_live_instance_matrix() {
+        let sets = [
+            (
+                LiveInstances::default(),
+                OpenTarget::Standalone,
+                OpenTarget::Desktop,
+            ),
+            (
+                LiveInstances {
+                    desktop: true,
+                    devservers: 0,
+                },
+                OpenTarget::Desktop,
+                OpenTarget::Desktop,
+            ),
+            (
+                LiveInstances {
+                    desktop: false,
+                    devservers: 1,
+                },
+                OpenTarget::Devserver,
+                OpenTarget::Devserver,
+            ),
+            (
+                LiveInstances {
+                    desktop: true,
+                    devservers: 2,
+                },
+                OpenTarget::Devserver,
+                OpenTarget::Desktop,
+            ),
+        ];
+        for (live, standalone_want, desktop_want) in sets {
+            assert_eq!(
+                route(NO_FLAGS, Parentage::None, false, live),
+                Ok(standalone_want),
+                "standalone personality, live={live:?}"
+            );
+            assert_eq!(
+                route(NO_FLAGS, Parentage::None, true, live),
+                Ok(desktop_want),
+                "desktop personality, live={live:?}"
+            );
+            for forced_desktop in [false, true] {
+                assert_eq!(
+                    route(NO_FLAGS, Parentage::Desktop, forced_desktop, live),
+                    Ok(OpenTarget::Desktop),
+                    "desktop parent, forced={forced_desktop}, live={live:?}"
+                );
+                assert_eq!(
+                    route(
+                        NO_FLAGS,
+                        Parentage::Devserver { pid: 42 },
+                        forced_desktop,
+                        live,
+                    ),
+                    Ok(OpenTarget::Devserver),
+                    "devserver parent, forced={forced_desktop}, live={live:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -6505,12 +6825,36 @@ mod tests {
         // timed-out probe -> Parentage::None). Even with a leaked
         // CHAN_DESKTOP_HANDOFF, prefer standalone over misrouting to desktop.
         assert_eq!(
-            decide_open_route(NO_FLAGS, Parentage::None, true, true),
+            decide_open_route(
+                NO_FLAGS,
+                Parentage::None,
+                true,
+                true,
+                LiveInstances::default()
+            ),
             Ok(OpenTarget::Standalone)
         );
-        // The plain-shell counterpart (no socket) still honors forced-desktop.
         assert_eq!(
-            decide_open_route(NO_FLAGS, Parentage::None, true, false),
+            decide_open_route(
+                NO_FLAGS,
+                Parentage::None,
+                true,
+                true,
+                LiveInstances {
+                    desktop: false,
+                    devservers: 1,
+                }
+            ),
+            Ok(OpenTarget::Devserver)
+        );
+        assert_eq!(
+            decide_open_route(
+                NO_FLAGS,
+                Parentage::None,
+                true,
+                false,
+                LiveInstances::default()
+            ),
             Ok(OpenTarget::Desktop)
         );
     }
@@ -6520,15 +6864,25 @@ mod tests {
         // Explicit --devserver from inside a devserver shell is refused; the
         // no-flag default in the same shell registers transparently.
         let devserver = OpenFlags {
-            devserver: true,
+            devserver: Some(DevserverSelector::Auto),
             ..NO_FLAGS
         };
         assert_eq!(
-            route(devserver, Parentage::Devserver, false),
+            route(
+                devserver,
+                Parentage::Devserver { pid: 42 },
+                false,
+                LiveInstances::default()
+            ),
             Err(RouteError::NestedDevserver)
         );
         assert_eq!(
-            route(NO_FLAGS, Parentage::Devserver, false),
+            route(
+                NO_FLAGS,
+                Parentage::Devserver { pid: 42 },
+                false,
+                LiveInstances::default()
+            ),
             Ok(OpenTarget::Devserver)
         );
     }
@@ -6540,11 +6894,81 @@ mod tests {
         let two = OpenFlags {
             standalone: true,
             desktop: true,
-            devserver: false,
+            devserver: None,
         };
         assert_eq!(
-            route(two, Parentage::None, false),
+            route(two, Parentage::None, false, LiveInstances::default()),
             Err(RouteError::MultipleTargets)
+        );
+    }
+
+    fn candidate(index: usize, pid: u32, root: &str, port: u16) -> DevserverCandidate {
+        DevserverCandidate {
+            instance_index: index,
+            pid,
+            library_root: PathBuf::from(root),
+            port,
+            version: format!("0.74.{index}"),
+        }
+    }
+
+    #[test]
+    fn devserver_selection_is_deterministic() {
+        let a = candidate(0, 10, "/library/a", 8787);
+        let b = candidate(1, 20, "/library/b", 9999);
+
+        assert_eq!(
+            select_devserver(&[], None, None, Path::new("/library/a")),
+            Ok(None)
+        );
+        assert_eq!(
+            select_devserver(std::slice::from_ref(&a), None, None, Path::new("/other"))
+                .unwrap()
+                .map(|candidate| candidate.port),
+            Some(8787)
+        );
+        assert_eq!(
+            select_devserver(&[a.clone(), b.clone()], None, None, Path::new("/library/b"))
+                .unwrap()
+                .map(|candidate| candidate.port),
+            Some(9999)
+        );
+        assert_eq!(
+            select_devserver(&[a.clone(), b.clone()], None, None, Path::new("/other")),
+            Err(DevserverSelectionError::Ambiguous)
+        );
+        // Parentage is stronger than CHAN_HOME: this preserves "the current
+        // devserver" even if two live processes share one library root.
+        assert_eq!(
+            select_devserver(
+                &[a.clone(), b.clone()],
+                None,
+                Some(10),
+                Path::new("/library/b")
+            )
+            .unwrap()
+            .map(|candidate| candidate.port),
+            Some(8787)
+        );
+        assert_eq!(
+            select_devserver(
+                &[a.clone(), b.clone()],
+                Some(DevserverSelector::Port(9999)),
+                None,
+                Path::new("/library/a"),
+            )
+            .unwrap()
+            .map(|candidate| candidate.port),
+            Some(9999)
+        );
+        assert_eq!(
+            select_devserver(
+                &[a, b],
+                Some(DevserverSelector::Port(7777)),
+                None,
+                Path::new("/library/a"),
+            ),
+            Err(DevserverSelectionError::NotFound { port: 7777 })
         );
     }
 
@@ -6596,6 +7020,39 @@ mod tests {
         assert!(Cli::try_parse_from(["chan", "open", ".", "--standalone", "--desktop"]).is_err());
         assert!(Cli::try_parse_from(["chan", "open", ".", "--standalone", "--devserver"]).is_err());
         assert!(Cli::try_parse_from(["chan", "open", ".", "--desktop", "--devserver"]).is_err());
+    }
+
+    #[test]
+    fn open_devserver_selector_parses_bare_port_and_url() {
+        let parse = |args: &[&str]| match Cli::try_parse_from(args).unwrap().command {
+            Command::Open {
+                target, devserver, ..
+            } => (target, devserver),
+            other => panic!("expected open, got {other:?}"),
+        };
+
+        assert_eq!(parse(&["chan", "open", "."]), (Some(".".into()), None));
+        // require_equals keeps the following positional path out of the
+        // optional flag value.
+        assert_eq!(
+            parse(&["chan", "open", "--devserver", "."]),
+            (Some(".".into()), Some(DevserverSelector::Auto))
+        );
+        assert_eq!(
+            parse(&["chan", "open", ".", "--devserver=9999"]),
+            (Some(".".into()), Some(DevserverSelector::Port(9999)))
+        );
+        assert_eq!(
+            parse(&[
+                "chan",
+                "open",
+                ".",
+                "--devserver=http://127.0.0.1:9000/?t=secret",
+            ]),
+            (Some(".".into()), Some(DevserverSelector::Port(9000)))
+        );
+        assert!(Cli::try_parse_from(["chan", "open", ".", "--devserver=0"]).is_err());
+        assert!(Cli::try_parse_from(["chan", "open", ".", "--devserver=not-a-url"]).is_err());
     }
 
     #[test]

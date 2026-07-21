@@ -343,6 +343,10 @@ pub fn handoff_forced() -> bool {
 pub struct ListenerHandle {
     socket_path: PathBuf,
     accept_loop: Option<tokio::task::JoinHandle<()>>,
+    /// Held until Drop has unlinked the socket, so another live process cannot
+    /// take the stable path and then have this handle remove its node.
+    #[cfg(unix)]
+    _stable_lock: std::fs::File,
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -389,10 +393,27 @@ where
     F: Fn(Request) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = Response> + Send + 'static,
 {
+    start_listener_with_peer_uid(socket_path, handler, |stream| Ok(stream.peer_cred()?.uid()))
+}
+
+/// Unix listener with an injectable peer-uid resolver so the refusal boundary
+/// can be tested without requiring a second account on the host.
+#[cfg(unix)]
+fn start_listener_with_peer_uid<F, Fut, U>(
+    socket_path: PathBuf,
+    handler: F,
+    peer_uid: U,
+) -> std::io::Result<ListenerHandle>
+where
+    F: Fn(Request) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Response> + Send + 'static,
+    U: Fn(&tokio::net::UnixStream) -> std::io::Result<u32> + Send + Sync + 'static,
+{
     use std::os::unix::fs::PermissionsExt;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixListener;
 
+    let stable_lock = crate::control_socket::take_stable_lock(&socket_path)?;
     // Unlink any stale socket from a previous run that didn't clean up
     // (kill -9, panic in Drop) so bind doesn't EADDRINUSE.
     let _ = std::fs::remove_file(&socket_path);
@@ -403,6 +424,7 @@ where
     let _ = std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600));
 
     let handler = std::sync::Arc::new(handler);
+    let peer_uid = std::sync::Arc::new(peer_uid);
     let accept_loop = tokio::spawn(async move {
         loop {
             let (stream, _) = match listener.accept().await {
@@ -413,6 +435,18 @@ where
                     continue;
                 }
             };
+            let uid = match peer_uid(&stream) {
+                Ok(uid) => uid,
+                Err(e) => {
+                    tracing::warn!(error = %e, "handoff peer credential check failed");
+                    continue;
+                }
+            };
+            let owner_uid = rustix::process::geteuid().as_raw();
+            if uid != owner_uid {
+                tracing::warn!(peer_uid = uid, owner_uid, "handoff peer uid refused");
+                continue;
+            }
             let handler = handler.clone();
             tokio::spawn(async move {
                 let (read, mut write) = stream.into_split();
@@ -443,6 +477,7 @@ where
     Ok(ListenerHandle {
         socket_path,
         accept_loop: Some(accept_loop),
+        _stable_lock: stable_lock,
     })
 }
 
@@ -585,6 +620,75 @@ pub enum Outcome {
     /// The desktop refused close/remove because live terminal sessions would be
     /// killed.
     CloseRefused { active_terminals: usize },
+}
+
+/// Report whether the same-user desktop endpoint accepts a local connection.
+/// The probe is connect-only: it sends no request, cannot dispatch a desktop
+/// action, and drops the connection immediately. Missing, stale, busy, or
+/// headless endpoints resolve to `false` within a short bound.
+#[cfg(unix)]
+pub async fn desktop_is_live() -> bool {
+    if handoff_opt_out() || !gui_session_present() {
+        return false;
+    }
+    let Some(socket_path) = well_known_socket_path() else {
+        return false;
+    };
+    desktop_is_live_at(&socket_path).await
+}
+
+#[cfg(unix)]
+async fn desktop_is_live_at(socket_path: &Path) -> bool {
+    if !socket_path.exists() {
+        return false;
+    }
+    matches!(
+        tokio::time::timeout(
+            Duration::from_millis(250),
+            tokio::net::UnixStream::connect(socket_path),
+        )
+        .await,
+        Ok(Ok(_))
+    )
+}
+
+/// Windows counterpart to the connect-only Unix desktop probe. A busy pipe is
+/// retried briefly because the listener swaps pipe instances after each accept.
+#[cfg(windows)]
+pub async fn desktop_is_live() -> bool {
+    if handoff_opt_out() || !gui_session_present() {
+        return false;
+    }
+    let Some(socket_path) = well_known_socket_path() else {
+        return false;
+    };
+    desktop_is_live_at(&socket_path).await
+}
+
+#[cfg(windows)]
+async fn desktop_is_live_at(socket_path: &Path) -> bool {
+    use tokio::net::windows::named_pipe::ClientOptions;
+
+    const ERROR_PIPE_BUSY: i32 = 231;
+
+    let deadline = std::time::Instant::now() + Duration::from_millis(250);
+    loop {
+        match ClientOptions::new().open(socket_path) {
+            Ok(_) => return true,
+            Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
+                if std::time::Instant::now() >= deadline {
+                    return false;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            Err(_) => return false,
+        }
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+pub async fn desktop_is_live() -> bool {
+    false
 }
 
 /// Try to hand `workspace_path` to a running same-user desktop. Connects
@@ -1406,6 +1510,167 @@ mod tests {
             Response::Error { message } => assert_eq!(message, "mount failed"),
             other => panic!("expected Error, got {other:?}"),
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn desktop_liveness_probe_is_connect_only_and_wedged_safe() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("live.sock");
+        let handled = Arc::new(AtomicBool::new(false));
+        let handled_cb = handled.clone();
+        let _handle = start_listener(sock.clone(), move |_req| {
+            let handled_cb = handled_cb.clone();
+            async move {
+                handled_cb.store(true, Ordering::SeqCst);
+                std::future::pending::<Response>().await
+            }
+        })
+        .unwrap();
+
+        assert!(desktop_is_live_at(&sock).await);
+        tokio::task::yield_now().await;
+        assert!(
+            !handled.load(Ordering::SeqCst),
+            "connect-only liveness must not dispatch a request"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn desktop_liveness_probe_bounds_missing_and_stale_sockets() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.sock");
+        let missing_result =
+            tokio::time::timeout(Duration::from_secs(1), desktop_is_live_at(&missing))
+                .await
+                .expect("missing-socket probe must stay bounded");
+        assert!(!missing_result);
+
+        let stale = dir.path().join("stale.sock");
+        drop(std::os::unix::net::UnixListener::bind(&stale).unwrap());
+        assert!(stale.exists(), "stale socket node should remain");
+        let stale_result = tokio::time::timeout(Duration::from_secs(1), desktop_is_live_at(&stale))
+            .await
+            .expect("stale-socket probe must stay bounded");
+        assert!(!stale_result);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stable_listener_reclaims_a_stale_socket_node() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("stale.sock");
+        drop(std::os::unix::net::UnixListener::bind(&sock).unwrap());
+        assert!(sock.exists(), "stale socket node should remain");
+
+        let _handle = start_listener(sock.clone(), |_req| async {
+            Response::Opened {
+                desktop_version: CHAN_VERSION.into(),
+                capabilities: Capabilities {
+                    open_local_workspace: true,
+                },
+            }
+        })
+        .expect("a dead owner's socket node must be reclaimed");
+
+        assert!(matches!(
+            request_over(&sock, "/tmp/notes").await,
+            Response::Opened { .. }
+        ));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stable_listener_does_not_clobber_a_live_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("owned.sock");
+        let _first = start_listener(sock.clone(), |_req| async {
+            Response::Error {
+                message: "first listener".into(),
+            }
+        })
+        .unwrap();
+
+        let error = match start_listener(sock.clone(), |_req| async {
+            Response::Error {
+                message: "second listener".into(),
+            }
+        }) {
+            Ok(_) => panic!("a second listener must not take a live owner's socket"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
+
+        match request_over(&sock, "/tmp/notes").await {
+            Response::Error { message } => assert_eq!(message, "first listener"),
+            other => panic!("expected the first listener, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn listener_refuses_a_different_uid_before_dispatch() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("uid.sock");
+        let handled = Arc::new(AtomicBool::new(false));
+        let handled_cb = handled.clone();
+        let resolved = Arc::new(AtomicBool::new(false));
+        let resolved_cb = resolved.clone();
+        let wrong_uid = rustix::process::geteuid().as_raw().wrapping_add(1);
+        let _handle = start_listener_with_peer_uid(
+            sock.clone(),
+            move |_req| {
+                let handled_cb = handled_cb.clone();
+                async move {
+                    handled_cb.store(true, Ordering::SeqCst);
+                    Response::Error {
+                        message: "must not dispatch".into(),
+                    }
+                }
+            },
+            move |_stream| {
+                resolved_cb.store(true, Ordering::SeqCst);
+                Ok(wrong_uid)
+            },
+        )
+        .unwrap();
+
+        let mut stream = tokio::net::UnixStream::connect(&sock).await.unwrap();
+        let req = Request::OpenWorkspace {
+            protocol: PROTOCOL_VERSION,
+            cli_version: CHAN_VERSION.into(),
+            workspace_path: "/tmp/notes".into(),
+        };
+        let mut payload = serde_json::to_vec(&req).unwrap();
+        payload.push(b'\n');
+        let _ = stream.write_all(&payload).await;
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !resolved.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("peer uid resolver should run");
+
+        let mut byte = [0_u8; 1];
+        match tokio::time::timeout(Duration::from_secs(1), stream.read(&mut byte)).await {
+            Ok(Ok(0)) | Ok(Err(_)) => {}
+            Ok(Ok(n)) => panic!("refused peer received {n} response bytes"),
+            Err(_) => panic!("refused peer connection remained open"),
+        }
+        assert!(
+            !handled.load(Ordering::SeqCst),
+            "uid refusal must happen before dispatch"
+        );
     }
 
     // End-to-end: a listener bound on a temp socket + a client request

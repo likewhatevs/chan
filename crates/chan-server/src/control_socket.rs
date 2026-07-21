@@ -306,7 +306,7 @@ fn stable_socket_name(identity: &str, prefix: &str) -> String {
 }
 
 /// FNV-1a 64-bit: tiny, dependency-free, and stable across releases.
-fn fnv1a64(input: &str) -> u64 {
+pub(crate) fn fnv1a64(input: &str) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in input.as_bytes() {
         hash ^= u64::from(*byte);
@@ -695,8 +695,8 @@ pub fn start_stable(socket_path: PathBuf, ctx: ControlSocketCtx) -> std::io::Res
 }
 
 /// Own the takeover right for a stable socket path, or fail `AddrInUse` when
-/// a live server holds it. The flock releases on process death, so a crashed
-/// devserver never wedges its successor.
+/// a live process holds it. The flock releases on process death, so a crashed
+/// owner never wedges its successor.
 ///
 /// The takeover retries briefly before giving up: a dead server's flock can
 /// outlive it in any child it forked that has not exec'ed yet (the inherited
@@ -706,7 +706,7 @@ pub fn start_stable(socket_path: PathBuf, ctx: ControlSocketCtx) -> std::io::Res
 /// `WouldBlock` means a live owner; any other lock failure propagates as
 /// itself rather than masquerading as one.
 #[cfg(unix)]
-fn take_stable_lock(socket_path: &Path) -> std::io::Result<std::fs::File> {
+pub(crate) fn take_stable_lock(socket_path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
 
     const ATTEMPTS: u32 = 5;
@@ -731,7 +731,7 @@ fn take_stable_lock(socket_path: &Path) -> std::io::Result<std::fs::File> {
         Err(std::fs::TryLockError::WouldBlock) => Err(std::io::Error::new(
             std::io::ErrorKind::AddrInUse,
             format!(
-                "control socket {} is owned by a live server",
+                "socket {} is owned by a live process",
                 socket_path.display()
             ),
         )),

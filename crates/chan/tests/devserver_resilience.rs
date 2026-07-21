@@ -6,10 +6,11 @@
 //!
 //! Each test runs in a sandbox: `CHAN_HOME`, `HOME`, and `XDG_RUNTIME_DIR` point
 //! at fresh tempdirs, so the entire chan library (workspace registry, devserver
-//! config, per-uid discovery socket) is isolated from the developer's real
+//! config, per-uid discovery directory) is isolated from the developer's real
 //! state and from other tests. `CHAN_NO_DESKTOP_HANDOFF` +
-//! `CHAN_NO_DEVSERVER_HANDOFF` keep a `chan open` standalone instead of
-//! handing the workspace off to whatever is already running on the box.
+//! `CHAN_NO_DEVSERVER_HANDOFF` keep ordinary `chan open` helpers standalone;
+//! the multi-instance scenario removes the latter only inside its isolated
+//! runtime directory.
 //!
 //! What this suite does NOT reach (hand-smoke only): the Tauri window
 //! destroy/bury path and the desktop disconnect/forget UI wiring that calls
@@ -86,6 +87,18 @@ impl Sandbox {
             .env_remove("CHAN_TAB_GROUP")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        cmd
+    }
+
+    /// A command sharing this sandbox's ordinary HOME and scratch state but
+    /// using an explicit chan home and runtime directory. Multi-instance
+    /// discovery tests need one same-user runtime namespace with independent
+    /// libraries behind it.
+    fn command_in(&self, chan_home: &Path, runtime: &Path) -> Command {
+        let mut cmd = self.command();
+        cmd.env("CHAN_HOME", chan_home)
+            .env("XDG_RUNTIME_DIR", runtime)
+            .env("TMPDIR", runtime);
         cmd
     }
 }
@@ -218,8 +231,26 @@ enum Startup {
 /// classified the moment it exits rather than at the ready deadline, so a
 /// broken devserver reports in startup time instead of 30 seconds.
 async fn start_devserver(sandbox: &Sandbox, port: u16) -> Startup {
+    start_devserver_in(
+        sandbox,
+        sandbox.chan_home.path(),
+        sandbox.runtime.path(),
+        port,
+    )
+    .await
+}
+
+/// Start a devserver with explicit library + runtime roots. This is the
+/// process-boundary shape for several same-user instances: distinct
+/// `CHAN_HOME`s publish into one per-user discovery directory.
+async fn start_devserver_in(
+    sandbox: &Sandbox,
+    chan_home: &Path,
+    runtime: &Path,
+    port: u16,
+) -> Startup {
     let mut child = sandbox
-        .command()
+        .command_in(chan_home, runtime)
         .arg("devserver")
         .args(["--bind", "127.0.0.1"])
         .args(["--port", &port.to_string()])
@@ -287,6 +318,75 @@ async fn spawn_devserver_on_free_port(sandbox: &Sandbox) -> (Server, SocketAddr)
         "lost the bind race on {PORT_ATTEMPTS} ports ({lost:?}); the devserver \
          started every time, another process just got there first"
     );
+}
+
+/// Start an instance with explicit library + runtime roots on an unclaimed
+/// port. This mirrors [`spawn_devserver_on_free_port`] without collapsing the
+/// distinct `CHAN_HOME`s the multi-instance test exercises.
+async fn spawn_devserver_in_on_free_port(
+    sandbox: &Sandbox,
+    chan_home: &Path,
+    runtime: &Path,
+) -> (Server, SocketAddr) {
+    let mut lost = Vec::new();
+    for _ in 0..PORT_ATTEMPTS {
+        let port = free_port();
+        match start_devserver_in(sandbox, chan_home, runtime, port).await {
+            Startup::Listening(server, addr) => return (server, addr),
+            Startup::PortInUse(_) => lost.push(port),
+            Startup::Failed(dump) => panic!("chan devserver never listened on {port}:\n{dump}"),
+        }
+    }
+    panic!(
+        "lost the bind race on {PORT_ATTEMPTS} ports ({lost:?}); the devserver \
+         started every time, another process just got there first"
+    );
+}
+
+/// Run an open command with devserver handoff enabled. A short standalone
+/// timeout keeps a routing regression from wedging the test process forever.
+async fn run_handoff_open(
+    sandbox: &Sandbox,
+    chan_home: &Path,
+    runtime: &Path,
+    root: &Path,
+    selector: Option<&str>,
+) -> (ExitStatus, String) {
+    let mut cmd = sandbox.command_in(chan_home, runtime);
+    cmd.env_remove("CHAN_NO_DEVSERVER_HANDOFF")
+        .arg("open")
+        .arg(root)
+        .arg("--here")
+        .args(["--port", "0", "--timeout", "1s", "--no-browser"]);
+    if let Some(selector) = selector {
+        if selector.is_empty() {
+            cmd.arg("--devserver");
+        } else {
+            cmd.arg(format!("--devserver={selector}"));
+        }
+    }
+    let mut child = cmd.spawn().expect("spawn chan open handoff");
+    let out = Transcript::capture(&mut child);
+    let mut command = Server { child, out };
+    let (status, _) = wait_exit(&mut command, Duration::from_secs(15))
+        .await
+        .unwrap_or_else(|| panic!("chan open handoff did not exit:\n{}", command.out.dump()));
+    (status, command.out.dump())
+}
+
+fn discovery_sockets(runtime: &Path) -> Vec<std::path::PathBuf> {
+    let dir = runtime.join("chan-devserver");
+    let mut sockets: Vec<_> = std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("sock"))
+                .collect()
+        })
+        .unwrap_or_default();
+    sockets.sort();
+    sockets
 }
 
 /// Run a `chan devserver --service=chan` daemon action that has to bind, on a
@@ -672,6 +772,136 @@ async fn devserver_sigterm_exits_clean() {
         "devserver SIGTERM exit not clean: {status:?}"
     );
     assert!(elapsed < EXIT_BUDGET, "devserver SIGTERM took {elapsed:?}");
+}
+
+/// Two same-user devservers publish independent discovery sockets. Automatic
+/// selection follows the CLI's matching `CHAN_HOME`, an explicit port selects
+/// the named peer, ambiguity refuses, and stopping one instance leaves the
+/// other's endpoint usable.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn devserver_discovery_routes_multiple_local_instances() {
+    let sandbox = Sandbox::new();
+    let home_a = tempfile::tempdir().expect("devserver A home");
+    let home_b = tempfile::tempdir().expect("devserver B home");
+    let unmatched_home = tempfile::tempdir().expect("unmatched CLI home");
+    let runtime = sandbox.runtime.path();
+    let client = http();
+
+    let (server_a, addr_a) =
+        spawn_devserver_in_on_free_port(&sandbox, home_a.path(), runtime).await;
+    let (mut server_b, addr_b) =
+        spawn_devserver_in_on_free_port(&sandbox, home_b.path(), runtime).await;
+    let token_a = devserver_token(&server_a);
+    let token_b = devserver_token(&server_b);
+
+    let sockets = discovery_sockets(runtime);
+    assert_eq!(
+        sockets.len(),
+        2,
+        "each live instance owns one discovery socket: {sockets:?}\nA:\n{}\nB:\n{}",
+        server_a.out.dump(),
+        server_b.out.dump()
+    );
+
+    let root_a = sandbox.workspace("handoff-a");
+    let (status, output) =
+        run_handoff_open(&sandbox, home_a.path(), runtime, &root_a, Some("")).await;
+    assert!(status.success(), "matching-home handoff failed:\n{output}");
+    assert!(output.contains(&addr_a.port().to_string()), "{output}");
+    assert!(
+        list_workspaces(&client, addr_a, &token_a)
+            .await
+            .iter()
+            .any(|row| row["path"] == root_a.to_string_lossy().as_ref()),
+        "matching CHAN_HOME must select devserver A"
+    );
+    assert!(
+        list_workspaces(&client, addr_b, &token_b)
+            .await
+            .iter()
+            .all(|row| row["path"] != root_a.to_string_lossy().as_ref()),
+        "matching CHAN_HOME must not touch devserver B"
+    );
+
+    let root_b = sandbox.workspace("handoff-explicit-b");
+    let selector_b = addr_b.port().to_string();
+    let (status, output) =
+        run_handoff_open(&sandbox, home_a.path(), runtime, &root_b, Some(&selector_b)).await;
+    assert!(status.success(), "explicit-port handoff failed:\n{output}");
+    assert!(
+        list_workspaces(&client, addr_b, &token_b)
+            .await
+            .iter()
+            .any(|row| row["path"] == root_b.to_string_lossy().as_ref()),
+        "--devserver={} must select devserver B",
+        addr_b.port()
+    );
+
+    let refused_root = sandbox.scratch.path().join("ambiguous-refusal");
+    let (status, output) = run_handoff_open(
+        &sandbox,
+        unmatched_home.path(),
+        runtime,
+        &refused_root,
+        None,
+    )
+    .await;
+    assert!(
+        !status.success(),
+        "ambiguous discovery must refuse:\n{output}"
+    );
+    assert!(output.contains(&addr_a.port().to_string()), "{output}");
+    assert!(output.contains(&addr_b.port().to_string()), "{output}");
+    assert!(output.contains("--devserver="), "{output}");
+    assert!(
+        !refused_root.exists(),
+        "route refusal must happen before creating the workspace"
+    );
+
+    let missing_root = sandbox.scratch.path().join("missing-selector-refusal");
+    let (status, output) = run_handoff_open(
+        &sandbox,
+        home_a.path(),
+        runtime,
+        &missing_root,
+        Some("65535"),
+    )
+    .await;
+    assert!(
+        !status.success(),
+        "missing explicit target must refuse:\n{output}"
+    );
+    assert!(output.contains("65535"), "{output}");
+    assert!(!missing_root.exists());
+
+    send_signal(server_b.pid(), "TERM");
+    wait_exit(&mut server_b, EXIT_BUDGET)
+        .await
+        .unwrap_or_else(|| panic!("devserver B did not exit:\n{}", server_b.out.dump()));
+    drop(server_b);
+    assert!(
+        wait_until(
+            || discovery_sockets(runtime).len() == 1,
+            Duration::from_secs(3)
+        )
+        .await,
+        "stopping B must leave exactly A's discovery socket"
+    );
+
+    let root_after = sandbox.workspace("handoff-after-b-stop");
+    let (status, output) =
+        run_handoff_open(&sandbox, unmatched_home.path(), runtime, &root_after, None).await;
+    assert!(
+        status.success(),
+        "sole remaining instance was unreachable:\n{output}"
+    );
+    assert!(
+        list_workspaces(&client, addr_a, &token_a)
+            .await
+            .iter()
+            .any(|row| row["path"] == root_after.to_string_lossy().as_ref()),
+        "devserver A must remain discoverable after B stops"
+    );
 }
 
 /// The devserver's stable control-socket names in `dir`

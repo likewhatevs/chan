@@ -296,7 +296,11 @@ Serve a subdirectory of a repository, on another port, headless:
 
 Hand a workspace to the local devserver from a plain shell:
   chan open --devserver ~/notes
-  -> "chan: registered /home/you/notes with the local devserver", exits
+  -> selects the sole devserver or unique CHAN_HOME match, then exits
+
+Choose one of several local devservers explicitly:
+  chan open --devserver=9999 ~/notes
+  chan open --devserver=http://127.0.0.1:9999 ~/notes
 
 Register a remote devserver with the desktop app:
   chan open --name lab https://lab.example.com:8787
@@ -314,11 +318,15 @@ registration confirmations go to stdout.
 
 CAUTIONS:
 The standalone form blocks in the foreground; --timeout (30s, 5m, 1h)
-gives it a graceful idle shutdown. The VCS-parent refusal exits 70. The
+gives it a graceful idle shutdown. The VCS-parent refusal exits 70. With
+several live devservers, chan prefers the unique one whose library root
+matches this CLI's CHAN_HOME and otherwise refuses with the candidate
+list. A valued --devserver refuses when that port is not live; a bare
+--devserver with no live candidate keeps the standalone fallback. The
 standalone default port 8787 is also `chan devserver`'s default: on a
-collision there chan prints a hint to re-run with --port. --no-token
-removes the only auth gate; --no-settings greys the Settings cog and
-makes every settings-write route answer 403.
+collision chan says whether a discovered devserver of yours reports that
+port. --no-token removes the only auth gate; --no-settings greys the
+Settings cog and makes every settings-write route answer 403.
 
 CAVEATS:
 The URL form needs a running chan-desktop and never falls back to a

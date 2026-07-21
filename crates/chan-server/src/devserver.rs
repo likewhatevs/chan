@@ -11,10 +11,10 @@
 //!   the tenant by it; the explicit `/api/devserver/*` and `/api/library/*`
 //!   management routes match before the per-tenant fallback, and the only
 //!   reserved top-level slug is `api`.
-//! - A per-user Unix discovery socket ([`crate::devserver_handoff`]): a
-//!   `chan open <path>` on the same box registers its workspace with the
-//!   running devserver and exits instead of binding its own server, so the
-//!   devserver owns the single-writer flock.
+//! - A per-user discovery namespace ([`crate::devserver_handoff`]): each local
+//!   instance publishes a stable endpoint, and `chan open <path>` selects one,
+//!   registers the workspace there, then exits instead of binding a second
+//!   server, so the devserver owns the single-writer flock.
 //!
 //! What was mounted survives a restart: the enabled workspace roots and the
 //! devserver bearer token persist in `~/.chan/devserver/config.json` (0600).
@@ -805,10 +805,6 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
 
     fdstore_restore.apply(&state);
 
-    // Serve-handoff discovery. A bind failure is non-fatal: the management
-    // API still works, only the `chan open` registration path is disabled.
-    let _discovery = start_discovery_listener(state.clone());
-
     let (app, serve_addr_cell) = build_devserver_app(state.clone(), host.clone());
 
     // Bind the local TCP listener up front (so a bind failure errors before we
@@ -827,6 +823,24 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
     } else {
         None
     };
+
+    // Discovery names include the actual bound port. Resolve `local_addr`
+    // before publishing the endpoint so `--port 0` is selectable by the port
+    // the OS assigned rather than by the requested zero.
+    let local_addr = listener
+        .as_ref()
+        .map(|listener| listener.local_addr().unwrap_or(config.addr));
+    if let Some(local_addr) = local_addr {
+        let _ = serve_addr_cell.set(local_addr);
+        state.bound_port.store(local_addr.port(), Ordering::Relaxed);
+        state.persist_state();
+    }
+    // A discovery bind failure is non-fatal: the management API still works,
+    // only `chan open` registration is disabled. Tunnel-only instances have no
+    // bound TCP address, so their configured port (possibly zero) is their
+    // local selector identity.
+    let discovery_port = local_addr.unwrap_or(config.addr).port();
+    let _discovery = start_discovery_listener(state.clone(), discovery_port);
 
     // Shutdown wiring mirrors `serve()`: a single watch channel fed by
     // SIGINT/SIGTERM, plus a side task that cancels every tenant's in-flight
@@ -871,16 +885,7 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
             // prints the OS-assigned port (mirrors `chan open`). Falls back to
             // the request on the impossible local_addr() error rather than
             // refusing to serve.
-            let local_addr = listener.local_addr().unwrap_or(config.addr);
-            // Fill the launcher's serve-address cell so the local web launcher's
-            // workspace-mount path resolves tenant URLs against the bound address
-            // (the mutable devserver surface).
-            let _ = serve_addr_cell.set(local_addr);
-            // Persist the bound port so a local client (the desktop) re-discovers
-            // the current port from the config after the devserver restarts on a
-            // new OS-assigned port, instead of dialing a stale stored URL.
-            state.bound_port.store(local_addr.port(), Ordering::Relaxed);
-            state.persist_state();
+            let local_addr = local_addr.expect("listening devserver has a bound address");
             println!("chan devserver: listening on http://{local_addr}/?t={token}");
             // Machine-readable token contract: the desktop control terminal
             // scrapes this exact marker from the connect-script output on every
@@ -1200,17 +1205,41 @@ async fn mark_tunnel_origin(
     next.run(req).await
 }
 
-/// Bind the per-user discovery socket whose registration handler mounts the
-/// requested workspace. `None` (and a note) when the socket cannot bind, so
-/// the management API still serves.
+/// Bind this instance's discovery endpoint. Its registration handler mounts
+/// the requested workspace. Returns `None` (and prints a note) when the
+/// endpoint cannot bind, so the management API still serves.
 fn start_discovery_listener(
     state: Arc<DevserverState>,
+    port: u16,
 ) -> Option<crate::devserver_handoff::ListenerHandle> {
-    let socket_path = crate::devserver_handoff::well_known_devserver_socket_path()?;
+    let Some(socket_path) =
+        crate::devserver_handoff::devserver_socket_path(&state.library_id, port)
+    else {
+        eprintln!(
+            "chan devserver: NOTE: discovery endpoint path unavailable; \
+             serve-handoff registration is disabled"
+        );
+        return None;
+    };
     let result = crate::devserver_handoff::start_listener(socket_path, move |req| {
         let state = state.clone();
         async move {
             match req {
+                crate::devserver_handoff::Request::Identify { .. } => {
+                    let library_root = state
+                        .host
+                        .library()
+                        .config_path()
+                        .parent()
+                        .map(Path::to_path_buf)
+                        .unwrap_or_default();
+                    crate::devserver_handoff::Response::Identified {
+                        pid: std::process::id(),
+                        library_root,
+                        port,
+                        version: crate::devserver_handoff::CHAN_VERSION.to_string(),
+                    }
+                }
                 crate::devserver_handoff::Request::RegisterWorkspace { workspace_path, .. } => {
                     match state.register_workspace(Path::new(&workspace_path)).await {
                         Ok(prefix) => crate::devserver_handoff::Response::Registered {
