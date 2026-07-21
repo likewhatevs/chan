@@ -210,9 +210,15 @@ pub enum Response {
 
 /// Resolve the well-known per-user socket path. Prefers
 /// `$XDG_RUNTIME_DIR/chan-desktop.sock` (a per-user dir the OS
-/// already 0700s on Linux); falls back to `<tmp>/chan-desktop-<uid>.sock`
-/// on macOS, which has no XDG_RUNTIME_DIR. The name is kept short for
-/// the macOS `sun_path` 104-byte limit. Returns None on non-unix.
+/// already 0700s on Linux); falls back to
+/// `<tmp>/chan-desktop-<uid>/chan-desktop.sock` on macOS, which has no
+/// XDG_RUNTIME_DIR -- an owner-only DIRECTORY in the sticky world-writable
+/// tmp, mirroring the devserver discovery dir, so a bare squattable node
+/// never sits in shared /tmp. Pure path resolution: the desktop bind side
+/// creates/validates the directory via [`ensure_well_known_socket_path`],
+/// the client side validates without creating via
+/// [`existing_well_known_socket_path`]. The name is kept short for the
+/// macOS `sun_path` 104-byte limit. Returns None on non-unix/windows.
 pub fn well_known_socket_path() -> Option<PathBuf> {
     #[cfg(unix)]
     {
@@ -222,11 +228,7 @@ pub fn well_known_socket_path() -> Option<PathBuf> {
                 return Some(dir.join("chan-desktop.sock"));
             }
         }
-        // macOS / no-XDG fallback. Per-uid filename so two users on
-        // one machine don't collide in a shared /tmp; same-user is
-        // still enforced by 0600 + ownership.
-        let uid = current_uid();
-        Some(std::env::temp_dir().join(format!("chan-desktop-{uid}.sock")))
+        Some(unix_no_xdg_desktop_dir().join("chan-desktop.sock"))
     }
     #[cfg(windows)]
     {
@@ -258,6 +260,128 @@ fn current_uid() -> u32 {
     // rustix is already a chan-server dep (terminal_sessions uses its
     // getrlimit); reuse it here rather than reaching for raw libc.
     rustix::process::getuid().as_raw()
+}
+
+#[cfg(unix)]
+fn effective_uid() -> u32 {
+    rustix::process::geteuid().as_raw()
+}
+
+/// The no-XDG desktop socket directory: `<tmp>/chan-desktop-<uid>`. Per-uid
+/// name so two users cannot collide in a shared /tmp; the ensure/existing
+/// pair below makes it owner-only by construction, like the devserver
+/// discovery dir.
+#[cfg(unix)]
+fn unix_no_xdg_desktop_dir() -> PathBuf {
+    std::env::temp_dir().join(format!("chan-desktop-{}", current_uid()))
+}
+
+/// Whether the well-known path lives in the no-XDG fallback dir this module
+/// owns (as opposed to the OS-provisioned `$XDG_RUNTIME_DIR`).
+#[cfg(unix)]
+fn uses_no_xdg_desktop_dir() -> bool {
+    std::env::var_os("XDG_RUNTIME_DIR").is_none_or(|dir| dir.is_empty())
+}
+
+/// Bind-side resolution of the well-known endpoint: on the unix no-XDG arm
+/// this CREATES the owner-only socket directory, or refuses when another uid
+/// owns the node. Only the desktop's listener calls this; clients must never
+/// create the directory (see [`existing_well_known_socket_path`]).
+pub fn ensure_well_known_socket_path() -> Option<PathBuf> {
+    #[cfg(unix)]
+    if uses_no_xdg_desktop_dir() {
+        ensure_owner_dir_at(&unix_no_xdg_desktop_dir()).ok()?;
+    }
+    well_known_socket_path()
+}
+
+/// Client-side resolution of the well-known endpoint: validates the no-XDG
+/// directory (owner, dir-ness, 0700) WITHOUT creating it. `None` is the
+/// ordinary no-desktop case; a squatted or foreign-owned directory also
+/// resolves to `None` so no request bytes ever flow into it.
+fn existing_well_known_socket_path() -> Option<PathBuf> {
+    #[cfg(unix)]
+    if uses_no_xdg_desktop_dir() {
+        existing_owner_dir_at(&unix_no_xdg_desktop_dir()).ok()?;
+    }
+    well_known_socket_path()
+}
+
+/// Create-or-validate an owner-only directory: lstat first, atomic 0700
+/// mkdir on NotFound, re-validate after (covering the AlreadyExists race),
+/// and force perms back to 0700 only once ownership is proven. Mirrors the
+/// devserver discovery dir's construction.
+#[cfg(unix)]
+fn ensure_owner_dir_at(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+    match std::fs::symlink_metadata(dir) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let mut builder = std::fs::DirBuilder::new();
+            builder.mode(0o700);
+            if let Err(create_err) = builder.create(dir) {
+                if create_err.kind() != std::io::ErrorKind::AlreadyExists {
+                    return Err(create_err);
+                }
+            }
+        }
+        Err(e) => return Err(e),
+    }
+
+    let metadata = owner_dir_metadata(dir)?;
+    if metadata.permissions().mode() & 0o777 != 0o700 {
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+/// Validate-only twin of [`ensure_owner_dir_at`]: the directory must already
+/// exist, be a real directory owned by this euid, and be exactly 0700.
+#[cfg(unix)]
+fn existing_owner_dir_at(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = owner_dir_metadata(dir)?;
+    if metadata.permissions().mode() & 0o777 != 0o700 {
+        return Err(not_owner_controlled(dir));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn owner_dir_metadata(dir: &Path) -> std::io::Result<std::fs::Metadata> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = std::fs::symlink_metadata(dir)?;
+    if !metadata.file_type().is_dir() || metadata.uid() != effective_uid() {
+        return Err(not_owner_controlled(dir));
+    }
+    Ok(metadata)
+}
+
+#[cfg(unix)]
+fn not_owner_controlled(dir: &Path) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        format!(
+            "desktop handoff directory {} is not an owner-controlled directory",
+            dir.display()
+        ),
+    )
+}
+
+/// Whether the node at `path` is a real socket owned by this euid, read via
+/// lstat so a symlink never passes. The client-side gate before any request
+/// bytes are written to the well-known endpoint.
+#[cfg(unix)]
+fn socket_is_owner_controlled(path: &Path) -> bool {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata.file_type().is_socket() && metadata.uid() == effective_uid(),
+        Err(_) => false,
+    }
 }
 
 /// True when a GUI session is present, i.e. it makes sense to hand a
@@ -631,7 +755,7 @@ pub async fn desktop_is_live() -> bool {
     if handoff_opt_out() || !gui_session_present() {
         return false;
     }
-    let Some(socket_path) = well_known_socket_path() else {
+    let Some(socket_path) = existing_well_known_socket_path() else {
         return false;
     };
     desktop_is_live_at(&socket_path).await
@@ -659,7 +783,7 @@ pub async fn desktop_is_live() -> bool {
     if handoff_opt_out() || !gui_session_present() {
         return false;
     }
-    let Some(socket_path) = well_known_socket_path() else {
+    let Some(socket_path) = existing_well_known_socket_path() else {
         return false;
     };
     desktop_is_live_at(&socket_path).await
@@ -702,19 +826,28 @@ pub async fn desktop_is_live() -> bool {
 /// dead desktop.
 #[cfg(unix)]
 pub async fn try_handoff(workspace_path: &Path) -> Outcome {
+    let Some(socket_path) = existing_well_known_socket_path() else {
+        return Outcome::NoDesktop;
+    };
+    try_handoff_at(&socket_path, workspace_path).await
+}
+
+/// The post-resolution half of [`try_handoff`], on an explicit socket path so
+/// the ownership gate is testable without steering the process environment.
+#[cfg(unix)]
+async fn try_handoff_at(socket_path: &Path, workspace_path: &Path) -> Outcome {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixStream;
 
-    let Some(socket_path) = well_known_socket_path() else {
-        return Outcome::NoDesktop;
-    };
-    // No socket file at all is the common no-desktop case; skip the
-    // connect attempt (and its log noise) entirely.
-    if !socket_path.exists() {
+    // The node must be a real socket this euid owns (lstat, so a symlink
+    // never passes) BEFORE any bytes are sent: a squatter's endpoint must
+    // not receive the workspace path. A missing node is the common
+    // no-desktop case and resolves the same way.
+    if !socket_is_owner_controlled(socket_path) {
         return Outcome::NoDesktop;
     }
 
-    let connect = UnixStream::connect(&socket_path);
+    let connect = UnixStream::connect(socket_path);
     let stream = match tokio::time::timeout(Duration::from_millis(1500), connect).await {
         Ok(Ok(s)) => s,
         // Refused / stale socket / timeout -> no live desktop.
@@ -783,7 +916,7 @@ pub async fn try_handoff(workspace_path: &Path) -> Outcome {
     // Win32 ERROR_PIPE_BUSY: all instances are busy; retry briefly.
     const ERROR_PIPE_BUSY: i32 = 231;
 
-    let Some(socket_path) = well_known_socket_path() else {
+    let Some(socket_path) = existing_well_known_socket_path() else {
         return Outcome::NoDesktop;
     };
 
@@ -863,7 +996,7 @@ pub async fn try_close_workspace(workspace_path: &Path, remove: bool) -> Outcome
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixStream;
 
-    let Some(socket_path) = well_known_socket_path() else {
+    let Some(socket_path) = existing_well_known_socket_path() else {
         return Outcome::NoDesktop;
     };
     if !socket_path.exists() {
@@ -915,7 +1048,7 @@ pub async fn try_close_workspace(workspace_path: &Path, remove: bool) -> Outcome
 
     const ERROR_PIPE_BUSY: i32 = 231;
 
-    let Some(socket_path) = well_known_socket_path() else {
+    let Some(socket_path) = existing_well_known_socket_path() else {
         return Outcome::NoDesktop;
     };
 
@@ -1009,7 +1142,7 @@ pub async fn try_open_devserver(url: &str, name: Option<&str>, script: Option<&s
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixStream;
 
-    let Some(socket_path) = well_known_socket_path() else {
+    let Some(socket_path) = existing_well_known_socket_path() else {
         return Outcome::NoDesktop;
     };
     if !socket_path.exists() {
@@ -1062,7 +1195,7 @@ pub async fn try_open_devserver(url: &str, name: Option<&str>, script: Option<&s
 
     const ERROR_PIPE_BUSY: i32 = 231;
 
-    let Some(socket_path) = well_known_socket_path() else {
+    let Some(socket_path) = existing_well_known_socket_path() else {
         return Outcome::NoDesktop;
     };
 
@@ -1178,7 +1311,7 @@ pub async fn try_upgrade(check_only: bool) -> UpgradeOutcome {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixStream;
 
-    let Some(socket_path) = well_known_socket_path() else {
+    let Some(socket_path) = existing_well_known_socket_path() else {
         return UpgradeOutcome::NoDesktop;
     };
     if !socket_path.exists() {
@@ -1453,6 +1586,122 @@ mod tests {
         let p = well_known_socket_path().expect("unix path");
         let s = p.to_string_lossy();
         assert!(s.contains("chan-desktop"), "unexpected path: {s}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owner_dir_ensure_creates_0700_and_repairs_perms() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let base = tempfile::tempdir().unwrap();
+        let dir = base.path().join("chan-desktop-test");
+        ensure_owner_dir_at(&dir).expect("fresh create");
+        let mode = std::fs::symlink_metadata(&dir)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700);
+        // Idempotent, and a loosened mode is forced back to 0700 only after
+        // the ownership check passed.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        ensure_owner_dir_at(&dir).expect("revalidate");
+        let mode = std::fs::symlink_metadata(&dir)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owner_dir_refuses_non_directory_nodes() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let base = tempfile::tempdir().unwrap();
+
+        // A squatter's plain file where the directory should be.
+        let as_file = base.path().join("file-squat");
+        std::fs::write(&as_file, b"x").unwrap();
+        assert_eq!(
+            ensure_owner_dir_at(&as_file).unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert!(existing_owner_dir_at(&as_file).is_err());
+
+        // A symlink to a real owned directory: lstat must refuse it.
+        let real = base.path().join("real-dir");
+        std::fs::create_dir(&real).unwrap();
+        let link = base.path().join("link-squat");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert!(ensure_owner_dir_at(&link).is_err());
+        assert!(existing_owner_dir_at(&link).is_err());
+
+        // The validate-only twin never creates: a missing dir is an error and
+        // stays missing; a non-0700 dir is refused rather than repaired.
+        let missing = base.path().join("missing");
+        assert!(existing_owner_dir_at(&missing).is_err());
+        assert!(!missing.exists());
+        let loose = base.path().join("loose");
+        std::fs::create_dir(&loose).unwrap();
+        std::fs::set_permissions(&loose, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(existing_owner_dir_at(&loose).is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn handoff_send_gate_requires_an_owned_real_socket() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real.sock");
+        let dispatched = Arc::new(AtomicBool::new(false));
+        let dispatched_cb = dispatched.clone();
+        let _handle = start_listener(real.clone(), move |_req| {
+            let dispatched_cb = dispatched_cb.clone();
+            async move {
+                dispatched_cb.store(true, Ordering::SeqCst);
+                Response::Opened {
+                    desktop_version: CHAN_VERSION.into(),
+                    capabilities: Capabilities {
+                        open_local_workspace: true,
+                    },
+                }
+            }
+        })
+        .unwrap();
+
+        // A symlink to the real socket is a redirection, not the endpoint:
+        // lstat refuses it before any request bytes are written.
+        let link = dir.path().join("link.sock");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert!(!socket_is_owner_controlled(&link));
+        assert!(matches!(
+            try_handoff_at(&link, Path::new("/tmp/notes")).await,
+            Outcome::NoDesktop
+        ));
+        assert!(
+            !dispatched.load(Ordering::SeqCst),
+            "no request may flow through a symlinked node"
+        );
+
+        // A plain file is not a socket either.
+        let file = dir.path().join("file.sock");
+        std::fs::write(&file, b"x").unwrap();
+        assert!(matches!(
+            try_handoff_at(&file, Path::new("/tmp/notes")).await,
+            Outcome::NoDesktop
+        ));
+
+        // The real, owned socket passes the gate and hands off.
+        assert!(socket_is_owner_controlled(&real));
+        assert!(matches!(
+            try_handoff_at(&real, Path::new("/tmp/notes")).await,
+            Outcome::HandedOff
+        ));
+        assert!(dispatched.load(Ordering::SeqCst));
     }
 
     #[cfg(windows)]

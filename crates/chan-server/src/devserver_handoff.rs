@@ -1005,10 +1005,21 @@ mod tests {
         .unwrap();
 
         let mut stream = tokio::net::UnixStream::connect(&sock).await.unwrap();
-        stream
+        // The refusal can land before this write reaches the server: the
+        // accept loop drops the connection on the uid check, so a broken
+        // pipe here IS the refusal, not a test failure.
+        if let Err(e) = stream
             .write_all(b"{\"type\":\"identify\",\"protocol\":2,\"cli_version\":\"x\"}\n")
             .await
-            .unwrap();
+        {
+            assert!(
+                matches!(
+                    e.kind(),
+                    std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+                ),
+                "unexpected refusal write error: {e}"
+            );
+        }
         let mut reply = Vec::new();
         let read = tokio::time::timeout(Duration::from_secs(1), stream.read_to_end(&mut reply))
             .await
@@ -1028,16 +1039,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("hung.sock");
         let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        // The hold is far longer than the pass bound below, so an unbounded
+        // probe still reddens this test while a loaded host has seconds of
+        // scheduling slack instead of a 500ms wall-clock knife edge.
         let hung = tokio::spawn(async move {
             let (_stream, _) = listener.accept().await.unwrap();
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::time::sleep(Duration::from_secs(30)).await;
         });
 
         let started = std::time::Instant::now();
         assert!(probe_instance(sock, Duration::from_millis(25))
             .await
             .is_none());
-        assert!(started.elapsed() < Duration::from_millis(500));
+        assert!(started.elapsed() < Duration::from_secs(5));
         hung.abort();
     }
 

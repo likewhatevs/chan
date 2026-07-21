@@ -904,6 +904,40 @@ async fn devserver_discovery_routes_multiple_local_instances() {
     );
 }
 
+/// A VALUED `--devserver=<port>` under `CHAN_NO_DEVSERVER_HANDOFF` names a
+/// specific instance the environment forbids reaching: that contradiction
+/// must refuse loudly, naming both sides, and must never fall through to a
+/// silent standalone bind. (The bare flag and the env var alone keep their
+/// historical standalone behavior.)
+#[tokio::test]
+async fn valued_devserver_selector_refuses_under_handoff_opt_out() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.workspace("optout-refusal");
+    // `sandbox.command()` sets CHAN_NO_DEVSERVER_HANDOFF=1; the `--timeout`
+    // bounds the mutated (fall-through) outcome so a regression exits with a
+    // served-standalone transcript instead of wedging the test.
+    let mut cmd = sandbox.command();
+    cmd.arg("open")
+        .arg(&root)
+        .arg("--here")
+        .args(["--port", "0", "--timeout", "1s", "--no-browser"])
+        .arg("--devserver=9999");
+    let mut child = cmd.spawn().expect("spawn chan open");
+    let out = Transcript::capture(&mut child);
+    let mut command = Server { child, out };
+    let (status, _) = wait_exit(&mut command, EXIT_BUDGET)
+        .await
+        .unwrap_or_else(|| panic!("refusal did not exit:\n{}", command.out.dump()));
+    let dump = command.out.dump();
+    assert!(!status.success(), "refusal must exit nonzero:\n{dump}");
+    assert!(dump.contains("--devserver=9999"), "{dump}");
+    assert!(dump.contains("CHAN_NO_DEVSERVER_HANDOFF"), "{dump}");
+    assert!(
+        !dump.contains("http://127.0.0.1:"),
+        "no standalone server may bind on a refused selector:\n{dump}"
+    );
+}
+
 /// The devserver's stable control-socket names in `dir`
 /// (`chan-control-s<identity+prefix hash>.sock`), sorted. The short
 /// single-hash name keeps the full path under the macOS 104-byte

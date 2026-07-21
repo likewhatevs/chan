@@ -4998,8 +4998,12 @@ fn main() {
             // tears down the listener, but we want it live until exit, and
             // RunEvent::Exit tears the process down anyway). A bind failure is
             // non-fatal: the CLI just falls back to its own server.
+            // `ensure_well_known_socket_path` (bind-side) creates the
+            // owner-only socket directory on the no-XDG arm, or refuses a
+            // squatted one; clients validate the same directory without
+            // creating it.
             #[cfg(any(unix, windows))]
-            if let Some(sock) = chan_server::handoff::well_known_socket_path() {
+            if let Some(sock) = chan_server::handoff::ensure_well_known_socket_path() {
                 let app_for_handoff = app.handle().clone();
                 let state_for_handoff = Arc::clone(&state_for_setup);
                 // `start_listener` binds a tokio listener (UnixListener /

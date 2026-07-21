@@ -2420,6 +2420,22 @@ fn parse_devserver_selector(raw: &str) -> std::result::Result<DevserverSelector,
     }
     let url =
         reqwest::Url::parse(raw).map_err(|e| format!("invalid devserver URL {raw:?}: {e}"))?;
+    // Discovery selects a LOCAL instance by port, so a URL naming a non-local
+    // host must refuse rather than silently matching whatever local instance
+    // shares the port number.
+    let host = url.host_str().unwrap_or_default();
+    let host_is_local = host.eq_ignore_ascii_case("localhost")
+        || host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    if !host_is_local {
+        return Err(format!(
+            "devserver URL {raw:?} is not local (host {host:?}): local discovery selects an \
+             instance on this machine by port; use a loopback URL or a bare port"
+        ));
+    }
     let port = url
         .port_or_known_default()
         .ok_or_else(|| format!("devserver URL {raw:?} has no port"))?;
@@ -2544,7 +2560,16 @@ fn decide_open_route(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DevserverSelectionError {
-    NotFound { port: u16 },
+    NotFound {
+        port: u16,
+    },
+    /// The shell's parent devserver is not among the live candidates (a
+    /// pre-discovery instance, or a discovery bind that failed non-fatally).
+    /// Registering anywhere else would mount the workspace on an instance
+    /// the user did not mean, so selection refuses instead of guessing.
+    ParentNotFound {
+        pid: u32,
+    },
     Ambiguous,
 }
 
@@ -2595,20 +2620,24 @@ fn select_devserver<'a>(
         };
     }
 
-    match instances {
-        [] => return Ok(None),
-        [instance] => return Ok(Some(instance)),
-        _ => {}
+    if instances.is_empty() {
+        return Ok(None);
     }
 
+    // Parentage binds BEFORE the sole-candidate short-circuit: a shell
+    // spawned by devserver A must never be adopted by the only-visible
+    // devserver B just because A's discovery socket is gone.
     if let Some(pid) = parent_pid {
         let mut matches = instances.iter().filter(|instance| instance.pid == pid);
-        if let Some(instance) = matches.next() {
-            if matches.next().is_none() {
-                return Ok(Some(instance));
-            }
-            return Err(DevserverSelectionError::Ambiguous);
-        }
+        return match (matches.next(), matches.next()) {
+            (Some(instance), None) => Ok(Some(instance)),
+            (Some(_), Some(_)) => Err(DevserverSelectionError::Ambiguous),
+            (None, _) => Err(DevserverSelectionError::ParentNotFound { pid }),
+        };
+    }
+
+    if let [instance] = instances {
+        return Ok(Some(instance));
     }
 
     let mut matches = instances
@@ -2861,6 +2890,20 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
     };
     let no_explicit_target = !flags.standalone && !flags.desktop && flags.devserver.is_none();
     let devserver_opt_out = chan_server::devserver_handoff::devserver_handoff_opt_out();
+    // A VALUED selector names a specific devserver; silently serving
+    // standalone instead would be the wrong-instance outcome this flag exists
+    // to prevent. The bare `--devserver` keeps its historical behavior under
+    // the opt-out (skip the handoff, serve standalone), as does the env var
+    // alone.
+    if devserver_opt_out {
+        if let Some(DevserverSelector::Port(port)) = flags.devserver {
+            anyhow::bail!(
+                "--devserver={port} conflicts with CHAN_NO_DEVSERVER_HANDOFF: the flag names \
+                 a devserver to register with, but the environment opts this command out of \
+                 devserver handoff. Unset CHAN_NO_DEVSERVER_HANDOFF, or drop --devserver={port}."
+            );
+        }
+    }
     let desktop_opt_out = chan_server::handoff::handoff_opt_out();
     let need_devservers = !devserver_opt_out
         && (flags.devserver.is_some()
@@ -2913,6 +2956,13 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
             Err(DevserverSelectionError::NotFound { port }) => anyhow::bail!(
                 "no live local devserver matches --devserver={port}.{}\nUse `chan open \
                  --devserver` to select automatically, or start the requested instance.",
+                devserver_candidates_text(&candidates),
+            ),
+            Err(DevserverSelectionError::ParentNotFound { pid }) => anyhow::bail!(
+                "this shell was spawned by a devserver (pid {pid}) that is not among the \
+                 live discovered devservers.{}\nExpected the spawning instance; refusing to \
+                 register with a different one. Choose one explicitly with \
+                 --devserver=<port|url>, or use --standalone.",
                 devserver_candidates_text(&candidates),
             ),
             Err(DevserverSelectionError::Ambiguous) => anyhow::bail!(
@@ -3131,8 +3181,9 @@ fn devserver_port_collision_hint(
     }
     Some(format!(
         "port {DEFAULT_PORT} is already in use, but no devserver of yours was discovered \
-         on that port. Another process or another user's devserver may hold it. Re-run \
-         with `--port N` to bind a standalone server elsewhere."
+         on that port. The holder may be another process, another user's devserver, or \
+         your own devserver from an older chan version (pre-discovery instances are \
+         invisible here). Re-run with `--port N` to bind a standalone server elsewhere."
     ))
 }
 
@@ -6610,6 +6661,9 @@ mod tests {
             devserver_port_collision_hint(DEFAULT_PORT, &in_use(), &[other_port]).expect("hint");
         assert!(hint.contains("no devserver of yours"), "{hint}");
         assert!(hint.contains("another user's"), "{hint}");
+        // The holder can also be the user's own pre-discovery devserver;
+        // the hint must not imply only foreign processes qualify.
+        assert!(hint.contains("older chan version"), "{hint}");
         assert!(!hint.contains("did not mount"), "{hint}");
 
         assert!(devserver_port_collision_hint(9999, &in_use(), &[]).is_none());
@@ -6970,6 +7024,66 @@ mod tests {
             ),
             Err(DevserverSelectionError::NotFound { port: 7777 })
         );
+    }
+
+    #[test]
+    fn parentage_refuses_when_the_parent_is_not_discovered() {
+        let a = candidate(0, 10, "/library/a", 8787);
+        let b = candidate(1, 20, "/library/b", 9999);
+
+        // A matching parent pid still selects, even as the sole candidate.
+        assert_eq!(
+            select_devserver(
+                std::slice::from_ref(&a),
+                None,
+                Some(10),
+                Path::new("/other")
+            )
+            .unwrap()
+            .map(|candidate| candidate.port),
+            Some(8787)
+        );
+        // The spawning devserver is invisible to discovery: adopting the sole
+        // survivor would mount the workspace on the wrong instance, so
+        // selection refuses. (No-parent sole-candidate adoption is pinned by
+        // `devserver_selection_is_deterministic`.)
+        assert_eq!(
+            select_devserver(
+                std::slice::from_ref(&a),
+                None,
+                Some(99),
+                Path::new("/other")
+            ),
+            Err(DevserverSelectionError::ParentNotFound { pid: 99 })
+        );
+        // Same with several candidates: parentage never falls through to the
+        // CHAN_HOME preference when it names a pid that is not live.
+        assert_eq!(
+            select_devserver(&[a, b], None, Some(99), Path::new("/library/b")),
+            Err(DevserverSelectionError::ParentNotFound { pid: 99 })
+        );
+    }
+
+    #[test]
+    fn devserver_selector_url_must_be_local() {
+        assert_eq!(
+            parse_devserver_selector("http://localhost:9999"),
+            Ok(DevserverSelector::Port(9999))
+        );
+        assert_eq!(
+            parse_devserver_selector("http://127.0.0.1:8787"),
+            Ok(DevserverSelector::Port(8787))
+        );
+        assert_eq!(
+            parse_devserver_selector("http://[::1]:9999"),
+            Ok(DevserverSelector::Port(9999))
+        );
+        // A remote URL must refuse, not silently select a local instance
+        // that happens to share the port number.
+        let err = parse_devserver_selector("https://chan.example.com:9999").unwrap_err();
+        assert!(err.contains("not local"), "{err}");
+        let err = parse_devserver_selector("http://192.168.1.7:8787").unwrap_err();
+        assert!(err.contains("not local"), "{err}");
     }
 
     #[cfg(unix)]
