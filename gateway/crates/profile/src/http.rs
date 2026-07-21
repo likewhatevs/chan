@@ -3,8 +3,8 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
+use gateway_common::devserver_control_client::DevserverControlClient;
 use gateway_common::validators::{valid_username, MAX_USERNAME_EDITS};
-use gateway_common::workspace_admin_client::WorkspaceAdminClient;
 use serde::Deserialize;
 use sqlx::PgPool;
 use subtle::ConstantTimeEq;
@@ -59,12 +59,12 @@ pub struct AppState {
     /// route 401, which is the safe default if the env var was
     /// forgotten on a fresh deploy.
     pub admin_token: Option<String>,
-    /// Optional devserver-proxy admin client used by `admin_block_user`
+    /// Optional devserver-control admin client used by `admin_block_user`
     /// to evict the user's live tunnels at the same moment we set
     /// `blocked_at`. `None` is fine in dev: tunnels just linger
     /// until reconnect, at which point the validate query refuses
     /// them on `blocked_at IS NOT NULL`.
-    pub workspace_admin: Option<WorkspaceAdminClient>,
+    pub workspace_admin: Option<DevserverControlClient>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -730,10 +730,10 @@ async fn admin_block_user(
     // we block. Without this, an authenticated `chan devserver` keeps
     // serving over its existing yamux substreams until it disconnects;
     // the DB block is already enforced for new validates and new
-    // sessions, but the in-process registrations on devserver-proxy don't
-    // see the row change. A devserver-proxy outage at this exact moment
-    // is acceptable: the next reconnect's validate refuses the token
-    // on `blocked_at IS NOT NULL`, so the gap closes shortly.
+    // sessions, but the live registrations the proxy fleet holds don't
+    // see the row change. A devserver-control outage at this exact
+    // moment is acceptable: the next reconnect's validate refuses the
+    // token on `blocked_at IS NOT NULL`, so the gap closes shortly.
     if let Some(client) = &state.workspace_admin {
         match client.kill_user_tunnels(&user.username).await {
             Ok(killed) if killed > 0 => {

@@ -1,10 +1,10 @@
 # chan-gateway-admin
 
-Operator CLI for the chan-gateway suite. Manages users, personal access tokens, audit logs, and live tunnel registrations by calling profile-service and devserver-proxy admin routes over Bearer auth.
+Operator CLI for the chan-gateway suite. Manages users, personal access tokens, audit logs, live tunnel registrations, and the connected proxy fleet by calling profile-service and devserver-control admin routes over Bearer auth.
 
 ## Role in the system
 
-Out-of-band admin surface. profile-service exposes `/v1/admin/*`; devserver-proxy exposes `/admin/v1/*`. This CLI is the human-friendly wrapper around both. Designed to run inside the chan infrastructure (an admin host that can reach the internal profile URL and the devserver-proxy admin port) or alongside the gateway services on a single host.
+Out-of-band admin surface. profile-service exposes `/v1/admin/*`; devserver-control exposes `/admin/v1/*`. This CLI is the human-friendly wrapper around both. Designed to run inside the chan infrastructure (an admin host that can reach the internal profile URL and the devserver-control admin port) or alongside the gateway services on a single host.
 
 ## Build
 
@@ -33,9 +33,9 @@ sudo apt install ./chan-gateway-admin_*.deb
 | `CHAN_ADMIN_TOKEN`        | none                     | Bearer for both    |
 |                           |                          | services. Required.|
 | `CHAN_ADMIN_PROFILE_URL`  | `http://127.0.0.1:7001`  | profile-service    |
-| `CHAN_ADMIN_WORKSPACE_URL`    | `http://127.0.0.1:7002`  | devserver-proxy        |
+| `CHAN_ADMIN_WORKSPACE_URL`    | `http://127.0.0.1:7003`  | devserver-control      |
 
-Single-token deployments set `CHAN_ADMIN_TOKEN` to a value that matches both `PROFILE_ADMIN_TOKEN` (profile-service) and `DEVSERVER_ADMIN_TOKEN` (devserver-proxy). Deployments that rotate the two service tokens independently pass `--token` per invocation, with the value matching the service that invocation talks to.
+Single-token deployments set `CHAN_ADMIN_TOKEN` to a value that matches both `PROFILE_ADMIN_TOKEN` (profile-service) and `DEVSERVER_ADMIN_TOKEN` (devserver-control). Deployments that rotate the two service tokens independently pass `--token` per invocation, with the value matching the service that invocation talks to.
 
 ## Commands
 
@@ -59,6 +59,9 @@ chan-gateway-admin token audit  <token-uuid> [--limit <n>]
 chan-gateway-admin tunnel ps    [--user <ident>]
 chan-gateway-admin tunnel kill  <user> <workspace>
 chan-gateway-admin tunnel watch [--user <ident>]
+
+chan-gateway-admin proxy ps
+chan-gateway-admin proxy watch
 
 chan-gateway-admin flag list
 chan-gateway-admin flag create    <key> [--default-on|--default-off] [--description <text>]

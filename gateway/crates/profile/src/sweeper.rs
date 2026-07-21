@@ -5,14 +5,14 @@
 //! rotation strands the old row forever, so the dashboard lists every
 //! devserver ever registered. The sweeper keeps the registry honest:
 //! each tick stamps `last_seen_at` on the rows that are live right now
-//! (devserver-proxy's admin tunnel snapshot) and deletes rows offline
-//! longer than the configured retention, where offline age is
+//! (devserver-control's aggregate tunnel snapshot) and deletes rows
+//! offline longer than the configured retention, where offline age is
 //! `now() - COALESCE(last_seen_at, created_at)`.
 //!
 //! Fail-safe rule (load-bearing, test-pinned): a tick that cannot
 //! fetch the live-tunnel snapshot marks and deletes NOTHING. Marking
 //! runs strictly before deletion inside a tick, so rows only age
-//! toward deletion while ticks are succeeding -- a devserver-proxy
+//! toward deletion while ticks are succeeding -- a devserver-control
 //! outage longer than the retention cannot wipe a live registry.
 //!
 //! Comeback semantics: deletion cascades the row's grants away
@@ -21,13 +21,13 @@
 //! tunnel `Hello`, and identity's validate exchange recreates the row
 //! with that label on the spot. A client that announces no name shows
 //! up live-unlabeled on the owner's dashboard (the live list comes
-//! from devserver-proxy) until the next grant create or identity mint
-//! recreates its row. The owner's own entry and open flow never
-//! break: owner-side access checks never read the `devservers` table.
+//! from devserver-control's aggregate) until the next grant create or
+//! identity mint recreates its row. The owner's own entry and open
+//! flow never break: owner-side access checks never read the
+//! `devservers` table.
 //!
-//! Single-proxy assumption: the snapshot comes from the one
-//! devserver-proxy instance the admin client points at. A multi-proxy
-//! deployment needs a merged snapshot before this sweeper is safe.
+//! Fleet coverage: the snapshot is devserver-control's cluster-wide
+//! aggregate, so registrations on every connected proxy count as live.
 //!
 //! The loop runs detached for the life of the process (spawned from
 //! `run()` in main before serve); process shutdown is its cancellation
@@ -35,7 +35,7 @@
 
 use std::time::Duration;
 
-use gateway_common::workspace_admin_client::WorkspaceAdminClient;
+use gateway_common::devserver_control_client::DevserverControlClient;
 use sqlx::postgres::PgPool;
 
 /// What one sweep did: live rows stamped, stale rows deleted (grants
@@ -58,7 +58,7 @@ pub async fn sweep_once(
     let devserver_ids: Vec<String> = live.iter().map(|(_, d)| d.clone()).collect();
 
     // Mark strictly before delete: a row live in this snapshot must not
-    // be deletable by this same tick. The proxy reports owners by
+    // be deletable by this same tick. The controller reports owners by
     // username; rows key on owner_user_id, so the pairs join through
     // users.
     let marked = sqlx::query(
@@ -98,7 +98,7 @@ pub async fn sweep_once(
 
 /// Sweep loop: one tick per minute, each tick gated on a SUCCESSFUL
 /// `list_all_tunnels` fetch; any fetch error skips the whole tick.
-pub async fn run(pool: PgPool, admin: WorkspaceAdminClient, retention: Duration) {
+pub async fn run(pool: PgPool, admin: DevserverControlClient, retention: Duration) {
     const TICK: Duration = Duration::from_secs(60);
     let mut interval = tokio::time::interval(TICK);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);

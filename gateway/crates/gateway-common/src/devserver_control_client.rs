@@ -1,0 +1,318 @@
+//! Thin reqwest client for devserver-control's `/admin/v1/*` tree.
+//!
+//! Used by:
+//!   * identity-service on PAT revoke, account delete, and dashboard
+//!     reads (`/api/me` merges the live workspace list), so id can
+//!     render and gate against the fleet-wide aggregate the controller
+//!     holds without going through any single proxy's surface.
+//!   * profile-service on admin block and in the devserver-registry
+//!     sweeper, so the live registrations the fleet holds for a user
+//!     are torn down at the same time the DB state changes, and the
+//!     sweeper marks from one cluster-wide snapshot.
+//!
+//! Errors are surfaced but every write call site should treat this
+//! as best-effort: a brief devserver-control outage shouldn't block the
+//! primary action (revoke, block, delete). On the wire the existing
+//! tokens stop validating immediately; the live substreams just
+//! linger a bit longer than ideal. Read calls bubble up directly
+//! because the dashboard and the sweeper genuinely need the answer:
+//! a controller 503 or transport error is an upstream failure, never
+//! an empty list.
+//!
+//! `DevserverControlError` is the client's own error enum so this crate
+//! has no axum / IntoResponse dependency. Each consumer maps it onto
+//! its local error via a `From` impl.
+
+use chrono::{DateTime, Utc};
+use reqwest::StatusCode;
+use serde::Deserialize;
+use url::Url;
+use uuid::Uuid;
+
+#[derive(Debug, thiserror::Error)]
+pub enum DevserverControlError {
+    #[error("devserver-control admin upstream: {0}")]
+    Upstream(String),
+    #[error(transparent)]
+    Reqwest(#[from] reqwest::Error),
+}
+
+pub type DevserverControlResult<T> = Result<T, DevserverControlError>;
+
+/// One live tunnel as devserver-control reports it. Mirrors
+/// devserver-control's `state::TunnelView`; the duplication is
+/// deliberate (this crate stays independent of the controller's
+/// internal types so it can be pulled by identity and profile without
+/// a circular dep). `proxy_id` and `proxy_base_url` identify the
+/// proxy node that holds the registration; consumers that predate the
+/// distributed fleet ignore them.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TunnelView {
+    pub user: String,
+    /// The registration's second key: one of the owner's live
+    /// devserver ids (a user can hold several). Pinned to the
+    /// producer's JSON field name (`devserver_id`).
+    pub devserver_id: String,
+    pub peer_addr: Option<String>,
+    pub connected_at: DateTime<Utc>,
+    pub proxy_id: String,
+    pub proxy_base_url: String,
+}
+
+/// One connected proxy node as devserver-control reports it. Mirrors
+/// devserver-control's `state::ProxyView` for the same decoupling
+/// reason as [`TunnelView`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProxyView {
+    pub proxy_id: String,
+    pub proxy_base_url: String,
+    pub package_version: String,
+    pub boot_id: Uuid,
+    pub connected_at: DateTime<Utc>,
+    pub last_seen_at: DateTime<Utc>,
+    pub tunnel_count: usize,
+    pub status: ProxyStatus,
+}
+
+/// Session state the controller publishes for a proxy. Serialized
+/// snake_case on the wire (`joining` / `active`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyStatus {
+    Joining,
+    Active,
+}
+
+#[derive(Clone)]
+pub struct DevserverControlClient {
+    base: Url,
+    http: reqwest::Client,
+    token: String,
+}
+
+impl std::fmt::Debug for DevserverControlClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DevserverControlClient")
+            .field("base", &self.base)
+            // token deliberately elided
+            .finish()
+    }
+}
+
+/// Percent-encode one path segment. Usernames are normally
+/// `[a-z0-9-]` but the admin tree may have to handle pre-normalized
+/// inputs (transient migration data, future relaxed validators), so
+/// any byte outside the unreserved set per RFC 3986 §2.3 is escaped.
+/// `url::Url::set_path` does not handle this automatically.
+fn encode_segment(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+impl DevserverControlClient {
+    pub fn new(base: Url, token: String) -> anyhow::Result<Self> {
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .connect_timeout(std::time::Duration::from_secs(2))
+            .build()?;
+        Ok(Self { base, http, token })
+    }
+
+    /// Force-evict every tunnel `username` has live across the fleet.
+    /// Idempotent; "nothing to kill" returns `0`.
+    pub async fn kill_user_tunnels(&self, username: &str) -> DevserverControlResult<usize> {
+        let mut url = self.base.clone();
+        let user = encode_segment(username);
+        url.set_path(&format!("/admin/v1/users/{user}/tunnels/kill"));
+        let res = self.http.post(url).bearer_auth(&self.token).send().await?;
+        let status = res.status();
+        if !status.is_success() {
+            let body = res.text().await.unwrap_or_default();
+            tracing::warn!(%status, body = %body, "devserver-control admin upstream error");
+            return Err(DevserverControlError::Upstream(format!("{status}")));
+        }
+        // The endpoint returns 200 with a JSON body; tolerate 204 to
+        // leave room for a future "noop" optimisation.
+        if status == StatusCode::NO_CONTENT {
+            return Ok(0);
+        }
+        let body: KillResponse = res.json().await?;
+        Ok(body.killed)
+    }
+
+    /// Snapshot of EVERY live tunnel across all users and proxies
+    /// (`GET /admin/v1/tunnels`). The profile sweeper's mark source: each
+    /// sweep tick stamps `devservers.last_seen_at` for exactly the
+    /// `(user, devserver_id)` pairs returned here, so an error MUST make
+    /// the caller skip the whole tick -- marking from a partial or failed
+    /// snapshot would age live rows toward deletion. Errors bubble up
+    /// (no best-effort swallowing) for that reason.
+    pub async fn list_all_tunnels(&self) -> DevserverControlResult<Vec<TunnelView>> {
+        let mut url = self.base.clone();
+        url.set_path("/admin/v1/tunnels");
+        let res = self.http.get(url).bearer_auth(&self.token).send().await?;
+        let status = res.status();
+        if !status.is_success() {
+            let body = res.text().await.unwrap_or_default();
+            tracing::warn!(%status, body = %body, "devserver-control admin upstream error");
+            return Err(DevserverControlError::Upstream(format!("{status}")));
+        }
+        let tunnels: Vec<TunnelView> = res.json().await?;
+        Ok(tunnels)
+    }
+
+    /// Snapshot of every live tunnel for `username` across the fleet.
+    /// Identity's dashboard calls this on every `/api/me` so the SPA
+    /// renders the user's workspace cards. Empty list when the user has
+    /// nothing connected; absent user returns 200 with an empty list
+    /// (the endpoint doesn't 404 on unknown users so callers don't have
+    /// to special-case the steady state where a fresh sign-in has
+    /// nothing registered yet).
+    pub async fn list_user_tunnels(
+        &self,
+        username: &str,
+    ) -> DevserverControlResult<Vec<TunnelView>> {
+        let mut url = self.base.clone();
+        let user = encode_segment(username);
+        url.set_path(&format!("/admin/v1/users/{user}/tunnels"));
+        let res = self.http.get(url).bearer_auth(&self.token).send().await?;
+        let status = res.status();
+        if !status.is_success() {
+            let body = res.text().await.unwrap_or_default();
+            tracing::warn!(%status, body = %body, "devserver-control admin upstream error");
+            return Err(DevserverControlError::Upstream(format!("{status}")));
+        }
+        let tunnels: Vec<TunnelView> = res.json().await?;
+        Ok(tunnels)
+    }
+
+    /// Snapshot of every proxy node currently connected to the
+    /// controller (`GET /admin/v1/proxies`). Same fail-closed rule as
+    /// the tunnel reads: a controller error is an upstream failure,
+    /// never an empty fleet.
+    pub async fn list_proxies(&self) -> DevserverControlResult<Vec<ProxyView>> {
+        let mut url = self.base.clone();
+        url.set_path("/admin/v1/proxies");
+        let res = self.http.get(url).bearer_auth(&self.token).send().await?;
+        let status = res.status();
+        if !status.is_success() {
+            let body = res.text().await.unwrap_or_default();
+            tracing::warn!(%status, body = %body, "devserver-control admin upstream error");
+            return Err(DevserverControlError::Upstream(format!("{status}")));
+        }
+        let proxies: Vec<ProxyView> = res.json().await?;
+        Ok(proxies)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct KillResponse {
+    killed: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tunnel_view_pins_the_admin_wire_field_names() {
+        // devserver-control's state::TunnelView serializes the owner as
+        // `user` (NOT `username`), the registration key as
+        // `devserver_id`, and the owning node as `proxy_id` /
+        // `proxy_base_url`. The profile sweeper joins its mark UPDATE
+        // through users on these values, so a silent producer-side
+        // rename would no-op every mark and age the whole registry
+        // toward deletion.
+        let v: TunnelView = serde_json::from_str(
+            r#"{
+                "user": "alice",
+                "devserver_id": "abc123",
+                "peer_addr": "192.0.2.7:52011",
+                "connected_at": "2026-07-15T00:00:00Z",
+                "proxy_id": "p1",
+                "proxy_base_url": "https://p1.usr.chan.app"
+            }"#,
+        )
+        .expect("admin tunnel wire shape parses");
+        assert_eq!(v.user, "alice");
+        assert_eq!(v.devserver_id, "abc123");
+        assert_eq!(v.peer_addr.as_deref(), Some("192.0.2.7:52011"));
+        assert_eq!(v.proxy_id, "p1");
+        assert_eq!(v.proxy_base_url, "https://p1.usr.chan.app");
+
+        // A payload using `username` must NOT parse: catching the rename
+        // here beats debugging a sweeper that never marks anything.
+        let renamed = serde_json::from_str::<TunnelView>(
+            r#"{
+                "username": "alice",
+                "devserver_id": "abc123",
+                "peer_addr": null,
+                "connected_at": "2026-07-15T00:00:00Z",
+                "proxy_id": "p1",
+                "proxy_base_url": "https://p1.usr.chan.app"
+            }"#,
+        );
+        assert!(renamed.is_err(), "the owner field is pinned to `user`");
+
+        // A pre-fleet payload without the proxy fields must NOT parse:
+        // the controller always emits them, so accepting their absence
+        // would hide a producer that is not the controller.
+        let missing_proxy = serde_json::from_str::<TunnelView>(
+            r#"{
+                "user": "alice",
+                "devserver_id": "abc123",
+                "peer_addr": null,
+                "connected_at": "2026-07-15T00:00:00Z"
+            }"#,
+        );
+        assert!(
+            missing_proxy.is_err(),
+            "proxy_id and proxy_base_url are required"
+        );
+    }
+
+    #[test]
+    fn proxy_view_pins_the_admin_wire_field_names() {
+        let v: ProxyView = serde_json::from_str(
+            r#"{
+                "proxy_id": "p1",
+                "proxy_base_url": "https://p1.usr.chan.app",
+                "package_version": "0.72.0",
+                "boot_id": "550e8400-e29b-41d4-a716-446655440000",
+                "connected_at": "2026-07-15T00:00:00Z",
+                "last_seen_at": "2026-07-15T00:00:05Z",
+                "tunnel_count": 3,
+                "status": "active"
+            }"#,
+        )
+        .expect("admin proxy wire shape parses");
+        assert_eq!(v.proxy_id, "p1");
+        assert_eq!(v.tunnel_count, 3);
+        assert_eq!(v.status, ProxyStatus::Active);
+
+        // The joining state round-trips too; the fleet publishes it
+        // while a proxy's snapshot is still staging.
+        let joining: ProxyView = serde_json::from_str(
+            r#"{
+                "proxy_id": "p2",
+                "proxy_base_url": "https://p2.usr.chan.app",
+                "package_version": "0.72.0",
+                "boot_id": "550e8400-e29b-41d4-a716-446655440001",
+                "connected_at": "2026-07-15T00:00:00Z",
+                "last_seen_at": "2026-07-15T00:00:05Z",
+                "tunnel_count": 0,
+                "status": "joining"
+            }"#,
+        )
+        .expect("joining status parses");
+        assert_eq!(joining.status, ProxyStatus::Joining);
+    }
+}

@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use anyhow::Context;
-use gateway_common::workspace_admin_client::WorkspaceAdminClient;
+use gateway_common::devserver_control_client::DevserverControlClient;
 use url::Url;
 
 /// Runtime config sourced from environment variables.
@@ -20,12 +20,12 @@ pub struct Config {
     /// devserver-proxy. Optional: when unset, the admin tree returns
     /// 401 for every request, which is the safe default.
     pub admin_token: Option<String>,
-    /// Pre-built admin client for devserver-proxy. `None` when
+    /// Pre-built admin client for devserver-control. `None` when
     /// `DEVSERVER_ADMIN_TOKEN` is unset, in which case admin block
     /// skips the tunnel-kill call (the live substreams stay alive
     /// until they reconnect and the next validate refuses them) and
     /// the registry sweeper does not spawn (no live-tunnel source).
-    pub workspace_admin: Option<WorkspaceAdminClient>,
+    pub workspace_admin: Option<DevserverControlClient>,
     /// Devserver registry sweeper retention, from
     /// `DEVSERVER_RETENTION_MINUTES`: rows offline longer than this are
     /// deleted. Absent or empty = 15 minutes; `0` = sweeping disabled
@@ -64,19 +64,19 @@ impl Config {
             .ok()
             .filter(|s| !s.is_empty());
 
-        // DEVSERVER_ADMIN_URL points at devserver-proxy's public listener; in
-        // single-listener deployments that's the same `devserver.chan.app`
-        // host. Unset is OK in lab / one-machine setups: block-user
+        // DEVSERVER_ADMIN_URL points at devserver-control's admin
+        // listener (the aggregate `/admin/v1/*` tree, default port
+        // 7003). Unset is OK in lab / one-machine setups: block-user
         // still works, the live tunnel just lingers until reconnect.
         let workspace_admin = std::env::var("DEVSERVER_ADMIN_TOKEN")
             .ok()
             .filter(|s| !s.is_empty())
-            .map(|tok| -> anyhow::Result<WorkspaceAdminClient> {
+            .map(|tok| -> anyhow::Result<DevserverControlClient> {
                 let url: Url = std::env::var("DEVSERVER_ADMIN_URL")
                     .context("DEVSERVER_ADMIN_URL is required when DEVSERVER_ADMIN_TOKEN is set")?
                     .parse()
                     .context("DEVSERVER_ADMIN_URL must be a URL")?;
-                WorkspaceAdminClient::new(url, tok)
+                DevserverControlClient::new(url, tok)
             })
             .transpose()?;
 

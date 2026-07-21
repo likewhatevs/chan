@@ -1,11 +1,11 @@
 //! chan-gateway-admin: command-line admin for the chan.app gateway.
 //!
 //! Talks to profile-service's `/v1/admin/*` tree (plus the non-admin
-//! routes used for cross-service reads), devserver-proxy's
-//! `/admin/v1/*` tree (tunnel ps / kill / watch), and
+//! routes used for cross-service reads), devserver-control's
+//! `/admin/v1/*` tree (tunnel and proxy ps / kill / watch), and
 //! identity-service's `/admin/v1/tokens` (PAT mint). Authenticates
 //! with `CHAN_ADMIN_TOKEN`, which must match `PROFILE_ADMIN_TOKEN` on
-//! profile-service, `DEVSERVER_ADMIN_TOKEN` on devserver-proxy, and
+//! profile-service, `DEVSERVER_ADMIN_TOKEN` on devserver-control, and
 //! `IDENTITY_ADMIN_TOKEN` on identity-service.
 //!
 //! Output is shell-friendly: human-readable tables on a TTY,
@@ -33,7 +33,7 @@ const EXIT_NOT_FOUND: u8 = 3;
 #[command(
     name = "chan-gateway-admin",
     version,
-    about = "Admin CLI for chan-gateway (users, tokens, tunnels, flags, audit).",
+    about = "Admin CLI for chan-gateway (users, tokens, tunnels, proxies, flags, audit).",
     propagate_version = true
 )]
 struct Cli {
@@ -42,8 +42,9 @@ struct Cli {
     #[arg(long, global = true, env = "CHAN_ADMIN_PROFILE_URL")]
     profile_url: Option<String>,
 
-    /// HTTP URL of devserver-proxy (used by `tunnel` subcommands).
-    /// Defaults to CHAN_ADMIN_WORKSPACE_URL or http://127.0.0.1:7002.
+    /// HTTP URL of devserver-control (used by `tunnel` and `proxy`
+    /// subcommands). Defaults to CHAN_ADMIN_WORKSPACE_URL or
+    /// http://127.0.0.1:7003.
     #[arg(long, global = true, env = "CHAN_ADMIN_WORKSPACE_URL")]
     workspace_url: Option<String>,
 
@@ -53,7 +54,7 @@ struct Cli {
     identity_url: Option<String>,
 
     /// Bearer matching profile-service's PROFILE_ADMIN_TOKEN and
-    /// devserver-proxy's DEVSERVER_ADMIN_TOKEN. Single-token deployments
+    /// devserver-control's DEVSERVER_ADMIN_TOKEN. Single-token deployments
     /// share one secret across both services; deployments that
     /// rotate them independently can override per-call with the
     /// dedicated env vars.
@@ -80,10 +81,15 @@ enum Cmd {
         #[command(subcommand)]
         cmd: TokenCmd,
     },
-    /// Inspect and kill live tunnels (live devserver-proxy registry).
+    /// Inspect and kill live tunnels (controller aggregate view).
     Tunnel {
         #[command(subcommand)]
         cmd: TunnelCmd,
+    },
+    /// Inspect the proxies connected to devserver-control.
+    Proxy {
+        #[command(subcommand)]
+        cmd: ProxyCmd,
     },
     /// Manage feature flags (default + per-user overrides).
     Flag {
@@ -151,6 +157,15 @@ enum TunnelCmd {
         #[arg(long)]
         user: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum ProxyCmd {
+    /// Snapshot every proxy connected to devserver-control (`ps`-style).
+    Ps,
+    /// Live snapshot stream (SSE). Re-renders the table on every
+    /// snapshot event until Ctrl-C.
+    Watch,
 }
 
 #[derive(Subcommand)]
@@ -300,10 +315,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             cmd: UserCmd::Block { ident, reason },
         } => {
             // Block needs both clients: profile holds the canonical
-            // block + token revoke, devserver-proxy holds live tunnel
+            // block + token revoke, the proxy fleet holds live tunnel
             // registrations that must be severed so the cookie-
             // session bypass (existing tunnels surviving an admin
-            // block) is closed. Profile first so a devserver-proxy
+            // block) is closed. Profile first so a devserver-control
             // outage doesn't leave the user un-blocked.
             let profile = build_profile_client(cli.profile_url.as_deref(), &token)?;
             let u = profile.resolve_user(&ident).await?;
@@ -357,6 +372,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             let client = build_workspace_client(cli.workspace_url.as_deref(), &token)?;
             tunnel_cmd(&client, json, cmd).await
         }
+        Cmd::Proxy { cmd } => {
+            let client = build_workspace_client(cli.workspace_url.as_deref(), &token)?;
+            proxy_cmd(&client, json, cmd).await
+        }
         Cmd::Flag { cmd } => {
             let client = build_profile_client(cli.profile_url.as_deref(), &token)?;
             flag_cmd(&client, json, cmd).await
@@ -374,8 +393,8 @@ fn build_profile_client(url: Option<&str>, token: &str) -> anyhow::Result<AdminC
 fn build_workspace_client(url: Option<&str>, token: &str) -> anyhow::Result<WorkspaceClient> {
     let url = url
         .map(|s| s.to_string())
-        .unwrap_or_else(|| "http://127.0.0.1:7002".to_string());
-    WorkspaceClient::new(url, token.to_string()).context("build workspace admin client")
+        .unwrap_or_else(|| "http://127.0.0.1:7003".to_string());
+    WorkspaceClient::new(url, token.to_string()).context("build devserver-control admin client")
 }
 
 fn build_identity_client(url: Option<&str>, token: &str) -> anyhow::Result<IdentityClient> {
@@ -1041,7 +1060,7 @@ struct MintedToken {
 }
 
 // ---------------------------------------------------------------------------
-// Workspace (tunnel) admin client
+// devserver-control admin client (tunnels + proxies)
 // ---------------------------------------------------------------------------
 
 #[derive(Clone)]
@@ -1148,6 +1167,36 @@ impl WorkspaceClient {
         }
         Ok(res)
     }
+
+    async fn list_proxies(&self) -> anyhow::Result<Vec<ProxyView>> {
+        let res = self
+            .http
+            .get(self.url("/admin/v1/proxies"))
+            .header(header::AUTHORIZATION, format!("Bearer {}", self.token))
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await?;
+        match res.status() {
+            StatusCode::OK => Ok(res.json().await?),
+            s => Err(upstream(s, res).await.into()),
+        }
+    }
+
+    /// SSE stream of `event: snapshot` frames carrying the proxy fleet.
+    async fn watch_proxies(&self) -> anyhow::Result<reqwest::Response> {
+        let res = self
+            .http
+            .get(self.url("/admin/v1/proxies/watch"))
+            .header(header::AUTHORIZATION, format!("Bearer {}", self.token))
+            .header(header::ACCEPT, "text/event-stream")
+            .send()
+            .await?;
+        if !res.status().is_success() {
+            let status = res.status();
+            return Err(upstream(status, res).await.into());
+        }
+        Ok(res)
+    }
 }
 
 /// Tiny helper: percent-encode path segments without pulling in a
@@ -1183,25 +1232,53 @@ async fn tunnel_cmd(c: &WorkspaceClient, json: bool, cmd: TunnelCmd) -> anyhow::
             eprintln!("killed {user}/{workspace}");
         }
         TunnelCmd::Watch { user } => {
-            watch_loop(c, user.as_deref(), json).await?;
+            let res = c.watch().await?;
+            watch_loop(res, json, "tunnel", |payload| {
+                let mut tunnels: Vec<TunnelView> = serde_json::from_slice(payload).ok()?;
+                if let Some(u) = user.as_deref() {
+                    tunnels.retain(|t| t.user == u);
+                }
+                Some((tunnels, render_tunnels as fn(&[TunnelView], bool)))
+            })
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+async fn proxy_cmd(c: &WorkspaceClient, json: bool, cmd: ProxyCmd) -> anyhow::Result<()> {
+    match cmd {
+        ProxyCmd::Ps => {
+            let proxies = c.list_proxies().await?;
+            render_proxies(&proxies, json);
+        }
+        ProxyCmd::Watch => {
+            let res = c.watch_proxies().await?;
+            watch_loop(res, json, "proxy", |payload| {
+                let proxies: Vec<ProxyView> = serde_json::from_slice(payload).ok()?;
+                Some((proxies, render_proxies as fn(&[ProxyView], bool)))
+            })
+            .await?;
         }
     }
     Ok(())
 }
 
 /// Read the SSE stream and re-render on every `snapshot` event.
-/// Plain text mode clears the screen between renders so the
-/// output looks like `top`; --json mode emits one JSON line per
-/// event so it pipes into jq cleanly.
-async fn watch_loop(
-    c: &WorkspaceClient,
-    user_filter: Option<&str>,
+/// `parse` decodes one event payload into the row set plus its
+/// renderer, returning `None` to skip a malformed event. Plain text
+/// mode clears the screen between renders so the output looks like
+/// `top`; --json mode emits one JSON line per event so it pipes into
+/// jq cleanly.
+async fn watch_loop<T: serde::Serialize>(
+    res: reqwest::Response,
     json: bool,
+    what: &str,
+    mut parse: impl FnMut(&[u8]) -> Option<(Vec<T>, fn(&[T], bool))>,
 ) -> anyhow::Result<()> {
     use std::io::Write;
     use tokio_stream::StreamExt;
 
-    let res = c.watch().await?;
     let mut stream = res.bytes_stream();
     let mut buf: Vec<u8> = Vec::new();
     while let Some(chunk) = stream.next().await {
@@ -1211,24 +1288,20 @@ async fn watch_loop(
         while let Some(pos) = find_subseq(&buf, b"\n\n") {
             let block = buf.drain(..pos + 2).collect::<Vec<_>>();
             if let Some(payload) = parse_sse_data(&block) {
-                let mut tunnels: Vec<TunnelView> = match serde_json::from_slice(&payload) {
-                    Ok(v) => v,
-                    Err(_) => continue,
+                let Some((rows, render)) = parse(&payload) else {
+                    continue;
                 };
-                if let Some(u) = user_filter {
-                    tunnels.retain(|t| t.user == u);
-                }
                 if json {
-                    print_json(&tunnels);
+                    print_json(&rows);
                     let _ = std::io::stdout().flush();
                 } else {
                     // ANSI clear screen + home; mirrors `watch -n1`.
                     print!("\x1b[2J\x1b[H");
                     println!(
-                        "chan-gateway-admin tunnel watch  ({})",
+                        "chan-gateway-admin {what} watch  ({})",
                         chrono::Local::now().format("%H:%M:%S")
                     );
-                    render_tunnels(&tunnels, false);
+                    render(&rows, false);
                     let _ = std::io::stdout().flush();
                 }
             }
@@ -1350,6 +1423,20 @@ struct TunnelView {
     devserver_id: String,
     peer_addr: Option<String>,
     connected_at: DateTime<Utc>,
+    proxy_id: String,
+    proxy_base_url: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct ProxyView {
+    proxy_id: String,
+    proxy_base_url: String,
+    package_version: String,
+    boot_id: Uuid,
+    connected_at: DateTime<Utc>,
+    last_seen_at: DateTime<Utc>,
+    tunnel_count: usize,
+    status: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -1436,7 +1523,7 @@ fn render_tunnels(rows: &[TunnelView], json: bool) {
         return;
     }
     let mut t = make_table();
-    t.set_header(["USER", "DEVSERVER", "PEER", "UPTIME", "CONNECTED"]);
+    t.set_header(["USER", "DEVSERVER", "PROXY", "PEER", "UPTIME", "CONNECTED"]);
     let now = Utc::now();
     for r in rows {
         let uptime = now
@@ -1447,9 +1534,37 @@ fn render_tunnels(rows: &[TunnelView], json: bool) {
         t.add_row([
             Cell::new(&r.user),
             Cell::new(&r.devserver_id),
+            Cell::new(format!("{} ({})", r.proxy_id, r.proxy_base_url)),
             Cell::new(r.peer_addr.as_deref().unwrap_or("-")),
             Cell::new(uptime),
             Cell::new(fmt_dt(r.connected_at)),
+        ]);
+    }
+    println!("{t}");
+}
+
+fn render_proxies(rows: &[ProxyView], json: bool) {
+    if json {
+        print_json(rows);
+        return;
+    }
+    let mut t = make_table();
+    t.set_header([
+        "PROXY",
+        "STATUS",
+        "TUNNELS",
+        "VERSION",
+        "CONNECTED",
+        "LAST SEEN",
+    ]);
+    for r in rows {
+        t.add_row([
+            Cell::new(format!("{} ({})", r.proxy_id, r.proxy_base_url)),
+            Cell::new(&r.status),
+            Cell::new(r.tunnel_count),
+            Cell::new(&r.package_version),
+            Cell::new(fmt_dt(r.connected_at)),
+            Cell::new(fmt_dt(r.last_seen_at)),
         ]);
     }
     println!("{t}");

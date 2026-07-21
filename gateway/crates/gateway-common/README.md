@@ -6,7 +6,7 @@ Not published; not user-facing. Has no binary.
 
 ## Role in the system
 
-The gateway services need the same plumbing in several places -- calling profile-service and devserver-proxy admin, agreeing on public hostnames, validating usernames, signing / verifying the devserver-gate JWT, throttling token validates. This crate is the single home for that shared code so per-crate copies cannot drift.
+The gateway services need the same plumbing in several places -- calling profile-service and devserver-control admin, agreeing on public hostnames, validating usernames, signing / verifying the devserver-gate JWT, throttling token validates. This crate is the single home for that shared code so per-crate copies cannot drift.
 
 ## Build
 
@@ -23,7 +23,7 @@ cargo test  -p gateway-common
 - `static_files`: generic SPA-fallback handler over `rust_embed::RustEmbed`. Each consumer keeps its own `#[derive(Embed)]` (rust_embed resolves the `#[folder]` path relative to the deriving crate) and calls `static_files::serve::<Assets>(uri, banner)`.
 - `token_bucket`: per-fingerprint token bucket with a bounded map, plus the shared default limits for the two validate throttles.
 - `validators`: username shape validation + the lifetime rename cap.
-- `workspace_admin_client`: typed reqwest wrapper over devserver-proxy's `/admin/v1/*` tree.
+- `devserver_control_client`: typed reqwest wrapper over devserver-control's `/admin/v1/*` tree.
 - `devserver_gate`: the entry / session JWT envelope and HS256 encode / decode helpers for the devserver-gate handoff.
 
 ## Design rationale

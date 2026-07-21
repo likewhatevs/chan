@@ -20,24 +20,24 @@
 //!     thin trait-level adapter.
 //!   * `validators`: username shape validation and the lifetime
 //!     rename cap, shared by identity, profile, and devserver-proxy.
-//!   * `workspace_admin_client`: typed HTTP client for devserver-proxy's
-//!     `/admin/v1/*` tree. Used by identity-service (on revoke /
-//!     delete / dashboard reads) and profile-service (on admin
-//!     block) so a state change in the DB also tears down the
-//!     in-process yamux registrations devserver-proxy holds for the
-//!     user.
+//!   * `devserver_control_client`: typed HTTP client for
+//!     devserver-control's `/admin/v1/*` tree. Used by identity-service
+//!     (on revoke / delete / dashboard reads) and profile-service (on
+//!     admin block and in the registry sweeper) so a state change in
+//!     the DB also tears down the live tunnel registrations the proxy
+//!     fleet holds for the user.
 //!   * `devserver_gate`: shared JWT envelope and HS256 encode/decode
 //!     helpers for the devserver-gate handoff. identity mints entry
 //!     tokens; devserver-proxy verifies entry tokens and mints session
 //!     tokens. Same envelope, same secret (DEVSERVER_GATE_SECRET),
 //!     distinct `typ` claim.
 
+pub mod devserver_control_client;
 pub mod devserver_gate;
 pub mod profile_client;
 pub mod shutdown;
 pub mod static_files;
 pub mod token_bucket;
 pub mod validators;
-pub mod workspace_admin_client;
 
 pub use shutdown::shutdown_signal;

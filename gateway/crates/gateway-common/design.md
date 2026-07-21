@@ -5,7 +5,7 @@
 identity-service, devserver-proxy and profile-service need the same plumbing in several places:
 
 - a `ProfileClient` calling profile-service over HTTP;
-- a `WorkspaceAdminClient` calling devserver-proxy admin (used by identity on revoke / delete / dashboard reads and by profile on admin block);
+- a `DevserverControlClient` calling devserver-control admin (used by identity on revoke / delete / dashboard reads and by profile on admin block and the registry sweeper);
 - the JWT shape used by the devserver-gate handoff between identity (mint) and devserver-proxy (verify + mint sessions);
 - the public-hostname derivation both public services must agree on;
 - username validation rules that profile, identity and devserver-proxy all enforce;
@@ -15,7 +15,7 @@ Per-crate copies would risk drift and make cross-cutting choices (timeouts, erro
 
 ## Architecture
 
-Library crate of small, mostly independent modules. The data-layer types carry no axum / `IntoResponse` coupling: axum is a dependency only because `static_files::serve` returns `axum::response::Response`, and `profile_client`, `workspace_admin_client` and `devserver_gate` know nothing of axum.
+Library crate of small, mostly independent modules. The data-layer types carry no axum / `IntoResponse` coupling: axum is a dependency only because `static_files::serve` returns `axum::response::Response`, and `profile_client`, `devserver_control_client` and `devserver_gate` know nothing of axum.
 
 ```mermaid
 flowchart LR
@@ -27,7 +27,7 @@ flowchart LR
   end
   subgraph common["gateway-common modules"]
     pc["profile_client"]
-    wac["workspace_admin_client"]
+    dcc["devserver_control_client"]
     dg["devserver_gate"]
     sf["static_files"]
     dom["domain"]
@@ -36,7 +36,7 @@ flowchart LR
   end
   identity --> pc
   identity --> sf
-  identity --> wac
+  identity --> dcc
   identity -->|"mint entry JWT"| dg
   identity --> dom
   identity --> val
@@ -45,7 +45,7 @@ flowchart LR
   devproxy --> dom
   devproxy --> val
   devproxy --> tb
-  profile --> wac
+  profile --> dcc
   profile --> val
   admin -.->|"own reqwest client, no gateway-common"| profile
 ```
@@ -54,7 +54,7 @@ flowchart LR
 Module names and signatures are self-explanatory; the parts that are not are the contracts each module carries:
 
 - `profile_client`: one reqwest client with a 10-second per-request timeout, the bearer token held inside (the `Debug` impl elides it). Idempotent GETs on the dashboard / OAuth-callback read path retry once after 100 ms on connect error, timeout, or 5xx (`send_idempotent`); writes never retry. `User` is the superset of every field profile-service returns, so consumers ignore the fields they do not need.
-- `workspace_admin_client`: one reqwest client for the apex admin tree with a 5-second timeout, the bearer held inside and elided in `Debug`.
+- `devserver_control_client`: one reqwest client for devserver-control's aggregate admin tree with a 5-second timeout, the bearer held inside and elided in `Debug`. `TunnelView` carries the owning node's `proxy_id` and `proxy_base_url` alongside the registration key; `ProxyView` mirrors the controller's fleet rows for `list_proxies`.
 - `devserver_gate`: `Claims` is the entry / session JWT envelope (`iss`, `sub`, `role`, `drv`, `aud`, `typ`, `iat`, `exp`, plus optional `name` / `email` identity claims that decode to `None` on tokens minted without them). HS256 is hard-required -- no `alg: none` path exists and no asymmetric algorithm is enabled -- and `decode` verifies `aud` / `drv` / `typ`. devserver-proxy stores the session shape in a host-only `Path=/` cookie because a grant covers the whole devserver. `CallerIdentity` is the mint-time identity bundle; see the module doc for its staleness bound.
 - `domain`: `Domains` derives every public hostname (`base`, `id_host`, `devserver_apex`, `devserver_wildcard_suffix`) from one base (`CHAN_DOMAIN`, default `localtest.me`). identity and devserver-proxy derive from the same env, so the hosts cannot drift. The devserver-gate `aud` is the canonical inbound host: lowercase, no default port, non-default port preserved.
 - `token_bucket`: per-fingerprint bucket over a bounded, LRU-evicting map. A new fingerprint starts at one token, not a full burst, so rotating fingerprints can't bank capacity; `fingerprint` is a SipHash-64 of the candidate token. `DEFAULT_REFILL_PER_SEC` / `DEFAULT_CAPACITY` / `DEFAULT_MAP_CAP` (4 rps, 16 burst, 4096 entries) are single-sourced so the two validate throttles cannot drift.
@@ -66,7 +66,7 @@ Module names and signatures are self-explanatory; the parts that are not are the
 
 ### No axum coupling in the data-layer types
 
-`ProfileError`, `WorkspaceAdminError`, `DevserverGateError` and `Claims` are plain thiserror / serde types. Each consumer maps the error onto its local request-handler error via a `From` impl. Keeps gateway-common free of HTTP-framing decisions and lets each consumer decide whether a given variant is a distinct status or folds into another.
+`ProfileError`, `DevserverControlError`, `DevserverGateError` and `Claims` are plain thiserror / serde types. Each consumer maps the error onto its local request-handler error via a `From` impl. Keeps gateway-common free of HTTP-framing decisions and lets each consumer decide whether a given variant is a distinct status or folds into another.
 
 ### `User` is the superset
 
@@ -90,10 +90,10 @@ Each consumer's "frontend not built" banner names the right build target. Parame
 
 ## Invariants
 
-- `gateway_common` does not pull axum or any HTTP-routing framework into its data-layer surface. axum is a dependency only because `static_files::serve` returns `axum::response::Response`; nothing in `profile_client`, `workspace_admin_client` or `devserver_gate` knows axum exists.
-- Bearer tokens passed to `ProfileClient::new` or `WorkspaceAdminClient::new` live inside the client; the `Debug` impl deliberately elides the token.
+- `gateway_common` does not pull axum or any HTTP-routing framework into its data-layer surface. axum is a dependency only because `static_files::serve` returns `axum::response::Response`; nothing in `profile_client`, `devserver_control_client` or `devserver_gate` knows axum exists.
+- Bearer tokens passed to `ProfileClient::new` or `DevserverControlClient::new` live inside the client; the `Debug` impl deliberately elides the token.
 - `devserver_gate` enforces `alg: HS256` on every decode. No "alg: none" is ever accepted; no asymmetric algorithm is enabled.
-- HTTP calls run through one reqwest client per type with a fixed timeout (10s for profile, 5s for workspace-admin). New methods reuse the existing builder.
+- HTTP calls run through one reqwest client per type with a fixed timeout (10s for profile, 5s for devserver-control). New methods reuse the existing builder.
 
 ## Error model
 
@@ -107,7 +107,7 @@ Each consumer's "frontend not built" banner names the right build target. Parame
 | `Upstream`    | any other non-success status               |
 | `Reqwest`     | `From<reqwest::Error>` for transport       |
 
-`WorkspaceAdminError`:
+`DevserverControlError`:
 
 | Variant       | Construction                               |
 |---------------|--------------------------------------------|
