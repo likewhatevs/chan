@@ -152,10 +152,25 @@ export function firstSlideHeadingCaret(source: string): number | null {
   const lines = source.split("\n");
   const bodyStart = frontmatterEndLine(lines);
   let offset = 0;
+  // Track fences so a `# comment` inside a fenced block is not mistaken for the
+  // first title, the same cheap tracker OutlineBody and wikiBlocks use.
+  let inFence = false;
+  let fenceMarker = "";
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? "";
-    if (i >= bodyStart && /^#{1,6} /.test(line)) {
-      return offset + line.replace(/\r$/, "").length;
+    if (i >= bodyStart) {
+      const fence = line.match(/^(```+|~~~+)/);
+      if (fence) {
+        if (!inFence) {
+          inFence = true;
+          fenceMarker = fence[1] ?? "";
+        } else if (line.startsWith(fenceMarker)) {
+          inFence = false;
+          fenceMarker = "";
+        }
+      } else if (!inFence && /^#{1,6} /.test(line)) {
+        return offset + line.replace(/\r$/, "").length;
+      }
     }
     offset += line.length + 1;
   }

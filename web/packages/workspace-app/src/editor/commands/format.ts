@@ -10,9 +10,32 @@
 // component.
 
 import { syntaxTree } from "@codemirror/language";
+import type { EditorState } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
+import type { SyntaxNode } from "@lezer/common";
 
 import { uiPrompt } from "../../state/store.svelte";
+
+// Node names inside which a caret is literal code, not markdown structure, so a
+// block chord (heading, quote, list) must leave the line intact rather than
+// rewrite a fenced `# comment` into a heading or bullet.
+const CODE_NODES = new Set([
+  "FencedCode",
+  "CodeBlock",
+  "CodeText",
+  "CodeMark",
+  "CodeInfo",
+  "InlineCode",
+]);
+
+/// Whether `pos` resolves inside a code node (fenced block or inline span).
+function caretInsideCode(state: EditorState, pos: number): boolean {
+  let node: SyntaxNode | null = syntaxTree(state).resolveInner(pos, -1);
+  for (; node; node = node.parent) {
+    if (CODE_NODES.has(node.name)) return true;
+  }
+  return false;
+}
 
 // ---- mark toggles --------------------------------------------------------
 
@@ -123,6 +146,9 @@ const HEADING_PREFIX: Record<BlockKind, string | null> = {
 /// "normal" strips all prefixes.
 export function setBlockKind(view: EditorView, kind: BlockKind): void {
   const sel = view.state.selection.main;
+  // A block chord on a line inside a fenced or inline code span would rewrite
+  // literal code (a shell `# comment` into a heading); leave it untouched.
+  if (caretInsideCode(view.state, sel.head)) return;
   const line = view.state.doc.lineAt(sel.head);
   // Strip leading `#`/`>` runs + the trailing space.
   let text = line.text;
@@ -415,6 +441,9 @@ export function unquoteLines(view: EditorView): boolean {
 /// list / heading / quote prefix with the new one.
 function toggleLinePrefix(view: EditorView, target: string): void {
   const sel = view.state.selection.main;
+  // A list chord inside a fenced or inline code span would rewrite literal code;
+  // leave it untouched.
+  if (caretInsideCode(view.state, sel.head)) return;
   const line = view.state.doc.lineAt(sel.head);
   const text = line.text;
   // Existing prefix detection (any list / task / quote / heading).
