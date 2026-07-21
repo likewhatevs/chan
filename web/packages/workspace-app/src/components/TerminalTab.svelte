@@ -601,6 +601,10 @@
   // replays only the missed bytes -- no scrollback loss. A socket that is not
   // OPEN is already reconnecting (or intentionally closed); leave it alone.
   function recyclePtySocketAfterWake(): void {
+    // The control terminal is a single-shot local runner owned by the desktop
+    // exit watcher; a wake redial would mint a fresh session whose tenant
+    // default re-runs the devserver connect script.
+    if (ui.terminalControl) return;
     if (ws && ws.readyState === WebSocket.OPEN) {
       void connect();
     }

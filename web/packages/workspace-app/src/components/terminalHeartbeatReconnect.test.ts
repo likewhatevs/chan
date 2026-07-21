@@ -22,6 +22,8 @@ import {
   WS_RECONNECT_BACKOFF_MIN_MS,
   WS_RECONNECT_BACKOFF_MAX_MS,
 } from "../api/transport";
+import { ui } from "../state/store.svelte";
+import { WAKE_PROBE_MS } from "../wakeGap";
 import type { TerminalTab as TerminalTabState } from "../state/tabs.svelte";
 
 const mounted: Array<Record<string, any>> = [];
@@ -319,6 +321,53 @@ describe("terminal heartbeat", () => {
       data: JSON.stringify({ type: "error", message: "pty write failed" }),
     });
     expect(writtenLines.some((l) => l.includes("terminal error: pty write failed"))).toBe(true);
+  });
+});
+
+describe("wake recycle", () => {
+  // A sleep freezes JS timers while the wall clock advances; the wake-gap
+  // detector notices on its first post-wake probe tick. setSystemTime jumps
+  // the mocked wall clock without firing timers, so one probe-length advance
+  // lands the tick that sees the jump.
+  async function wake(): Promise<void> {
+    vi.setSystemTime(Date.now() + 60_000);
+    await vi.advanceTimersByTimeAsync(WAKE_PROBE_MS);
+  }
+
+  test("a control tab opens no second socket across a wake recycle", async () => {
+    // The control terminal is a single-shot local runner owned by the desktop
+    // exit watcher: a wake redial would mint a fresh session server-side and
+    // re-run the devserver connect script into the viewport.
+    ui.terminalControl = true;
+    try {
+      await renderTerminal(terminalTab());
+      const socket = lastSocket();
+      await attach(socket, "sess-ctl");
+      expect(sockets).toHaveLength(1);
+
+      await wake();
+
+      expect(sockets).toHaveLength(1);
+      expect(socket.readyState).toBe(TestWebSocket.OPEN);
+    } finally {
+      ui.terminalControl = false;
+    }
+  });
+
+  test("an ordinary tab still redials with its prior session id after a wake", async () => {
+    const tab = terminalTab();
+    await renderTerminal(tab);
+    const socket = lastSocket();
+    await attach(socket, "sess-wake");
+    expect(sockets).toHaveLength(1);
+
+    await wake();
+
+    // The recycle forces a reconnect through the normal resume path: a
+    // second dial carrying the same session id, replaying missed bytes.
+    expect(sockets).toHaveLength(2);
+    expect(lastSocket().url).toContain("session=sess-wake");
+    expect(tab.terminalSessionId).toBe("sess-wake");
   });
 });
 

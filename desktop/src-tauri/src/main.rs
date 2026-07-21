@@ -7151,6 +7151,13 @@ mod tests {
             .find("mark_devserver_control_exited")
             .expect("a failing exit keeps the control terminal");
         assert!(close_windows_pos < mark_pos);
+        // The watcher owns script death END-TO-END: it never reconnects and
+        // never spawns a replacement control terminal. Only an explicit user
+        // Connect runs the script again; the SPA-side wake-recycle guard
+        // (recyclePtySocketAfterWake's ui.terminalControl early return)
+        // relies on this ownership staying one-sided.
+        assert!(!exit_watcher.contains("reconnect_devserver"));
+        assert!(!exit_watcher.contains("spawn_control_terminal_window"));
 
         // mark_devserver_control_exited (the failed-exit keep primitive) keeps
         // the control terminal and does no window closure of its own (the exit
