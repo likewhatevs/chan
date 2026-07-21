@@ -809,7 +809,7 @@ impl ControllerState {
                 row,
             })
         });
-        let (desired, losers) = self.reconciliation_plan(candidates);
+        let (desired, losers) = self.initial_reconciliation_plan(candidates);
         if losers.is_empty() {
             self.tunnels = desired;
             self.ready = true;
@@ -827,17 +827,13 @@ impl ControllerState {
         if self.reconciliation.is_some() {
             return Err(StateError::ReconciliationInProgress);
         }
-        let mut candidates: Vec<OwnedTunnel> = self.tunnels.values().cloned().collect();
         let session = self
             .proxies
             .get(&joining.proxy_id)
             .filter(|session| session.incarnation == joining.incarnation)
             .ok_or(StateError::StaleSession)?;
-        candidates.extend(session.rows.values().cloned().map(|row| OwnedTunnel {
-            session: joining.clone(),
-            row,
-        }));
-        let (desired, losers) = self.reconciliation_plan(candidates);
+        let rows = session.rows.values().cloned().collect();
+        let (desired, losers) = self.joining_plan(&joining, rows);
         if losers.is_empty() {
             self.tunnels = desired;
             if let Some(session) = self.proxies.get_mut(&joining.proxy_id) {
@@ -852,7 +848,13 @@ impl ControllerState {
         Ok(self.start_reconciliation(ReconciliationKind::Joining(joining), losers, now))
     }
 
-    fn reconciliation_plan(
+    /// Deterministic winner election for initial restart reconciliation.
+    /// Recency is genuinely unavailable while the fleet is reconstructed
+    /// from snapshots, so duplicates resolve to the lexicographically
+    /// smallest `(proxy_id, registration_id)` and capacity trims sort by
+    /// `(devserver_id, proxy_id, registration_id)`. This is the only path
+    /// allowed to re-rank rows; a routine join uses `joining_plan` instead.
+    fn initial_reconciliation_plan(
         &self,
         candidates: impl IntoIterator<Item = OwnedTunnel>,
     ) -> (HashMap<TunnelKey, OwnedTunnel>, Vec<OwnedTunnel>) {
@@ -906,6 +908,57 @@ impl ControllerState {
 
         let mut seen = HashSet::new();
         losers.retain(|owned| seen.insert(owned.row.registration_id));
+        (desired, losers)
+    }
+
+    /// Live-first reconciliation for a routine joining snapshot. Every row
+    /// the controller currently publishes is an immutable winner: those rows
+    /// were admitted during this controller lifetime, so recency is
+    /// available and a joining snapshot must never outrank it. Joining rows
+    /// that duplicate a live key lose, each user's live rows are reserved
+    /// against the capacity limit first, and only novel joining keys that
+    /// fit the remaining slots are admitted. Competing rows inside one
+    /// snapshot resolve by registration id, an ordering local to that
+    /// snapshot; proxy id is never treated as recency on a routine join.
+    fn joining_plan(
+        &self,
+        joining: &SessionKey,
+        rows: Vec<TunnelRow>,
+    ) -> (HashMap<TunnelKey, OwnedTunnel>, Vec<OwnedTunnel>) {
+        let mut desired = self.tunnels.clone();
+        let mut live_per_user: HashMap<String, usize> = HashMap::new();
+        for (user, _) in self.tunnels.keys() {
+            *live_per_user.entry(user.clone()).or_default() += 1;
+        }
+
+        let mut grouped: BTreeMap<TunnelKey, Vec<TunnelRow>> = BTreeMap::new();
+        for row in rows {
+            grouped
+                .entry((row.user.clone(), row.devserver_id.clone()))
+                .or_default()
+                .push(row);
+        }
+
+        let mut losers = Vec::new();
+        for (key, mut rows) in grouped {
+            rows.sort_by_key(|row| row.registration_id);
+            let mut rows = rows.into_iter().map(|row| OwnedTunnel {
+                session: joining.clone(),
+                row,
+            });
+            let live = live_per_user.get(&key.0).copied().unwrap_or(0);
+            let duplicates_live = desired.contains_key(&key);
+            let over_capacity =
+                self.max_devservers_per_user > 0 && live >= self.max_devservers_per_user;
+            if duplicates_live || over_capacity {
+                losers.extend(rows);
+                continue;
+            }
+            let winner = rows.next().expect("grouped rows are non-empty");
+            desired.insert(key.clone(), winner);
+            live_per_user.insert(key.0, live + 1);
+            losers.extend(rows);
+        }
         (desired, losers)
     }
 
@@ -979,38 +1032,38 @@ impl ControllerState {
             };
         }
 
-        let candidates: Vec<OwnedTunnel> = match &reconciliation.kind {
-            ReconciliationKind::Initial => self
-                .proxies
-                .iter()
-                .filter(|(_, session)| session.generation.is_some())
-                .flat_map(|(proxy_id, session)| {
-                    let key = SessionKey {
-                        proxy_id: proxy_id.clone(),
-                        incarnation: session.incarnation,
-                    };
-                    session.rows.values().cloned().map(move |row| OwnedTunnel {
-                        session: key.clone(),
-                        row,
+        let (desired, losers) = match &reconciliation.kind {
+            ReconciliationKind::Initial => {
+                let candidates: Vec<OwnedTunnel> = self
+                    .proxies
+                    .iter()
+                    .filter(|(_, session)| session.generation.is_some())
+                    .flat_map(|(proxy_id, session)| {
+                        let key = SessionKey {
+                            proxy_id: proxy_id.clone(),
+                            incarnation: session.incarnation,
+                        };
+                        session.rows.values().cloned().map(move |row| OwnedTunnel {
+                            session: key.clone(),
+                            row,
+                        })
                     })
-                })
-                .collect(),
+                    .collect();
+                self.initial_reconciliation_plan(candidates)
+            }
             ReconciliationKind::Joining(joining) => {
-                let mut candidates: Vec<_> = self.tunnels.values().cloned().collect();
-                if let Some(session) = self
+                // Recompute from current actor state so live deltas that
+                // landed while the kill commands were outstanding keep
+                // their immutable-winner status.
+                let rows = self
                     .proxies
                     .get(&joining.proxy_id)
                     .filter(|session| session.incarnation == joining.incarnation)
-                {
-                    candidates.extend(session.rows.values().cloned().map(|row| OwnedTunnel {
-                        session: joining.clone(),
-                        row,
-                    }));
-                }
-                candidates
+                    .map(|session| session.rows.values().cloned().collect::<Vec<_>>())
+                    .unwrap_or_default();
+                self.joining_plan(joining, rows)
             }
         };
-        let (desired, losers) = self.reconciliation_plan(candidates);
         if !losers.is_empty() {
             return self.start_reconciliation(reconciliation.kind, losers, now);
         }
@@ -1958,6 +2011,342 @@ mod tests {
         state.tick(timeout_at, Utc::now());
         assert!(state.commands.is_empty());
         assert!(state.is_ready());
+    }
+
+    #[test]
+    fn joining_snapshot_never_evicts_a_live_row() {
+        let now = Instant::now();
+        let mut state = ControllerState::new(100);
+        let live_id = Uuid::from_u128(1);
+        let stale_id = Uuid::from_u128(2);
+        let (_p2, _p2_incarnation, _) =
+            ready_one(&mut state, "p2", vec![row("alice", "one", live_id)], now);
+        // p0 sorts before p2, so the restart tie-break would crown the stale
+        // snapshot; a routine join must kill the joining row instead.
+        let (p0, p0_incarnation) = begin(&mut state, "p0", now + CONVERGENCE_WINDOW);
+        let effects = snapshot(
+            &mut state,
+            &p0,
+            p0_incarnation,
+            vec![row("alice", "one", stale_id)],
+            now + CONVERGENCE_WINDOW,
+        );
+        let command_id = kill_command(&effects, "p0", stale_id);
+        assert!(effects.iter().all(|effect| !matches!(
+            effect,
+            Effect::Send {
+                session,
+                frame: ServerFrame::KillRegistrations { .. },
+            } if session.proxy_id == "p2"
+        )));
+        assert_eq!(state.tunnel_views().len(), 1);
+        assert_eq!(state.tunnel_views()[0].proxy_id, "p2");
+        let p0_view = state
+            .proxy_views()
+            .into_iter()
+            .find(|view| view.proxy_id == "p0")
+            .unwrap();
+        assert_eq!(p0_view.status, ProxyStatus::Joining);
+
+        let ready = state
+            .command_result(
+                &p0,
+                p0_incarnation,
+                command_id,
+                vec![stale_id],
+                Vec::new(),
+                Vec::new(),
+                now + CONVERGENCE_WINDOW,
+                Utc::now(),
+            )
+            .unwrap();
+        assert!(ready.iter().any(|effect| matches!(
+            effect,
+            Effect::Send {
+                session,
+                frame: ServerFrame::FleetReady,
+            } if session.proxy_id == "p0"
+        )));
+        assert_eq!(state.tunnel_views().len(), 1);
+        assert_eq!(state.tunnel_views()[0].proxy_id, "p2");
+        let p0_view = state
+            .proxy_views()
+            .into_iter()
+            .find(|view| view.proxy_id == "p0")
+            .unwrap();
+        assert_eq!(p0_view.status, ProxyStatus::Active);
+    }
+
+    #[test]
+    fn joining_row_that_exceeds_live_capacity_loses() {
+        let now = Instant::now();
+        let mut state = ControllerState::new(1);
+        let (_p2, _p2_incarnation, _) = ready_one(
+            &mut state,
+            "p2",
+            vec![row("alice", "two", Uuid::from_u128(1))],
+            now,
+        );
+        // "one" sorts before "two", so the restart capacity trim would evict
+        // the live row; the live-first rule reserves alice's slot for it.
+        let (p0, p0_incarnation) = begin(&mut state, "p0", now + CONVERGENCE_WINDOW);
+        let joining_id = Uuid::from_u128(2);
+        let effects = snapshot(
+            &mut state,
+            &p0,
+            p0_incarnation,
+            vec![row("alice", "one", joining_id)],
+            now + CONVERGENCE_WINDOW,
+        );
+        let command_id = kill_command(&effects, "p0", joining_id);
+        assert!(effects.iter().all(|effect| !matches!(
+            effect,
+            Effect::Send {
+                session,
+                frame: ServerFrame::KillRegistrations { .. },
+            } if session.proxy_id == "p2"
+        )));
+        assert_eq!(state.tunnel_views().len(), 1);
+        assert_eq!(state.tunnel_views()[0].devserver_id, "two");
+        assert_eq!(state.tunnel_views()[0].proxy_id, "p2");
+
+        state
+            .command_result(
+                &p0,
+                p0_incarnation,
+                command_id,
+                vec![joining_id],
+                Vec::new(),
+                Vec::new(),
+                now + CONVERGENCE_WINDOW,
+                Utc::now(),
+            )
+            .unwrap();
+        assert_eq!(state.tunnel_views().len(), 1);
+        assert_eq!(state.tunnel_views()[0].devserver_id, "two");
+        assert_eq!(state.tunnel_views()[0].proxy_id, "p2");
+    }
+
+    #[test]
+    fn failed_joining_reconciliation_retires_only_the_joining_session() {
+        let now = Instant::now();
+        let mut state = ControllerState::new(100);
+        let (_p2, _p2_incarnation, _) = ready_one(
+            &mut state,
+            "p2",
+            vec![row("alice", "one", Uuid::from_u128(1))],
+            now,
+        );
+        let (p0, p0_incarnation) = begin(&mut state, "p0", now + CONVERGENCE_WINDOW);
+        let stale_id = Uuid::from_u128(2);
+        let effects = snapshot(
+            &mut state,
+            &p0,
+            p0_incarnation,
+            vec![row("alice", "one", stale_id)],
+            now + CONVERGENCE_WINDOW,
+        );
+        let command_id = kill_command(&effects, "p0", stale_id);
+        let retired = state
+            .command_result(
+                &p0,
+                p0_incarnation,
+                command_id,
+                Vec::new(),
+                Vec::new(),
+                vec![stale_id],
+                now + CONVERGENCE_WINDOW,
+                Utc::now(),
+            )
+            .unwrap();
+        assert!(retired.iter().any(|effect| matches!(
+            effect,
+            Effect::Retire { session, .. } if session.proxy_id == "p0"
+        )));
+        assert!(state.is_ready());
+        assert_eq!(state.proxy_views().len(), 1);
+        assert_eq!(state.proxy_views()[0].proxy_id, "p2");
+        assert_eq!(state.tunnel_views().len(), 1);
+        assert_eq!(state.tunnel_views()[0].proxy_id, "p2");
+    }
+
+    #[test]
+    fn joining_snapshot_duplicate_keys_pick_one_stable_winner() {
+        let now = Instant::now();
+        let mut state = ControllerState::new(100);
+        let (_p1, _p1_incarnation, _) = ready_one(&mut state, "p1", Vec::new(), now);
+        let (p0, p0_incarnation) = begin(&mut state, "p0", now + CONVERGENCE_WINDOW);
+        let winner = Uuid::from_u128(1);
+        let loser = Uuid::from_u128(2);
+        let effects = snapshot(
+            &mut state,
+            &p0,
+            p0_incarnation,
+            vec![row("alice", "one", loser), row("alice", "one", winner)],
+            now + CONVERGENCE_WINDOW,
+        );
+        let command_id = kill_command(&effects, "p0", loser);
+        state
+            .command_result(
+                &p0,
+                p0_incarnation,
+                command_id,
+                vec![loser],
+                Vec::new(),
+                Vec::new(),
+                now + CONVERGENCE_WINDOW,
+                Utc::now(),
+            )
+            .unwrap();
+        assert_eq!(state.tunnel_views().len(), 1);
+        assert_eq!(state.tunnel_views()[0].proxy_id, "p0");
+        assert_eq!(state.tunnel_views()[0].devserver_id, "one");
+    }
+
+    #[test]
+    fn live_delta_during_joining_completion_is_not_re_ranked() {
+        let now = Instant::now();
+        let mut state = ControllerState::new(100);
+        let live_one = Uuid::from_u128(1);
+        let dup = Uuid::from_u128(2);
+        let joining_two = Uuid::from_u128(3);
+        let live_two = Uuid::from_u128(4);
+        let (p2, p2_incarnation, _) =
+            ready_one(&mut state, "p2", vec![row("alice", "one", live_one)], now);
+        let (p0, p0_incarnation) = begin(&mut state, "p0", now + CONVERGENCE_WINDOW);
+        let effects = snapshot(
+            &mut state,
+            &p0,
+            p0_incarnation,
+            vec![row("alice", "one", dup), row("alice", "two", joining_two)],
+            now + CONVERGENCE_WINDOW,
+        );
+        let first_command = kill_command(&effects, "p0", dup);
+
+        // A live admission lands while the joining kill is outstanding; the
+        // completion re-plan must treat it as an immutable winner too.
+        state
+            .request_admission(
+                &p2,
+                p2_incarnation,
+                Uuid::new_v4(),
+                live_two,
+                "alice".into(),
+                "two".into(),
+                now + CONVERGENCE_WINDOW,
+                Utc::now(),
+            )
+            .unwrap();
+        state
+            .tunnel_up(
+                &p2,
+                p2_incarnation,
+                1,
+                row("alice", "two", live_two),
+                now + CONVERGENCE_WINDOW,
+                Utc::now(),
+            )
+            .unwrap();
+
+        let second = state
+            .command_result(
+                &p0,
+                p0_incarnation,
+                first_command,
+                vec![dup],
+                Vec::new(),
+                Vec::new(),
+                now + CONVERGENCE_WINDOW,
+                Utc::now(),
+            )
+            .unwrap();
+        let second_command = kill_command(&second, "p0", joining_two);
+        assert!(second.iter().all(|effect| !matches!(
+            effect,
+            Effect::Send {
+                session,
+                frame: ServerFrame::KillRegistrations { .. },
+            } if session.proxy_id == "p2"
+        )));
+        let done = state
+            .command_result(
+                &p0,
+                p0_incarnation,
+                second_command,
+                vec![joining_two],
+                Vec::new(),
+                Vec::new(),
+                now + CONVERGENCE_WINDOW,
+                Utc::now(),
+            )
+            .unwrap();
+        assert!(done.iter().any(|effect| matches!(
+            effect,
+            Effect::Send {
+                session,
+                frame: ServerFrame::FleetReady,
+            } if session.proxy_id == "p0"
+        )));
+        let owners: Vec<_> = state
+            .tunnel_views()
+            .into_iter()
+            .map(|view| (view.devserver_id, view.proxy_id))
+            .collect();
+        assert_eq!(
+            owners,
+            [
+                ("one".to_string(), "p2".to_string()),
+                ("two".to_string(), "p2".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn initial_reconciliation_keeps_the_lexicographic_rule() {
+        let now = Instant::now();
+        let mut state = ControllerState::new(100);
+        let low = Uuid::from_u128(1);
+        let high = Uuid::from_u128(2);
+        let (p2, p2_incarnation) = begin(&mut state, "p2", now);
+        snapshot(
+            &mut state,
+            &p2,
+            p2_incarnation,
+            vec![row("alice", "one", low)],
+            now,
+        );
+        let (p1, p1_incarnation) = begin(&mut state, "p1", now);
+        snapshot(
+            &mut state,
+            &p1,
+            p1_incarnation,
+            vec![row("alice", "one", high)],
+            now,
+        );
+        for (proxy, incarnation) in [(&p1, p1_incarnation), (&p2, p2_incarnation)] {
+            state
+                .record_activity(proxy, incarnation, now + CONVERGENCE_WINDOW, Utc::now())
+                .unwrap();
+        }
+        let effects = state.tick(now + CONVERGENCE_WINDOW, Utc::now());
+        // Recency is unavailable at restart, so the proxy id dominates the
+        // registration id: p1 wins even though p2 holds the lower uuid.
+        let command_id = kill_command(&effects, "p2", low);
+        state
+            .command_result(
+                &p2,
+                p2_incarnation,
+                command_id,
+                vec![low],
+                Vec::new(),
+                Vec::new(),
+                now + CONVERGENCE_WINDOW,
+                Utc::now(),
+            )
+            .unwrap();
+        assert!(state.is_ready());
+        assert_eq!(state.tunnel_views().len(), 1);
+        assert_eq!(state.tunnel_views()[0].proxy_id, "p1");
     }
 
     fn kill_command(effects: &[Effect], proxy_id: &str, registration_id: Uuid) -> Uuid {
