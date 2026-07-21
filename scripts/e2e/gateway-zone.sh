@@ -879,8 +879,8 @@ check_entry_routes() { # check_entry_routes <name> <pat> <user> <owner-id> <dsid
     hdrs="$WORK/hdrs-$name.txt"
     code="$(post_entry_exchange "$body" "$node" "$host" "$hdrs")" || \
         assert_fail "entry($name): malformed desktop entry response or exchange URL"
-    cookie="$(sed -n 's/^[Ss]et-[Cc]ookie: \(devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
-    csrf="$(sed -n 's/^[Ss]et-[Cc]ookie: \(devserver_csrf=[^;]*\).*/\1/p' "$hdrs" | head -1)"
+    cookie="$(sed -n 's/^[Ss]et-[Cc]ookie: \(__Host-devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
+    csrf="$(sed -n 's/^[Ss]et-[Cc]ookie: \(__Host-devserver_csrf=[^;]*\).*/\1/p' "$hdrs" | head -1)"
     location="$(sed -n 's/^[Ll]ocation: //p' "$hdrs" | tr -d '\r' | head -1)"
     printf %s "$cookie" > "$WORK/cookie-$name.txt"
     case "$location" in /*) case "$location" in //*) ;; *) location_ok=1 ;; esac ;; esac
@@ -1236,7 +1236,7 @@ if [ -x "$CHROME_BIN" ]; then
     hdrs="$WORK/hdrs-browser.txt"
     hop1="$(post_entry_exchange "$entry_body" "$NODE_A" "$HOST_A" "$hdrs")" || \
         assert_fail "redeem: malformed entry exchange response"
-    bcookie="$(sed -n 's/^[Ss]et-[Cc]ookie: \(devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
+    bcookie="$(sed -n 's/^[Ss]et-[Cc]ookie: \(__Host-devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
     hop2=""
     if [ "$hop1" = "303" ] && [ -n "$bcookie" ]; then
         hop2="$(curl_node "$NODE_A" "$HOST_A" -o "$WORK/root-browser.html" -w '%{http_code}' \
@@ -1323,23 +1323,31 @@ scenario_sweeper() {
     }
 
     # Snapshot the registry so the scenario can put back whatever the
-    # 1-minute retention sweeps besides its own seeds (bob's shared
-    # row, the cap PAT's row -- both offline and older than a minute).
+    # 1-minute retention sweeps besides its own seeds (unshared offline
+    # leftovers like the cap PAT's row; bob's shared row is protected
+    # by its grant and survives the sweep).
     sweeper_sql "
         CREATE TABLE sweeper_snap_ds AS SELECT * FROM devservers;
         CREATE TABLE sweeper_snap_grants AS SELECT * FROM devserver_grants;" || {
         assert_fail "sweeper: registry snapshot failed"
     }
 
-    # A stranded row: registered long ago, never dialed, carrying a
-    # grant (the ruling: grants do NOT protect a row from the sweep).
-    local stale_id
+    # Two stranded rows, registered long ago and never dialed: one
+    # bare, one carrying a grant. The sweeper's authorization invariant
+    # (profile/src/sweeper.rs): rows carrying grants are never swept; a
+    # grant leaves only through the owner-scoped revocation settlement
+    # path, and only then does its parent row become eligible. The bare
+    # row doubles as the proof that a tick actually ran before the
+    # granted row's survival is asserted.
+    local stale_id shared_id grant_id owned_now
     stale_id="$(openssl rand -hex 32)"
+    shared_id="$(openssl rand -hex 32)"
     sweeper_sql "
         INSERT INTO devservers (owner_user_id, devserver_id, label, created_at)
-        VALUES ('$ALICE_ID', '$stale_id', 'stale-e2e', now() - interval '10 minutes');
+        VALUES ('$ALICE_ID', '$stale_id', 'stale-e2e', now() - interval '10 minutes'),
+               ('$ALICE_ID', '$shared_id', 'stale-shared-e2e', now() - interval '10 minutes');
         INSERT INTO devserver_grants (owner_user_id, devserver_id, grantee_email)
-        VALUES ('$ALICE_ID', '$stale_id', 'e2e-swept@example.com');" || {
+        VALUES ('$ALICE_ID', '$shared_id', 'e2e-protected@example.com');" || {
         assert_fail "sweeper: stale-row seed failed"
     }
 
@@ -1347,21 +1355,38 @@ scenario_sweeper() {
         assert_fail "sweeper: profile restart with retention=1 failed"
     }
 
-    # The first tick fires immediately on spawn: the stale row must go,
-    # and the two LIVE devservers must be marked in the same tick and
-    # survive (mark-before-delete, observed end to end).
+    # A tick lands within the first minute: the bare stale row must go,
+    # the granted one must survive that same tick, and the two LIVE
+    # devservers must be marked and survive (mark-before-delete,
+    # observed end to end).
     if sweeper_wait_owned_gone "$stale_id"; then
         assert_pass "sweeper: stale never-dialed row left the owned list"
     else
         assert_fail "sweeper: stale row still listed after retention + tick"
     fi
-    local grants_left
-    grants_left="$(sweeper_sql \
-        "SELECT COUNT(*) FROM devserver_grants WHERE devserver_id = '$stale_id';")"
-    if [ "$grants_left" = "0" ]; then
-        assert_pass "sweeper: the swept row's grant cascaded away"
+    if owned_now="$(sweeper_owned)" &&
+        printf '%s\n' "$owned_now" | grep -q "^$shared_id$"; then
+        assert_pass "sweeper: granted row survived the tick that swept its bare twin"
     else
-        assert_fail "sweeper: expected 0 grants on the swept row, got $grants_left"
+        assert_fail "sweeper: granted row was swept; grants must protect a row"
+    fi
+
+    # Remove the grant through the real owner-scoped delete (the
+    # settlement path). The orphaned row is then eligible and the next
+    # tick collects it.
+    grant_id="$(sweeper_sql "SELECT id FROM devserver_grants
+        WHERE devserver_id = '$shared_id' AND owner_user_id = '$ALICE_ID';")"
+    if [ -n "$grant_id" ] && curl -fsS -X DELETE -o /dev/null \
+        -H "Authorization: Bearer $TOK_PROFILE" \
+        "http://127.0.0.1:$PROFILE_PORT/v1/users/$ALICE_ID/grants/$grant_id"; then
+        assert_pass "sweeper: grant removed through the owner-scoped delete"
+    else
+        assert_fail "sweeper: grant delete failed (id '$grant_id')"
+    fi
+    if sweeper_wait_owned_gone "$shared_id"; then
+        assert_pass "sweeper: ungranted row swept on the tick after settlement"
+    else
+        assert_fail "sweeper: ungranted row still listed after grant removal"
     fi
     if sweeper_owned | grep -q "^$DS_A$"; then
         assert_pass "sweeper: live devserver A survived the sweep tick"
@@ -1476,7 +1501,7 @@ scenario_watchdog() {
     hdrs="$WORK/hdrs-watchdog.txt"
     post_entry_exchange "$body" "$node" "$host" "$hdrs" >/dev/null || \
         assert_fail "watchdog: entry exchange failed"
-    cookie="$(sed -n 's/^[Ss]et-[Cc]ookie: \(devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
+    cookie="$(sed -n 's/^[Ss]et-[Cc]ookie: \(__Host-devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
     if [ -z "$cookie" ]; then
         assert_fail "watchdog: no gate cookie minted for devserver A"
     fi
@@ -1500,7 +1525,7 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 const require = createRequire(process.env.WORK + "/x.js");
 const { WebSocket } = require("ws");
-const { WORK, PROXY_IP, PROXY_PORT, WD_HOST, WD_COOKIE, PROXY_PIDFILE } = process.env;
+const { WORK, PROXY_IP, PROXY_PORT, PROXY_INNER_PORT, WD_HOST, WD_COOKIE, PROXY_PIDFILE } = process.env;
 const PROXY_PID = Number(fs.readFileSync(PROXY_PIDFILE, "utf8").trim());
 const log = (o) => console.log(JSON.stringify(o));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1514,8 +1539,17 @@ function pingPong(ws, ms) {
     setTimeout(() => { if (!done) { done = true; ws.off("pong", onPong); resolve(false); } }, ms);
   });
 }
-const ws = new WebSocket(`ws://${PROXY_IP}:${PROXY_PORT}/api/library/windows/watch`, {
-  headers: { Host: `${WD_HOST}:${PROXY_PORT}`, Cookie: WD_COOKIE },
+// Dial the proxy's cleartext INNER listener (PROXY_PORT is the TLS
+// edge now), the same hop the edge forwards. The hardened WS gate
+// demands exactly one Origin equal to `{forwarded_proto}://{aud}`:
+// FORWARDED_PROTO=https here, and aud carries the Host header's
+// port, so the Origin is what a browser at the edge would send.
+const ws = new WebSocket(`ws://${PROXY_IP}:${PROXY_INNER_PORT}/api/library/windows/watch`, {
+  headers: {
+    Host: `${WD_HOST}:${PROXY_PORT}`,
+    Cookie: WD_COOKIE,
+    Origin: `https://${WD_HOST}:${PROXY_PORT}`,
+  },
 });
 let firstFrame = false, closed = false;
 ws.on("message", () => { firstFrame = true; });
@@ -1556,6 +1590,7 @@ PROBE
     local out probe="$WORK/watchdog-probe.mjs" probe_ip
     probe_ip="$(node_ip "$node")"
     out="$(env WORK="$WORK" PROXY_IP="$probe_ip" PROXY_PORT="$PROXY_PORT" \
+        PROXY_INNER_PORT="$PROXY_INNER_PORT" \
         WD_HOST="$host" WD_COOKIE="$cookie" \
         PROXY_PIDFILE="$WORK/pids/proxy-$node.pid" \
         node "$probe" 2>> "$LOGS/watchdog.log")"
@@ -1757,7 +1792,7 @@ scenario_roster() {
         hdrs="$WORK/hdrs-roster-entry.txt"
         hop1="$(post_entry_exchange "$entry_body" "$node" "$host" "$hdrs")" || \
             assert_fail "roster: malformed own entry exchange"
-        cookie="$(sed -n 's/^[Ss]et-[Cc]ookie: \(devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
+        cookie="$(sed -n 's/^[Ss]et-[Cc]ookie: \(__Host-devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
         hop2=""
         if [ "$hop1" = "303" ] && [ -n "$cookie" ]; then
             hop2="$(curl_node "$node" "$host" -o "$WORK/root-roster.html" -w '%{http_code}' \
@@ -1787,7 +1822,7 @@ scenario_roster() {
 # double-submit CSRF guard gates every mutation: a multipart POST to
 # `/api/files/upload` carrying only the session cookies must be
 # refused with the proxy's own 403 `forbidden` before it reaches the
-# tunnel, and the same POST with the `devserver_csrf` cookie mirrored
+# tunnel, and the same POST with the `__Host-devserver_csrf` cookie mirrored
 # into `x-chan-csrf` (what the SPA's XHR helpers send) must cross
 # host -> proxy -> tunnel -> devserver and land the bytes in the
 # workspace on disk. Registers a scratch workspace on devserver A
@@ -1806,14 +1841,14 @@ scenario_upload() {
     hdrs="$WORK/hdrs-upload.txt"
     post_entry_exchange "$body" "$node" "$host" "$hdrs" >/dev/null || \
         assert_fail "upload: entry exchange failed"
-    gate="$(sed -n 's/^[Ss]et-[Cc]ookie: \(devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
-    csrf="$(sed -n 's/^[Ss]et-[Cc]ookie: devserver_csrf=\([^;]*\).*/\1/p' "$hdrs" | head -1)"
+    gate="$(sed -n 's/^[Ss]et-[Cc]ookie: \(__Host-devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
+    csrf="$(sed -n 's/^[Ss]et-[Cc]ookie: __Host-devserver_csrf=\([^;]*\).*/\1/p' "$hdrs" | head -1)"
     if [ -n "$gate" ] && [ -n "$csrf" ]; then
         assert_pass "upload: entry 303 mints the gate + csrf cookie pair"
     else
-        assert_fail "upload: expected devserver_gate + devserver_csrf on the entry 303"
+        assert_fail "upload: expected __Host-devserver_gate + __Host-devserver_csrf on the entry 303"
     fi
-    cookies="$gate; devserver_csrf=$csrf"
+    cookies="$gate; __Host-devserver_csrf=$csrf"
 
     # A workspace to upload into: a real folder on the devserver's host
     # (the whole harness shares loopback), registered + mounted through
@@ -1888,7 +1923,7 @@ scenario_upload() {
 # reopens any listed record lacking a native window, so a close only sticks
 # when the DELETE lands and the record leaves the registry; this pins that
 # proxy leg end to end (desktop/src-tauri/src/devserver.rs sends these):
-#   session: POST entry exchange -> opaque devserver_gate + csrf cookies
+#   session: POST entry exchange -> opaque __Host-devserver_gate + csrf cookies
 #   mint:    POST /api/library/windows          (Cookie + X-Chan-CSRF)
 #   discard: DELETE /api/library/windows/{id}   (Cookie + X-Chan-CSRF)
 #   verify:  GET /api/library/windows           (record gone)
@@ -1904,14 +1939,14 @@ scenario_windowclose() {
     hdrs="$WORK/hdrs-windowclose.txt"
     code="$(post_entry_exchange "$body" "$node" "$host" "$hdrs")" || \
         assert_fail "windowclose: entry exchange failed"
-    gate="$(sed -n 's/^[Ss]et-[Cc]ookie: devserver_gate=\([^;]*\).*/\1/p' "$hdrs" | head -1)"
-    csrf="$(sed -n 's/^[Ss]et-[Cc]ookie: devserver_csrf=\([^;]*\).*/\1/p' "$hdrs" | head -1)"
+    gate="$(sed -n 's/^[Ss]et-[Cc]ookie: __Host-devserver_gate=\([^;]*\).*/\1/p' "$hdrs" | head -1)"
+    csrf="$(sed -n 's/^[Ss]et-[Cc]ookie: __Host-devserver_csrf=\([^;]*\).*/\1/p' "$hdrs" | head -1)"
     if [ "$code" = "303" ] && [ -n "$gate" ] && [ -n "$csrf" ]; then
         assert_pass "windowclose: entry 303 mints the gate + csrf cookie pair"
     else
         assert_fail "windowclose: expected 303 + both cookies, got $code gate=${gate:+y} csrf=${csrf:+y}"
     fi
-    cookie="devserver_gate=$gate; devserver_csrf=$csrf"
+    cookie="__Host-devserver_gate=$gate; __Host-devserver_csrf=$csrf"
 
     # Mint a terminal window through the tunnel (the desktop's
     # mint_library_window shape) and confirm it lists.
@@ -2000,7 +2035,7 @@ mint_gate_cookie() {
     MC_HOST="$user--$(disc "$dsid").$MC_NODE.$APEX"
     hdrs="$WORK/hdrs-mc-$(disc "$dsid").txt"
     post_entry_exchange "$body" "$MC_NODE" "$MC_HOST" "$hdrs" >/dev/null || return 1
-    MC_COOKIE="$(sed -n 's/^[Ss]et-[Cc]ookie: \(devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
+    MC_COOKIE="$(sed -n 's/^[Ss]et-[Cc]ookie: \(__Host-devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
     [ -n "$MC_COOKIE" ]
 }
 
@@ -2503,6 +2538,17 @@ scenario_proxydown() {
         fi
     done
 
+    # Inside grace the data path is untouched. Probed FIRST, seconds
+    # after the stream death: the admission and aggregate-drain polls
+    # below can legitimately consume most of the 30s grace window.
+    code="$(curl_node p2 "$host_b" -o /dev/null -w '%{http_code}' \
+        -H "Cookie: $cookie_b" "https://$host_b:$PROXY_PORT/api/health")"
+    if [ "$code" = "200" ]; then
+        assert_pass "proxydown: p2 traffic survives inside the grace window"
+    else
+        assert_fail "proxydown: B inside grace expected 200, got $code"
+    fi
+
     # New admission on the disconnected node is refused: G dials p2
     # directly and never appears in the aggregate.
     spawn_devserver g "${DS_PORTS[6]}" "$PAT_G" "$(node_tunnel_url p2)"
@@ -2531,15 +2577,6 @@ scenario_proxydown() {
         assert_pass "proxydown: only p2's registrations left the aggregate"
     else
         assert_fail "proxydown: aggregate rows wrong after the disconnect"
-    fi
-
-    # Inside grace the data path is untouched.
-    code="$(curl_node p2 "$host_b" -o /dev/null -w '%{http_code}' \
-        -H "Cookie: $cookie_b" "https://$host_b:$PROXY_PORT/api/health")"
-    if [ "$code" = "200" ]; then
-        assert_pass "proxydown: p2 traffic survives inside the grace window"
-    else
-        assert_fail "proxydown: B inside grace expected 200, got $code"
     fi
 
     # After the 30s grace p2 evicts everything it owns.
@@ -2636,6 +2673,17 @@ scenario_ctloutage() {
         assert_fail "ctloutage: only $unready_n/3 proxies went unready"
     fi
 
+    # Existing traffic survives inside the grace window. Probed FIRST,
+    # seconds after the outage: the admission checks below eat into
+    # the 30s grace.
+    code="$(curl_node "$node_a" "$host_a" -o /dev/null -w '%{http_code}' \
+        -H "Cookie: $cookie_a" "https://$host_a:$PROXY_PORT/api/health")"
+    if [ "$code" = "200" ]; then
+        assert_pass "ctloutage: existing traffic survives inside grace"
+    else
+        assert_fail "ctloutage: A inside grace expected 200, got $code"
+    fi
+
     # Admission stops fleet-wide (G dials p1 directly and cannot
     # register), and identity fails closed: no fleet state, no entry.
     spawn_devserver g "${DS_PORTS[6]}" "$PAT_G" "$(node_tunnel_url p1)"
@@ -2646,15 +2694,6 @@ scenario_ctloutage() {
         assert_pass "ctloutage: identity mints no entry without fleet state"
     else
         assert_fail "ctloutage: identity minted an entry during the outage: $ebody"
-    fi
-
-    # Existing traffic survives inside the grace window.
-    code="$(curl_node "$node_a" "$host_a" -o /dev/null -w '%{http_code}' \
-        -H "Cookie: $cookie_a" "https://$host_a:$PROXY_PORT/api/health")"
-    if [ "$code" = "200" ]; then
-        assert_pass "ctloutage: existing traffic survives inside grace"
-    else
-        assert_fail "ctloutage: A inside grace expected 200, got $code"
     fi
 
     # Past grace every proxy evicts what it owns.
