@@ -1,8 +1,8 @@
 [Unit]
-Description=chan-gateway identity service (id.chan.app, OAuth2 sign-in)
+Description=chan-gateway devserver-control service (proxy fleet control plane)
 Documentation=https://github.com/fiorix/chan/tree/main/gateway
-After=network-online.target postgresql.service chan-gateway-profile.service
-Wants=network-online.target chan-gateway-profile.service
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -12,8 +12,8 @@ Group=chan-gateway
 # per-service file may override. Optional (`-`) so a stack that sets
 # the origins inline still starts.
 EnvironmentFile=-/etc/chan-gateway/domain.env
-EnvironmentFile=/etc/chan-gateway/identity.env
-ExecStart=/usr/bin/chan-gateway-identity
+EnvironmentFile=/etc/chan-gateway/devserver-control.env
+ExecStart=/usr/bin/chan-gateway-devserver-control
 Restart=on-failure
 RestartSec=2
 

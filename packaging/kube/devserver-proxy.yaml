@@ -1,9 +1,13 @@
-# devserver-proxy: public service at devserver.<domain> (apex: tunnel register +
-# admin + healthz) and *.devserver.<domain> (wildcard: reverse-proxy tenant
-# content into registered chan devserver peers). Stateless; no Postgres.
+# devserver-proxy: fleet data plane at the proxy namespace origin (apex:
+# /healthz + /readyz only) and *.<proxy-base-host> (wildcard: reverse-proxy
+# tenant content into registered chan devserver peers). Stateless; no Postgres.
+# The aggregate /admin/v1/* tree lives on devserver-control, not here.
 #
 # Two ports: 7002 carries HTTP (apex + wildcard, dispatched on Host); 7100 is the
 # h2c tunnel-registration listener that `chan devserver --tunnel-url` dials.
+# The pod admits no tunnel until its control session to devserver-control
+# (DEVSERVER_CONTROL_URL, DEVSERVER_PROXY_TOKEN, DEVSERVER_PROXY_ID from the
+# ConfigMap/Secret) is established.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -35,7 +39,8 @@ spec:
             - { name: http, containerPort: 7002 }
             - { name: tunnel, containerPort: 7100 }
           readinessProbe:
-            httpGet: { path: /healthz, port: 7002 }
+            # /readyz reports no admission while the control session is down.
+            httpGet: { path: /readyz, port: 7002 }
             initialDelaySeconds: 3
             periodSeconds: 5
           livenessProbe:
@@ -50,8 +55,9 @@ metadata:
   labels:
     app.kubernetes.io/part-of: chan-gateway
 spec:
-  # Public surface; a TLS terminator routes devserver.<domain> + the wildcard
-  # here on :7002, and grpc/h2c-passes the tunnel register endpoint to :7100.
+  # Public surface; a TLS terminator routes the node origin
+  # (DEVSERVER_PROXY_BASE_URL) and its wildcard here on :7002, and
+  # grpc/h2c-passes the tunnel register endpoint to :7100.
   selector:
     app.kubernetes.io/name: devserver-proxy
   ports:

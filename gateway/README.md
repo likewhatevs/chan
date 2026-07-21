@@ -1,6 +1,6 @@
 # chan-gateway
 
-The self-hostable server side of chan's tunnel: the identity, profile, and devserver-proxy services that sit behind `id.chan.app` and `devserver.chan.app`.
+The self-hostable server side of chan's tunnel: the identity, profile, devserver-control, and devserver-proxy services that sit behind `id.chan.app` and `devserver.chan.app`.
 
 A fleet of `chan devserver` instances dials in over the tunnel and this gateway reverse-proxies each one back out at `{user}.devserver.chan.app/{workspace}/*`, turning them into a portable, multi-device workspace service you run on your own infrastructure (your own "Google Drive / Docs" equivalent, with chan's editor on top).
 
@@ -8,13 +8,15 @@ A fleet of `chan devserver` instances dials in over the tunnel and this gateway 
 
 ## What's here
 
-Five crates; see [`CONTEXT.md`](CONTEXT.md) for the topology and request-flow diagram.
+Seven crates; see [`CONTEXT.md`](CONTEXT.md) for the topology and request-flow diagram.
 
 - `profile`: internal HTTP API over Postgres. Users, OAuth identities, devserver grants, feature flags, auth audit.
 - `identity`: id.chan.app. OAuth2 sign-in (GitHub / Google / GitLab) with PKCE, Postgres-backed sessions, the embedded SPA, personal access tokens (incl. the `chan://` desktop-authorize consent flow).
-- `devserver-proxy`: devserver.chan.app. Terminates each `chan devserver`'s yamux tunnel and reverse-proxies it back out at `{user}.devserver.chan.app/{workspace}/*`, behind the always-on devserver-gate (an unauthenticated request 404s like an unknown workspace, so probes can't enumerate).
-- `admin`: operator CLI against profile's and devserver-proxy's admin trees.
-- `gateway-common`: shared library (domain derivation, HTTP clients, devserver-gate JWT, token bucket, validators).
+- `devserver-control`: singleton, database-free control plane. Owns the dynamic proxy directory, the aggregate tunnel view, fleet admission, and command routing. Serves the `/admin/v1/*` tree on 7003 and the h2c proxy-control listener on 7101.
+- `devserver-control-proto`: control protocol frames, validated ids/origins, and shared tunnel/proxy view types.
+- `devserver-proxy`: devserver.chan.app. Terminates each `chan devserver`'s yamux tunnel and reverse-proxies it back out at `{user}.devserver.chan.app/{workspace}/*`, behind the always-on devserver-gate (an unauthenticated request 404s like an unknown workspace, so probes can't enumerate). Every registration is admitted by devserver-control before the client sees `HelloAck::Ok`.
+- `admin`: operator CLI against profile's and devserver-control's admin trees.
+- `gateway-common`: shared library (HTTP clients, devserver-gate JWT, token bucket, static files, validators).
 
 Personal access tokens (PATs, `chan_pat_...`) are the only credential the chan CLI / chan-tunnel side uses; they carry the `tunnel` scope. Adding another OAuth provider is one new file under `crates/identity/src/providers/` plus wiring in `Config::from_env`. Microsoft and Apple are intentionally excluded (Microsoft because tenant admins can mint unverified-email accounts that defeat our email-as-link key; Apple because the OAuth setup is high-touch for the value at this scale).
 
@@ -60,7 +62,7 @@ Save the client id and secret.
 
 ### Run
 
-Three terminals; profile first.
+Four terminals; profile first.
 
 Terminal 1 (profile-service, internal API on 7001):
 
@@ -77,6 +79,8 @@ Terminal 2 (identity-service, id.chan.app surface on 7000):
 export DATABASE_URL=postgres://chan:chan@127.0.0.1/chan_gateway
 export BIND_ADDR=127.0.0.1:7000
 export BASE_URL=http://127.0.0.1:7000
+export DEVSERVER_PROXY_ORIGIN=http://127.0.0.1:7002
+export DEVSERVER_TUNNEL_ORIGIN=http://127.0.0.1:7002
 export COOKIE_SECURE=false
 export PROFILE_SERVICE_URL=http://127.0.0.1:7001
 export PROFILE_AUTH_TOKEN=dev-token
@@ -89,7 +93,18 @@ cargo run -p identity
 
 Open http://127.0.0.1:7000 and sign in with GitHub.
 
-Terminal 3 (devserver-proxy-service, devserver.chan.app surface on 7002):
+Terminal 3 (devserver-control-service, admin tree on 7003, proxy control on 7101):
+
+```sh
+export BIND_ADDR=127.0.0.1:7003
+export PROXY_BIND_ADDR=127.0.0.1:7101
+export DEVSERVER_ADMIN_TOKEN=dev-admin-token
+export DEVSERVER_PROXY_TOKEN=dev-proxy-token
+export DEVSERVER_PROXY_BASE_URL_TEMPLATE=http://{proxy_id}.localtest.me:7002
+cargo run -p devserver-control
+```
+
+Terminal 4 (devserver-proxy-service, devserver.chan.app surface on 7002):
 
 ```sh
 export BIND_ADDR=127.0.0.1:7002
@@ -97,10 +112,16 @@ export TUNNEL_BIND_ADDR=127.0.0.1:7100
 export IDENTITY_URL=http://127.0.0.1:7000
 export IDENTITY_INTERNAL_TOKEN=dev-internal-token
 export DEVSERVER_GATE_SECRET=dev-devserver-gate-secret
+export DASHBOARD_URL=http://127.0.0.1:7000/workspaces
+export DEVSERVER_CONTROL_URL=http://127.0.0.1:7101
+export DEVSERVER_PROXY_TOKEN=dev-proxy-token
+export DEVSERVER_PROXY_ID=p1
+export DEVSERVER_PROXY_BASE_URL=http://p1.localtest.me:7002
+export DEVSERVER_TUNNEL_ORIGIN=http://127.0.0.1:7002
 cargo run -p devserver-proxy
 ```
 
-devserver-proxy holds no database and reads no identity session. A devserver is reached by following the "open workspace" link from the id.chan.app dashboard, which carries the entry token; the proxy exchanges it for `devserver_gate` plus `devserver_csrf` host-only cookies. For the full local stack use `../packaging/gateway/scripts/dev/setup.sh` + `../packaging/gateway/scripts/dev/run.sh`.
+devserver-proxy holds no database and reads no identity session, and admits no tunnel until its control session to devserver-control reaches `FleetReady`. A devserver is reached by following the "open workspace" link from the id.chan.app dashboard, which carries the entry token; the proxy exchanges it for `devserver_gate` plus `devserver_csrf` host-only cookies. For the full local stack use `../packaging/gateway/scripts/dev/setup.sh` + `../packaging/gateway/scripts/dev/run.sh`.
 
 For frontend iteration without re-embedding:
 
@@ -120,7 +141,7 @@ Tests use real Postgres (per-test schema isolation). Identity tests mock the Git
 
 ## Releases
 
-The gateway ships on the monorepo's release line: the gateway crates are versioned in lockstep with the root (`chan`), and a `v*` tag triggers the repo-root `.github/workflows/release.yml`, whose `gateway-linux-packages` job builds four .deb packages (`chan-gateway-profile`, `chan-gateway-identity`, `chan-gateway-devserver-proxy`, `chan-gateway-admin`) for amd64 and arm64 and uploads them alongside the rest of the release.
+The gateway ships on the monorepo's release line: the gateway crates are versioned in lockstep with the root (`chan`), and a `v*` tag triggers the repo-root `.github/workflows/release.yml`, whose `gateway-linux-packages` job builds five .deb packages (`chan-gateway-profile`, `chan-gateway-identity`, `chan-gateway-devserver-control`, `chan-gateway-devserver-proxy`, `chan-gateway-admin`) for amd64 and arm64 and uploads them alongside the rest of the release.
 
 There is no gateway-local release script: bump `gateway/Cargo.toml` in the same commit as the root `Cargo.toml` version, then cut the release from the monorepo root. The release workflow's `context` job asserts the tag matches the gateway version.
 
@@ -131,7 +152,7 @@ brew install zig
 rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
 cargo install cargo-zigbuild cargo-deb
 ../packaging/gateway/scripts/build-debs.sh
-ls dist/                                   # eight .deb files (4 packages x 2 archs)
+ls dist/                                   # ten .deb files (5 packages x 2 archs)
 ```
 
 ### Install on a Debian/Ubuntu host
@@ -139,36 +160,38 @@ ls dist/                                   # eight .deb files (4 packages x 2 ar
 ```sh
 sudo apt install ./chan-gateway-profile_*.deb \
                  ./chan-gateway-identity_*.deb \
+                 ./chan-gateway-devserver-control_*.deb \
                  ./chan-gateway-devserver-proxy_*.deb
 ```
 
-The packages share a system user (`chan-gateway`) and put env templates at `/etc/chan-gateway/{profile,identity,devserver-proxy}.env`. Edit those, then enable + start each service:
+The packages share a system user (`chan-gateway`) and put env templates at `/etc/chan-gateway/{profile,identity,devserver-control,devserver-proxy}.env`. Edit those, then enable + start each service:
 
 ```sh
 sudo systemctl enable --now chan-gateway-profile
 sudo systemctl enable --now chan-gateway-identity
+sudo systemctl enable --now chan-gateway-devserver-control
 sudo systemctl enable --now chan-gateway-devserver-proxy
 ```
 
-The binaries listen on `127.0.0.1:{7001,7000,7002}` by default; front them with nginx + Let's Encrypt for `id.chan.app` and `devserver.chan.app`.
+The binaries listen on `127.0.0.1:{7001,7000,7003,7101,7002,7100}` by default; front identity and devserver-proxy with nginx + Let's Encrypt for `id.chan.app` and `devserver.chan.app`. The devserver-control listeners (7003 admin, 7101 proxy control) stay on the private network.
 
 ## Admin
 
-`chan-gateway-admin` (`crates/admin/`) is the operator CLI: list / block / unblock users, inspect personal access tokens, snapshot or kill live tunnels, read auth audit. It talks to profile-service's `/v1/admin/*` tree and devserver-proxy's `/admin/v1/*` tree over plain HTTP, so run it on a host that can reach the internal listeners.
+`chan-gateway-admin` (`crates/admin/`) is the operator CLI: list / block / unblock users, inspect personal access tokens, snapshot or kill live tunnels, read auth audit. It talks to profile-service's `/v1/admin/*` tree and devserver-control's `/admin/v1/*` tree over plain HTTP, so run it on a host that can reach the internal listeners.
 
 ### Setup
 
-Two service env vars guard the admin tree; rotate them like any other secret:
+Two service env vars guard the admin trees; rotate them like any other secret:
 
-- profile-service: `PROFILE_ADMIN_TOKEN=<random>`
-- devserver-proxy:    `DEVSERVER_ADMIN_TOKEN=<random>`
+- profile-service:   `PROFILE_ADMIN_TOKEN=<random>`
+- devserver-control: `DEVSERVER_ADMIN_TOKEN=<random>`
 
 A single-token deployment shares one secret across both services; `chan-gateway-admin` reads `CHAN_ADMIN_TOKEN` and sends it to each.
 
 ```sh
 export CHAN_ADMIN_TOKEN=<same value as the service tokens>
 export CHAN_ADMIN_PROFILE_URL=http://127.0.0.1:7001    # optional, default
-export CHAN_ADMIN_WORKSPACE_URL=http://127.0.0.1:7002      # optional, default
+export CHAN_ADMIN_WORKSPACE_URL=http://127.0.0.1:7003  # optional, default
 ```
 
 Build / install:
@@ -203,7 +226,7 @@ chan-gateway-admin token list alice@example.com
 chan-gateway-admin token revoke <token-uuid>
 chan-gateway-admin token audit  <token-uuid>
 
-# Live tunnels (devserver-proxy in-memory registry)
+# Live tunnels (devserver-control's aggregate fleet view)
 chan-gateway-admin tunnel ps
 chan-gateway-admin tunnel ps --user alice
 chan-gateway-admin tunnel kill alice home          # force one workspace offline

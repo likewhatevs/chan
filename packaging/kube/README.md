@@ -4,23 +4,24 @@ Kubernetes manifests for the chan-gateway stack, plus the local sdme validation 
 
 ## Two shapes
 
-- **Cluster manifests** (`config.yaml`, `secret.example.yaml`, `postgres.yaml`, `profile.yaml`, `identity.yaml`, `devserver-proxy.yaml`): separate Deployments + Services. Services reach each other by Service DNS name (`chan-gateway-profile:7001`, etc.). This is what you apply to a real cluster. The three service Deployments pull the published images from Docker Hub as `fiorix/<service>:<version>`; `<version>` is a placeholder you set to the release tag you are deploying (`0.55.0`, or `latest` for the newest GA -- see `packaging/docker/README.md` "Pull from Docker Hub" for the tag policy).
+- **Cluster manifests** (`config.yaml`, `secret.example.yaml`, `postgres.yaml`, `profile.yaml`, `identity.yaml`, `devserver-proxy.yaml`, `devserver-control.yaml`): separate Deployments + Services. Services reach each other by Service DNS name (`chan-gateway-profile:7001`, etc.). This is what you apply to a real cluster. The four service Deployments pull the published images from Docker Hub as `fiorix/<service>:<version>`; `<version>` is a placeholder you set to the release tag you are deploying (`0.55.0`, or `latest` for the newest GA -- see `packaging/docker/README.md` "Pull from Docker Hub" for the tag policy).
 - **sdme validation pod** (`sdme/gateway-pod.yaml`): the whole stack as ONE Pod. sdme runs a multi-container Pod as a single systemd-nspawn container sharing a network namespace via localhost, so there is no Service DNS; the manifest wires the inter-service URLs to `127.0.0.1`. This is the shape that comes up under sdme on a single host without a real cluster.
 
 The service env-var contract is `gateway/crates/*/packaging/*.env` and `gateway/README.md`. The inter-service trust model (which token each service shares) is in `.agents/gateway.md` "Service-to-service bearers".
 
 ## Inter-service wiring
 
-| Edge                                   | Variable                       | Carried by |
-|----------------------------------------|--------------------------------|------------|
-| identity -> profile (service API)      | `PROFILE_AUTH_TOKEN`           | Secret     |
-| devserver-proxy -> identity (validate) | `IDENTITY_INTERNAL_TOKEN`      | Secret     |
-| identity mint / proxy verify (gate)    | `DEVSERVER_GATE_SECRET`        | Secret     |
-| identity + profile -> proxy admin      | `DEVSERVER_ADMIN_TOKEN`        | Secret     |
-| profile + identity -> Postgres         | `DATABASE_URL`                 | Secret     |
-| public domain                          | `CHAN_DOMAIN`, `PUBLIC_SCHEME` | ConfigMap  |
+| Edge                                   | Variable                  | Carried by |
+|----------------------------------------|---------------------------|------------|
+| identity -> profile (service API)      | `PROFILE_AUTH_TOKEN`      | Secret     |
+| proxy -> identity (PAT validate)       | `IDENTITY_INTERNAL_TOKEN` | Secret     |
+| identity mint / proxy verify (gate)    | `DEVSERVER_GATE_SECRET`   | Secret     |
+| identity + profile -> control admin    | `DEVSERVER_ADMIN_TOKEN`   | Secret     |
+| proxy -> control session               | `DEVSERVER_PROXY_TOKEN`   | Secret     |
+| profile + identity -> Postgres         | `DATABASE_URL`            | Secret     |
+| public origins (`BASE_URL`, `DEVSERVER_*`) | (see config.yaml)     | ConfigMap  |
 
-`IDENTITY_INTERNAL_TOKEN` and `DEVSERVER_GATE_SECRET` MUST match across the two services that share them, or the tunnel handoff fails. identity refuses to start with no OAuth provider, so the Secret carries placeholder GitHub creds for boot.
+`IDENTITY_INTERNAL_TOKEN`, `DEVSERVER_GATE_SECRET`, and `DEVSERVER_PROXY_TOKEN` MUST match across the two services that share each of them, or the tunnel handoff or control session fails. identity refuses to start with no OAuth provider, so the Secret carries placeholder GitHub creds for boot.
 
 ## Making the images available to sdme
 
@@ -30,12 +31,12 @@ The service env-var contract is `gateway/crates/*/packaging/*.env` and `gateway/
 # 1. Build + export the images (privileged build host; needs a container engine).
 packaging/docker/build.sh -t dev
 
-# 2. Run a registry sdme can reach, push the four images, point sdme at it:
+# 2. Run a registry sdme can reach, push the five images, point sdme at it:
 #    sudo sdme config set default_kube_registry <registry-host>:5000
 #    then docker push <registry-host>:5000/chan-gateway-identity:dev  (etc.)
 ```
 
-> NOTE (unverified on this host): the exact bridge from a locally-built OCI image to `sdme kube apply` (local registry vs `sdme fs import --oci-mode app` vs the OCI blob cache) was not run here -- this host has no container engine and sdme needs root. Confirm the resolution path on the first privileged run and pin it in this section. This local-build path applies the sdme + test pods (`sdme/gateway-pod.yaml`, `test/upload-pod.yaml`), which stay on bare `:dev` image names + `imagePullPolicy: IfNotPresent`, so they are registry-agnostic; the three cluster service manifests instead pull `fiorix/<service>:<version>` from Docker Hub.
+> NOTE (unverified on this host): the exact bridge from a locally-built OCI image to `sdme kube apply` (local registry vs `sdme fs import --oci-mode app` vs the OCI blob cache) was not run here -- this host has no container engine and sdme needs root. Confirm the resolution path on the first privileged run and pin it in this section. This local-build path applies the sdme + test pods (`sdme/gateway-pod.yaml`, `test/upload-pod.yaml`), which stay on bare `:dev` image names + `imagePullPolicy: IfNotPresent`, so they are registry-agnostic; the four cluster service manifests instead pull `fiorix/<service>:<version>` from Docker Hub.
 
 ## D3: bring the stack up under sdme and prove it healthy
 
@@ -51,6 +52,7 @@ sudo sdme kube secret create gateway-secrets \
     --from-literal=IDENTITY_INTERNAL_TOKEN=$(openssl rand -hex 32) \
     --from-literal=DEVSERVER_GATE_SECRET=$(openssl rand -hex 32) \
     --from-literal=DEVSERVER_ADMIN_TOKEN=$(openssl rand -hex 32) \
+    --from-literal=DEVSERVER_PROXY_TOKEN=$(openssl rand -hex 32) \
     --from-literal=GITHUB_CLIENT_ID=dev-placeholder \
     --from-literal=GITHUB_CLIENT_SECRET=dev-placeholder
 
@@ -58,7 +60,7 @@ sudo sdme kube apply -f packaging/kube/sdme/gateway-pod.yaml --base-fs <base>
 
 # Health: /healthz on each service, from inside the pod's shared netns.
 sudo sdme exec chan-gateway --oci -- sh -c '
-  for p in 7000 7001 7002; do
+  for p in 7000 7001 7002 7003; do
     printf "port %s: " "$p"; curl -fsS "http://127.0.0.1:$p/healthz" && echo;
   done'
 
@@ -70,7 +72,7 @@ sudo sdme logs chan-gateway --oci
 sudo sdme kube delete chan-gateway        # teardown
 ```
 
-A healthy stack answers `ok` on all three `/healthz` ports, and the profile / identity logs show migrations applied (they migrate on boot once Postgres is up).
+A healthy stack answers `ok` on all four `/healthz` ports, and the profile / identity logs show migrations applied (they migrate on boot once Postgres is up).
 
 ## D4: headless-Chrome browser upload
 
@@ -89,15 +91,17 @@ The `upload-tester` container drives a real headless Chromium that POSTs a file 
 ```sh
 cp packaging/kube/secret.example.yaml packaging/kube/secret.yaml   # replace every value; do not commit
 
-# Pin the three service manifests to the release you are deploying
+# Pin the four service manifests to the release you are deploying
 # ('latest' for the newest GA -- see packaging/docker/README.md):
 ver=0.55.0
 sed -i "s|<version>|$ver|" packaging/kube/profile.yaml \
-    packaging/kube/identity.yaml packaging/kube/devserver-proxy.yaml
+    packaging/kube/identity.yaml packaging/kube/devserver-proxy.yaml \
+    packaging/kube/devserver-control.yaml
 
 kubectl apply -f packaging/kube/config.yaml -f packaging/kube/secret.yaml \
     -f packaging/kube/postgres.yaml -f packaging/kube/profile.yaml \
-    -f packaging/kube/identity.yaml -f packaging/kube/devserver-proxy.yaml
+    -f packaging/kube/identity.yaml -f packaging/kube/devserver-control.yaml \
+    -f packaging/kube/devserver-proxy.yaml
 ```
 
-A TLS terminator fronts the public services: route `id.<domain>` to `chan-gateway-identity:7000`, `devserver.<domain>` + `*.devserver.<domain>` to `chan-gateway-devserver-proxy:7002`, and grpc/h2c-pass the tunnel register endpoint to `:7100`. Set `COOKIE_SECURE=true` and `PUBLIC_SCHEME=https` behind TLS.
+A TLS terminator fronts the public services: route the identity origin (`BASE_URL`) to `chan-gateway-identity:7000`, each proxy node origin (`DEVSERVER_PROXY_BASE_URL`) plus its wildcard to that node's `chan-gateway-devserver-proxy:7002`, and grpc/h2c-pass the tunnel register endpoint to `:7100`. The devserver-control ports (:7003 admin, :7101 proxy control) stay internal; never publish them through the terminator. Set `COOKIE_SECURE=true` and switch the origin URLs in `config.yaml` to https behind TLS.

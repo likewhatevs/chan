@@ -13,10 +13,11 @@ flowchart TB
 
     subgraph gw["chan gateway (nested Cargo workspace)"]
         ID["identity-service · id.chan.app<br/>OAuth · sessions · PATs · /s/{owner} open · token validate"]
-        PROXY["devserver-proxy<br/>devserver.chan.app apex: admin + tunnel + healthz<br/>*.devserver.chan.app wildcard: launcher root + tenants + devserver_gate"]
+        PROXY["devserver-proxy<br/>devserver.chan.app apex: tunnel + healthz/readyz<br/>*.devserver.chan.app wildcard: launcher root + tenants + devserver_gate"]
+        CONTROL["devserver-control<br/>fleet directory · admission · command routing<br/>/admin/v1/* on 7003 · h2c proxy control on 7101"]
         PROFILE["profile-service<br/>internal HTTP over Postgres · users · identities · devserver grants"]
         ADMIN["admin-service"]
-        COMMON["gateway-common<br/>domain · devserver_gate · profile_client"]
+        COMMON["gateway-common<br/>devserver_gate · profile_client · devserver_control_client"]
         PG[("Postgres")]
     end
 
@@ -29,6 +30,9 @@ flowchart TB
     ID <-->|users · grants · access| PROFILE
     PROFILE --- PG
     PROXY -->|validate PAT · /internal/v1/tokens/validate| ID
+    PROXY <-->|snapshot + deltas · admission · kills| CONTROL
+    ID -->|aggregate /admin/v1/*| CONTROL
+    PROFILE -->|aggregate /admin/v1/*| CONTROL
     DS ==>|tunnel register with PAT · devserver.chan.app/v1/tunnel| PROXY
     PROXY ==>|gated tenant + root traffic over the tunnel| DS
     LAUNCH -->|/api/library/* via the proxy| PROXY
@@ -37,7 +41,7 @@ flowchart TB
     PROFILE --> COMMON
 ```
 
-`admin-service` is the operator console; `gateway-common` holds the shared domain config, the `devserver_gate` JWT type, and the profile/workspace-admin clients. devserver-proxy renders no UI of its own -- it forwards the launcher that the devserver serves at its root.
+`admin-service` is the operator console; `gateway-common` holds the `devserver_gate` JWT type and the profile/devserver-control clients. devserver-control owns the aggregate `/admin/v1/*` tree: identity, profile, and the admin CLI read one coherent fleet view from it, and every tunnel admission is its decision. devserver-proxy renders no UI of its own -- it forwards the launcher that the devserver serves at its root.
 
 ## The devserver model
 
@@ -60,8 +64,12 @@ _Avoid_: site, app
 ## Gate and identity
 
 **devserver-proxy**:
-The gateway reverse-proxy service at `devserver.chan.app` (apex) and `*.devserver.chan.app` (wildcard). Renamed from workspace-proxy.
+The gateway reverse-proxy service at `devserver.chan.app` (apex) and `*.devserver.chan.app` (wildcard), and the fleet data plane: many provisioned nodes can run it, each with a stable node id. Renamed from workspace-proxy.
 _Avoid_: workspace-proxy, tenant-proxy
+
+**devserver-control**:
+The singleton, database-free control plane. Owns the dynamic proxy directory, the aggregate tunnel view, fleet admission, and command routing; serves `/admin/v1/*` to identity, profile, and the admin CLI. Every proxy node holds one authenticated h2 control session to it.
+_Avoid_: controller-service, fleet-db
 
 **devserver token**:
 The owner PAT (`chan_pat_*`) that authorizes a devserver to register over the tunnel. One token identifies one devserver; the backend resolves the devserver from the token's hash. The PAT stays opaque.

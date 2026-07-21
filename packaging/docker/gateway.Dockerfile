@@ -1,8 +1,9 @@
-# chan-gateway service images (identity, profile, devserver-proxy).
+# chan-gateway service images (identity, profile, devserver-proxy,
+# devserver-control).
 #
-# One builder stage compiles all three binaries once (a shared cargo build);
-# three thin runtime targets select one binary each. Build a specific service
-# with --target; the builder layer is cached and reused across the three:
+# One builder stage compiles all four binaries once (a shared cargo build);
+# four thin runtime targets select one binary each. Build a specific service
+# with --target; the builder layer is cached and reused across the four:
 #
 #   docker build -f packaging/docker/gateway.Dockerfile --target identity \
 #       -t chan-gateway-identity:dev .
@@ -10,6 +11,8 @@
 #       -t chan-gateway-profile:dev .
 #   docker build -f packaging/docker/gateway.Dockerfile --target devserver-proxy \
 #       -t chan-gateway-devserver-proxy:dev .
+#   docker build -f packaging/docker/gateway.Dockerfile --target devserver-control \
+#       -t chan-gateway-devserver-control:dev .
 #
 # Build context is the REPOSITORY ROOT. The gateway is a nested Cargo workspace
 # under gateway/, so its build artifacts land in gateway/target.
@@ -45,7 +48,7 @@ COPY . .
 RUN make gateway-build GATEWAY_CARGO_FLAGS="--release"
 
 # ---- runtime base --------------------------------------------------------
-# Shared by all three service targets: matched glibc (bookworm), a CA bundle
+# Shared by all four service targets: matched glibc (bookworm), a CA bundle
 # (identity reaches the OAuth providers over HTTPS), and a non-root service user
 # mirroring the systemd unit's User=chan-gateway.
 FROM debian:bookworm-slim AS runtime-base
@@ -83,3 +86,13 @@ ENV TUNNEL_BIND_ADDR=0.0.0.0:7100
 EXPOSE 7002
 EXPOSE 7100
 ENTRYPOINT ["chan-gateway-devserver-proxy"]
+
+# ---- devserver-control (admin/health :7003 + h2c proxy control :7101) -----
+FROM runtime-base AS devserver-control
+COPY --from=builder /src/gateway/target/release/devserver-control-service \
+     /usr/local/bin/chan-gateway-devserver-control
+ENV BIND_ADDR=0.0.0.0:7003
+ENV PROXY_BIND_ADDR=0.0.0.0:7101
+EXPOSE 7003
+EXPOSE 7101
+ENTRYPOINT ["chan-gateway-devserver-control"]

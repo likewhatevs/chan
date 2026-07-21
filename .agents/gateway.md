@@ -102,7 +102,7 @@ Every bearer token, OAuth state value, JWT signature compare, and CSRF-shaped ch
 
 Each request-handler crate (`profile`, `identity`, `devserver-proxy`) defines a `thiserror::Error` enum with an `IntoResponse` impl that maps every variant to a precise HTTP status code. Public-facing messages are short and intentionally generic (`unauthorized`, `internal error`, `upstream unreachable`); detailed context goes into the `tracing` log on the server side. `anyhow::Error` is acceptable in `main.rs` and in startup paths; request handlers return explicit thiserror variants.
 
-`gateway_common::profile_client::ProfileError`, `gateway_common::workspace_admin_client::WorkspaceAdminError`, and `gateway_common::devserver_gate::DevserverGateError` are the cross-service client errors. Each consumer maps them onto its local error via a `From` impl so request handlers can `?` straight through.
+`gateway_common::profile_client::ProfileError`, `gateway_common::devserver_control_client::DevserverControlError`, and `gateway_common::devserver_gate::DevserverGateError` are the cross-service client errors. Each consumer maps them onto its local error via a `From` impl so request handlers can `?` straight through.
 
 ### Session contract
 
@@ -128,11 +128,12 @@ The user / identity / email triangle has a known concurrent first-time-login rac
 
 ### Service-to-service bearers
 
-Three distinct bearers, all `openssl rand -hex 32`:
+Four distinct bearers, all `openssl rand -hex 32`:
 
 - `PROFILE_AUTH_TOKEN`: identity-service -> profile-service service API. profile-service also accepts `PROFILE_ADMIN_TOKEN` here so a single-token deployment works; the middleware runs both checks unconditionally (`regular | admin`) so a wrong token never short-circuits on the first byte.
 - `IDENTITY_INTERNAL_TOKEN`: devserver-proxy -> identity-service `/internal/v1/tokens/validate`. Required; no fallback to `PROFILE_AUTH_TOKEN`. Rotating one does not rotate the other.
-- `DEVSERVER_ADMIN_TOKEN`: identity-service and profile-service -> devserver-proxy admin tree. profile uses it on admin block; identity uses it on revoke, delete, and dashboard reads. `DEVSERVER_ADMIN_TOKEN` is a generic cross-service name; the service it points at is devserver-proxy.
+- `DEVSERVER_ADMIN_TOKEN`: identity-service and profile-service -> devserver-control `/admin/v1/*` tree. profile uses it on admin block; identity uses it on revoke, delete, and dashboard reads. `DEVSERVER_ADMIN_TOKEN` is a generic cross-service name; the service it points at is devserver-control.
+- `DEVSERVER_PROXY_TOKEN`: devserver-proxy -> devserver-control `/v1/proxies/connect` control session. Distinct from `DEVSERVER_ADMIN_TOKEN` on purpose: a proxy node holds no operator-admin credential.
 
 Plus one symmetric secret:
 
@@ -148,7 +149,7 @@ Per-crate rules that come up often when editing this code. For the full design r
 - **Placeholder usernames are deterministic.** New rows seed `username = 'u' || substr(replace(uuid::text, '-', ''), 1, 12)`. identity-service renames on first sign-in; the hard cap of 4 lifetime renames is enforced in `update_username` via a CAS update. Don't invent an alternate seeding scheme.
 - **All SQL is parameterized.** Constants like `USER_COLS` are `format!`'d into queries; user input always goes through `.bind()` and `$N`.
 - **The devserver is the sharing unit.** `devserver_access(owner, devserver, caller)` is the single per-request access decision: `owner` when caller is the owner, the grant's `role` (`viewer` / `editor`) for a claimed grant, and 404 in every other case (no-grant and unknown-devserver share one shape so the endpoint cannot enumerate shares). A grant gives the WHOLE devserver, not a single workspace; `create_devserver_grant` auto-bootstraps the parent `devservers` row so callers don't need a separate hop.
-- **Block fans out server-side.** `POST /v1/admin/users/{id}/block` also calls devserver-proxy `kill_user_tunnels` (best-effort) when a `WorkspaceAdminClient` is configured, so the in-process yamux registrations drop at the same time the DB row changes.
+- **Block fans out server-side.** `POST /v1/admin/users/{id}/block` also calls devserver-control `kill_user_tunnels` (best-effort) when a `DevserverControlClient` is configured, so the live registrations drop across the proxy fleet at the same time the DB row changes.
 
 ### identity
 

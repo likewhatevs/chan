@@ -4,22 +4,23 @@ OCI images for chan and the chan-gateway services. Multi-stage builds: a builder
 
 ## Images
 
-| Image                          | Dockerfile / target                    | Ports       |
-|--------------------------------|----------------------------------------|-------------|
-| `chan`                         | `chan.Dockerfile`                      | 8787        |
-| `chan-gateway-identity`        | `gateway.Dockerfile` `identity`        | 7000        |
-| `chan-gateway-profile`         | `gateway.Dockerfile` `profile`         | 7001        |
-| `chan-gateway-devserver-proxy` | `gateway.Dockerfile` `devserver-proxy` | 7002, 7100  |
-| `chan-upload-test`             | `test/upload/Dockerfile`               | (test only) |
+| Image                            | Ports       |
+|----------------------------------|-------------|
+| `chan`                           | 8787        |
+| `chan-gateway-identity`          | 7000        |
+| `chan-gateway-profile`           | 7001        |
+| `chan-gateway-devserver-proxy`   | 7002, 7100  |
+| `chan-gateway-devserver-control` | 7003, 7101  |
+| `chan-upload-test`               | (test only) |
 
-The three gateway services share one builder stage in `gateway.Dockerfile` (a single cargo build of all three crates); `--target` selects the runtime.
+`chan` builds from `chan.Dockerfile`, each gateway service is the same-named `--target` of `gateway.Dockerfile`, and `chan-upload-test` builds from `test/upload/Dockerfile`. The four gateway services share one builder stage in `gateway.Dockerfile` (a single cargo build of all four crates); `--target` selects the runtime.
 
 ## Build
 
 The chan and gateway builds use the **repository root** as their context (they run the project's own `make` targets, which need the full tree). Run from the repo root:
 
 ```sh
-packaging/docker/build.sh                 # all four images, tag :dev
+packaging/docker/build.sh                 # all five images, tag :dev
 packaging/docker/build.sh -t v0.50.0      # custom tag
 packaging/docker/build.sh --model         # chan image with the embedded search model
 packaging/docker/build.sh --save          # also export OCI archives to packaging/docker/_out/
@@ -31,7 +32,8 @@ packaging/docker/build.sh --save          # also export OCI archives to packagin
 DOCKER_BUILDKIT=1 docker build -f packaging/docker/chan.Dockerfile -t chan:dev .
 docker build -f packaging/docker/gateway.Dockerfile --target identity        -t chan-gateway-identity:dev .
 docker build -f packaging/docker/gateway.Dockerfile --target profile         -t chan-gateway-profile:dev .
-docker build -f packaging/docker/gateway.Dockerfile --target devserver-proxy -t chan-gateway-devserver-proxy:dev .
+docker build -f packaging/docker/gateway.Dockerfile --target devserver-proxy   -t chan-gateway-devserver-proxy:dev .
+docker build -f packaging/docker/gateway.Dockerfile --target devserver-control -t chan-gateway-devserver-control:dev .
 docker build -f packaging/docker/test/upload/Dockerfile -t chan-upload-test:dev packaging/docker/test/upload
 ```
 
@@ -50,14 +52,14 @@ docker build -f packaging/docker/chan.Dockerfile --build-arg EMBED_MODEL=1 -t ch
 
 ### Pull from Docker Hub
 
-Every release publishes the four images to `docker.io/fiorix/`. The immutable version tag (`X.Y.Z`) is published on every release and never moves; `latest` is published only on a GA release (skipped for pre-releases), so it always resolves to the newest stable build.
+Every release publishes the five images to `docker.io/fiorix/`. The immutable version tag (`X.Y.Z`) is published on every release and never moves; `latest` is published only on a GA release (skipped for pre-releases), so it always resolves to the newest stable build.
 
 ```sh
 docker pull fiorix/chan:0.55.0      # immutable, pinned to one release
 docker pull fiorix/chan:latest      # newest GA release
 ```
 
-The gateway services publish the same way and share the tag policy: `fiorix/chan-gateway-identity`, `fiorix/chan-gateway-profile`, `fiorix/chan-gateway-devserver-proxy`. Run a published image just like the local `chan:dev` examples below -- substitute the `fiorix/chan:<tag>` ref:
+The gateway services publish the same way and share the tag policy: `fiorix/chan-gateway-identity`, `fiorix/chan-gateway-profile`, `fiorix/chan-gateway-devserver-proxy`, `fiorix/chan-gateway-devserver-control`. Run a published image just like the local `chan:dev` examples below -- substitute the `fiorix/chan:<tag>` ref:
 
 ```sh
 docker run --rm -p 8787:8787 -v "$PWD:/workspace" fiorix/chan:0.55.0
@@ -89,7 +91,7 @@ docker run --rm -e CHAN_TUNNEL_TOKEN=chan_pat_... chan:dev \
 
 The service binaries read configuration from environment variables (they do NOT source the systemd `EnvironmentFile`; that is a packaging concern). Each image sets only `BIND_ADDR=0.0.0.0:<port>` (the in-repo default is `127.0.0.1`, which is unreachable across containers). Everything else is injected at runtime; no secrets are baked in. The full variable contract is in `gateway/crates/*/packaging/*.env` and `gateway/README.md`.
 
-For orchestration (Postgres + the three services wired together) and the local sdme validation, use `packaging/kube/` -- see `packaging/kube/README.md`.
+For orchestration (Postgres + the four services wired together) and the local sdme validation, use `packaging/kube/` -- see `packaging/kube/README.md`.
 
 ## Design notes
 

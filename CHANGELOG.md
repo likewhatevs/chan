@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **Distributed proxy control plane.** A fifth gateway service, `devserver-control`, is a singleton, database-free controller that owns the dynamic proxy directory, the aggregate tunnel view, fleet admission, and command routing. Every `devserver-proxy` node holds one authenticated h2 control session to it (`POST /v1/proxies/connect`), publishes its registry snapshot plus deltas, and asks the controller for an admission decision before any tunnel sees `HelloAck::Ok`; there is no local-admission fallback. Duplicate ownership and the fleet-wide per-user capacity cap are decided synchronously at admission, kills route by registration UUID to the owning proxy only, and SSE watches publish fleet changes. The service packages as `chan-gateway-devserver-control` (deb, systemd unit, `/etc/chan-gateway/devserver-control.env`) and as the `fiorix/chan-gateway-devserver-control` OCI image, with the admin/health tree on 7003 and the h2c proxy-control listener on 7101.
+- **Node-specific tenant origins.** Every proxy node runs with a stable id (`DEVSERVER_PROXY_ID`) and an exact public base origin (`DEVSERVER_PROXY_BASE_URL`) validated controller-side against `DEVSERVER_PROXY_BASE_URL_TEMPLATE`. Identity mints entry URLs on the owning node's origin, for example `{owner}--{disc}.p1.usr.chan.app`, and Chan Desktop validates exactly two child labels below the discovery-advertised proxy apex. A registration that reconnects through a different node moves its entry origin with it.
+- **Failure semantics with bounded blast radius.** A controller outage stops new admission immediately while existing HTTP, WebSocket, and yamux traffic survives a 30-second reconnect grace; on grace expiry the affected proxy evicts its tunnels and fails closed. After a controller restart, reads, writes, and admissions hold 503 until a 30-second convergence window completes and duplicate rows reconcile deterministically, so an outage cannot leave indefinite untracked or conflicting tunnels. Controller HA is out of scope; see `gateway/docs/adr/0002-control-plane-owns-proxy-fleet-state.md`.
+
+### Changed
+
+- **The aggregate `/admin/v1/*` tree moves from devserver-proxy to devserver-control.** identity, profile, and `chan-gateway-admin` now read one coherent fleet view from the controller (`DEVSERVER_ADMIN_URL` / `CHAN_ADMIN_WORKSPACE_URL` default to port 7003), so a management read is either the whole fleet or an explicit upstream failure, never one healthy proxy's partial snapshot. The proxy keeps only its public, tunnel, and health listeners.
+- **Public origins are explicit configuration.** `BASE_URL`, `DEVSERVER_PROXY_ORIGIN`, `DEVSERVER_TUNNEL_ORIGIN`, `DEVSERVER_PROXY_BASE_URL`, and `DEVSERVER_PROXY_BASE_URL_TEMPLATE` replace runtime hostname derivation from `CHAN_DOMAIN` / `PUBLIC_SCHEME` and fixed `gw` / `usr` / `devserver` labels; a self-hosted deployment names any origins with the same structural relationship.
+
+### Operators
+
+- **New required configuration.** devserver-control requires `DEVSERVER_ADMIN_TOKEN`, `DEVSERVER_PROXY_TOKEN`, and `DEVSERVER_PROXY_BASE_URL_TEMPLATE`. Each devserver-proxy node requires `DEVSERVER_CONTROL_URL`, `DEVSERVER_PROXY_TOKEN`, `DEVSERVER_PROXY_ID`, and `DEVSERVER_PROXY_BASE_URL`, and refuses to start without them. `DEVSERVER_PROXY_TOKEN` is a dedicated bearer, distinct from `DEVSERVER_ADMIN_TOKEN`; proxy nodes hold no database, OAuth, or operator-admin credential. `configure.sh` and the bundled env templates emit the new layout.
+- **Version lockstep is enforced.** All gateway services and proxies must run the exact same package version; the control handshake rejects a mismatch. The five `chan-gateway-*` debs and the four gateway OCI images publish at one immutable tag.
+- **Run the control listeners on a private network.** The 7003 admin tree and the 7101 proxy-control listener are internal surfaces; front only identity and the proxy data path with the public TLS terminator.
+
 ## [v0.73.0] - 2026-07-20
 
 v0.73.0 decouples publishing from the release: the Docker images and every distro package now ship from their own workflow that fans out in parallel after a successful release, so a registry or a distribution can no longer hold up a release or block each other. chan also stops building the CLI `.deb` and `.rpm` that COPR, the Launchpad PPA and the AUR now build for it, batches OpenCode's queued terminal notifications into one turn, and fixes the Command Launcher's dead "Flip pane" row.

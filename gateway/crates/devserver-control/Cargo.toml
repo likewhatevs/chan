@@ -37,3 +37,30 @@ uuid = { workspace = true }
 http-body-util = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 tower = { version = "0.5", features = ["util"] }
+
+[package.metadata.deb]
+name = "chan-gateway-devserver-control"
+maintainer = "fiorix <fiorix@gmail.com>"
+copyright = "2026, fiorix <fiorix@gmail.com>"
+license-file = ["../../LICENSE", "0"]
+extended-description = """\
+Control-plane service for the chan-gateway suite. A singleton,
+database-free controller owns the dynamic proxy directory, the
+aggregate tunnel view, fleet admission, and command routing. Proxy
+nodes hold authenticated h2 control sessions; identity, profile, and
+the admin CLI read the aggregate through the /admin/v1/* tree."""
+section = "net"
+priority = "optional"
+depends = "$auto, adduser"
+maintainer-scripts = "packaging/"
+assets = [
+    ["target/release/devserver-control-service", "/usr/bin/chan-gateway-devserver-control",  "755"],
+    ["packaging/devserver-control.env",          "/etc/chan-gateway/devserver-control.env", "640"],
+]
+conf-files = ["/etc/chan-gateway/devserver-control.env"]
+
+[package.metadata.deb.systemd-units]
+unit-name = "chan-gateway-devserver-control"
+unit-scripts = "packaging/"
+enable = false
+start = false

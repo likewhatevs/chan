@@ -33,10 +33,10 @@ Migrations under `migrations/` run on startup.
 | `BIND_ADDR`            | no       | Default `127.0.0.1:7001`          |
 | `PROFILE_AUTH_TOKEN`   | yes      | Bearer for `/v1/users/*` routes   |
 | `PROFILE_ADMIN_TOKEN`  | no       | Bearer for `/v1/admin/*` routes   |
-| `DEVSERVER_ADMIN_URL`  | no       | devserver-proxy admin base; set with the token |
+| `DEVSERVER_ADMIN_URL`  | no       | devserver-control admin base; set with the token |
 | `DEVSERVER_ADMIN_TOKEN`| no       | enables the admin-block fan-out that evicts the user's tunnels |
 
-A missing `PROFILE_ADMIN_TOKEN` makes every `/v1/admin/*` route return 401; that is the safe default for a fresh deploy. When `DEVSERVER_ADMIN_URL` + `DEVSERVER_ADMIN_TOKEN` are set, blocking a user also tells devserver-proxy to drop that user's live tunnels (best-effort).
+A missing `PROFILE_ADMIN_TOKEN` makes every `/v1/admin/*` route return 401; that is the safe default for a fresh deploy. When `DEVSERVER_ADMIN_URL` + `DEVSERVER_ADMIN_TOKEN` are set, blocking a user also tells devserver-control to drop that user's live tunnels fleet-wide (best-effort).
 
 ## Routes
 

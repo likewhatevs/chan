@@ -593,7 +593,7 @@ jobs:
   # manifest list and asserts both platforms. A publish=false dry run BUILDS
   # every image (outputs type=cacheonly) WITHOUT a registry, so it needs no
   # Docker Hub secrets and never moves `latest`. The gateway Dockerfile's single
-  # builder stage compiles all three crates once; the three runtime --targets
+  # builder stage compiles all four crates once; the four runtime --targets
   # share one gha cache scope per arch. Auth is docker/login-action (no GitHub
   # token scope), so these jobs keep the top-level contents: read. Tag map:
   # immutable X.Y.Z always; `latest` only on a GA tag (prerelease == 'false').
@@ -671,8 +671,8 @@ jobs:
           cache-from: type=gha,scope=chan-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=chan-${{ matrix.arch }}
 
-      # gateway: one builder stage compiles all three crates; each runtime
-      # --target copies one binary. The three steps share one gha cache scope
+      # gateway: one builder stage compiles all four crates; each runtime
+      # --target copies one binary. The four steps share one gha cache scope
       # per arch so the builder compiles once.
       - name: Build chan-gateway-identity
         if: matrix.component == 'gateway'
@@ -716,6 +716,20 @@ jobs:
           cache-from: type=gha,scope=gateway-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=gateway-${{ matrix.arch }}
 
+      - name: Build chan-gateway-devserver-control
+        if: matrix.component == 'gateway'
+        id: build_devserver_control
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: packaging/docker/gateway.Dockerfile
+          target: devserver-control
+          platforms: linux/${{ matrix.arch }}
+          provenance: false
+          outputs: ${{ needs.context.outputs.publish == 'true' && format('type=image,name={0}/chan-gateway-devserver-control,push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=true', vars.DOCKERHUB_NAMESPACE) || 'type=cacheonly' }}
+          cache-from: type=gha,scope=gateway-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=gateway-${{ matrix.arch }}
+
       # Persist each pushed digest (filename = image.arch, content = digest) so
       # the manifest job can group per image. Skipped on the dry run (no push,
       # no digests).
@@ -728,6 +742,7 @@ jobs:
           IDENTITY_DIGEST: ${{ steps.build_identity.outputs.digest }}
           PROFILE_DIGEST: ${{ steps.build_profile.outputs.digest }}
           DEVSERVER_PROXY_DIGEST: ${{ steps.build_devserver_proxy.outputs.digest }}
+          DEVSERVER_CONTROL_DIGEST: ${{ steps.build_devserver_control.outputs.digest }}
         run: |
           set -e
           mkdir -p /tmp/digests
@@ -737,6 +752,7 @@ jobs:
             printf '%s' "$IDENTITY_DIGEST" > "/tmp/digests/chan-gateway-identity.${ARCH}"
             printf '%s' "$PROFILE_DIGEST" > "/tmp/digests/chan-gateway-profile.${ARCH}"
             printf '%s' "$DEVSERVER_PROXY_DIGEST" > "/tmp/digests/chan-gateway-devserver-proxy.${ARCH}"
+            printf '%s' "$DEVSERVER_CONTROL_DIGEST" > "/tmp/digests/chan-gateway-devserver-control.${ARCH}"
           fi
           ls -la /tmp/digests
 
@@ -764,6 +780,7 @@ jobs:
           - chan-gateway-identity
           - chan-gateway-profile
           - chan-gateway-devserver-proxy
+          - chan-gateway-devserver-control
     steps:
       - uses: docker/setup-buildx-action@v4
 

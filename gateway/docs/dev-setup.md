@@ -22,25 +22,28 @@ flowchart TD
         nginx["chan-nginx: TLS terminator (the only published container, :80 / :443)"]
         chanid["chan-id :7000"]
         profile["chan-profile :7001"]
+        control["chan-devserver-control :7003 + :7101"]
         proxy["chan-devserver-proxy :7002 + :7100"]
         psql["chan-psql :5432 (also published :5432 for host cargo test)"]
     end
 
     lima --> nginx
     nginx -->|"id.localtest.me"| chanid
-    nginx -->|"devserver.localtest.me apex (admin, healthz)"| proxy
+    nginx -->|"devserver.localtest.me apex (healthz)"| proxy
     nginx -->|"/v1/tunnel (h2c, grpc_pass) -> :7100"| proxy
     nginx -->|"*.devserver.localtest.me (tenant + WS upgrade)"| proxy
 
     chanid -->|"PROFILE_SERVICE_URL"| profile
-    chanid -->|"DEVSERVER_ADMIN_URL"| proxy
+    chanid -->|"DEVSERVER_ADMIN_URL"| control
+    profile -->|"DEVSERVER_ADMIN_URL"| control
+    proxy -->|"DEVSERVER_CONTROL_URL (h2c control session)"| control
     proxy -->|"IDENTITY_URL"| chanid
     profile -->|"DATABASE_URL"| psql
 ```
 
-chan-nginx terminates TLS at the zone edge and fans the routes out across the `chan-svc` containers; this is the one route map for the stack (the nginx section below mirrors it).
+chan-nginx terminates TLS at the zone edge and fans the routes out across the `chan-svc` containers; this is the one route map for the stack (the nginx section below mirrors it). nginx never routes the devserver-control ports: :7003 (the aggregate admin tree) and :7101 (the h2c proxy-control listener) are zone-internal only.
 
-Services bind their default ports (`7000/7001/7002/7100`) INSIDE their containers and resolve each other by container hostname on the `chan-svc` zone (for example identity reads `chan-profile:7001`). Nothing binds on the macOS host except what Lima forwards (nginx `:443`, and Postgres `:5432` for host-run tests). Because no gateway port lands on the macOS host, the macOS AirPlay `:7000` clash never arises and the code defaults stay at the 7000 range, identical to prod.
+Services bind their default ports (`7000/7001/7002/7100/7003/7101`) INSIDE their containers and resolve each other by container hostname on the `chan-svc` zone (for example identity reads `chan-profile:7001`). Nothing binds on the macOS host except what Lima forwards (nginx `:443`, and Postgres `:5432` for host-run tests). Because no gateway port lands on the macOS host, the macOS AirPlay `:7000` clash never arises and the code defaults stay at the 7000 range, identical to prod.
 
 ## Prerequisites: sdme
 
@@ -60,7 +63,7 @@ The service containers install the gateway `.deb`s, the same way prod does, so b
 make linux-gateway     # root Makefile -> build-gateway.sh, uses gateway-build.sdme
 ```
 
-`gateway-build.sdme` (in `packaging/gateway/scripts/dev/sdme/`) bakes the Rust toolchain, node/npm, and cargo-deb; no Postgres is needed at build time. The four packages (identity, profile, devserver-proxy, admin) land in the build's `dist/` staging dir, where the service containers pick them up.
+`gateway-build.sdme` (in `packaging/gateway/scripts/dev/sdme/`) bakes the Rust toolchain, node/npm, and cargo-deb; no Postgres is needed at build time. The five packages (identity, profile, devserver-control, devserver-proxy, admin) land in the build's `dist/` staging dir, where the service containers pick them up.
 
 ## Postgres: chan-psql on the zone
 
@@ -78,7 +81,7 @@ Services reach it as `chan-psql:5432` on the zone; the published `:5432` (via Li
 
 ## The service containers (pattern + one worked example)
 
-Each gateway service is its own container built from a tiny `.sdme` file that installs the matching `.deb` and enables its systemd unit. The prod files live in `chan-prod-setup/services/` (`chan-id.sdme`, `chan-profile.sdme`, `chan-devserver-proxy.sdme`); a dev-sanitized copy differs only in where secrets come from. Worked example, identity:
+Each gateway service is its own container built from a tiny `.sdme` file that installs the matching `.deb` and enables its systemd unit. The prod files live in `chan-prod-setup/services/` (`chan-id.sdme`, `chan-profile.sdme`, `chan-devserver-control.sdme`, `chan-devserver-proxy.sdme`); a dev-sanitized copy differs only in where secrets come from. Worked example, identity:
 
 ```dockerfile
 # chan-id-dev.sdme: chan-gateway-identity (id.<domain> on :7000)
@@ -97,8 +100,10 @@ RUN set -eux; \
     printf '[Service]\n\
 Environment=BIND_ADDR=0.0.0.0:7000\n\
 Environment=BASE_URL=http://id.localtest.me\n\
+Environment=DEVSERVER_PROXY_ORIGIN=https://devserver.localtest.me\n\
+Environment=DEVSERVER_TUNNEL_ORIGIN=https://devserver.localtest.me\n\
 Environment=PROFILE_SERVICE_URL=http://chan-profile:7001\n\
-Environment=DEVSERVER_ADMIN_URL=http://chan-devserver-proxy:7002\n\
+Environment=DEVSERVER_ADMIN_URL=http://chan-devserver-control:7003\n\
 Environment=COOKIE_SECURE=false\n\
 Environment=GITHUB_CLIENT_ID=...  GITHUB_CLIENT_SECRET=...\n' \
         > /etc/systemd/system/chan-gateway-identity.service.d/dev-env.conf; \
@@ -113,7 +118,7 @@ limactl shell default sudo sdme create --name chan-id -r chan-id-dev --network-z
 limactl shell default sudo sdme start chan-id
 ```
 
-`chan-profile` and `chan-devserver-proxy` follow the identical shape: install their `.deb`, set their bind addr and the hostname-based URLs (`profile` needs `DATABASE_URL=postgres://chan:chan@chan-psql:5432/chan_gateway`; `devserver-proxy` needs `IDENTITY_URL=http://chan-id:7000`, `TUNNEL_BIND_ADDR=0.0.0.0:7100`, `FORWARDED_PROTO=https`, and the `DEVSERVER_GATE_SECRET`/`IDENTITY_INTERNAL_TOKEN` shared secrets). Generate the shared secrets with `openssl rand -hex 32` and reuse the matching value across the two services that share each one. See `chan-prod-setup/services/` for the prod versions and `chan-prod-setup/bin/secrets-init.sh` for the full secret set.
+`chan-profile`, `chan-devserver-control`, and `chan-devserver-proxy` follow the identical shape: install their `.deb`, set their bind addr and the hostname-based URLs (`profile` needs `DATABASE_URL=postgres://chan:chan@chan-psql:5432/chan_gateway`; `devserver-control` needs `PROXY_BIND_ADDR=0.0.0.0:7101`, `DEVSERVER_PROXY_BASE_URL_TEMPLATE`, and the `DEVSERVER_ADMIN_TOKEN`/`DEVSERVER_PROXY_TOKEN` shared secrets; `devserver-proxy` needs `IDENTITY_URL=http://chan-id:7000`, `TUNNEL_BIND_ADDR=0.0.0.0:7100`, `DEVSERVER_CONTROL_URL=http://chan-devserver-control:7101`, `DEVSERVER_PROXY_ID` + `DEVSERVER_PROXY_BASE_URL`, `FORWARDED_PROTO=https`, and the `DEVSERVER_GATE_SECRET`/`IDENTITY_INTERNAL_TOKEN`/`DEVSERVER_PROXY_TOKEN` shared secrets). Generate the shared secrets with `openssl rand -hex 32` and reuse the matching value across the services that share each one. See `chan-prod-setup/services/` for the prod versions and `chan-prod-setup/bin/secrets-init.sh` for the full secret set.
 
 ## nginx container + TLS
 

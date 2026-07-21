@@ -4,7 +4,7 @@
 # Engine-agnostic: prefers docker (BuildKit), falls back to podman, then
 # buildah. Diagnostics go to stderr; stdout stays clean for the image list.
 #
-#   packaging/docker/build.sh                 # build all four images, tag :dev
+#   packaging/docker/build.sh                 # build all five images, tag :dev
 #   packaging/docker/build.sh -t v0.49.0-rc1  # custom tag
 #   packaging/docker/build.sh --save          # also export OCI archives for `sdme fs import`
 #   packaging/docker/build.sh --model         # build the chan image with the embedded model
@@ -72,10 +72,11 @@ build "${CHAN_DF}" ""               "chan:${TAG}"
 build "${GW_DF}"   identity         "chan-gateway-identity:${TAG}"
 build "${GW_DF}"   profile          "chan-gateway-profile:${TAG}"
 build "${GW_DF}"   devserver-proxy  "chan-gateway-devserver-proxy:${TAG}"
+build "${GW_DF}"   devserver-control "chan-gateway-devserver-control:${TAG}"
 
 if [ "$SAVE" = "1" ]; then
     mkdir -p "${OUT_DIR}"
-    for img in chan chan-gateway-identity chan-gateway-profile chan-gateway-devserver-proxy; do
+    for img in chan chan-gateway-identity chan-gateway-profile chan-gateway-devserver-proxy chan-gateway-devserver-control; do
         out="${OUT_DIR}/${img}.oci.tar"
         log "save ${img}:${TAG} -> ${out#"$REPO_ROOT"/}"
         case "$ENGINE" in
@@ -87,4 +88,4 @@ if [ "$SAVE" = "1" ]; then
 fi
 
 log "done; images:"
-"$ENGINE" images 2>/dev/null | grep -E 'chan(-gateway)?(-(identity|profile|devserver-proxy))?\s' || true
+"$ENGINE" images 2>/dev/null | grep -E 'chan(-gateway)?(-(identity|profile|devserver-proxy|devserver-control))?\s' || true
