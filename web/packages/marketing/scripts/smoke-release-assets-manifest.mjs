@@ -21,7 +21,7 @@ try {
   const base = runCollect("base", version, []);
   assertEqual(base.version, version, "version");
   assertEqual(base.tag, tag, "tag");
-  assertEqual(base.assets.length, 19, "asset count excludes detached sig");
+  assertEqual(base.assets.length, 21, "asset count excludes detached sig");
   assert(
     !base.assets.some((asset) => asset.name.endsWith("-setup.exe")),
     "windows installer absent when not in the release",
@@ -46,7 +46,7 @@ try {
   // Windows assets present: the optional entries are collected.
   const windowsNames = optionalNames(version);
   const win = runCollect("windows", version, windowsNames);
-  assertEqual(win.assets.length, 21, "windows assets collected when present");
+  assertEqual(win.assets.length, 23, "windows assets collected when present");
   assert(
     win.assets.some((asset) => asset.name === windowsNames[0]),
     "windows installer collected",
