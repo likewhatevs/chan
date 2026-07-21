@@ -317,6 +317,109 @@ async fn controller_capacity_denial_is_a_stable_pre_registration_refusal() {
     assert!(h.registry.list_workspaces_for("alice").is_empty());
 }
 
+/// Admission that blocks inside `admit` until the test releases it.
+/// This makes the admit-to-HelloAck ordering observable: while the
+/// gate is held the client cannot have received `HelloAck::Ok`.
+struct GatedAdmission {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+    registration_id: Uuid,
+}
+
+#[async_trait]
+impl RegistrationAdmission for GatedAdmission {
+    async fn admit(
+        &self,
+        _hello: &chan_tunnel_proto::Hello,
+        _validated: &Validated,
+    ) -> Result<RegistrationPermit, ServerError> {
+        self.entered.notify_one();
+        self.release.notified().await;
+        Ok(RegistrationPermit {
+            request_id: Uuid::new_v4(),
+            registration_id: self.registration_id,
+            admission_epoch: 0,
+        })
+    }
+}
+
+#[tokio::test]
+async fn admission_completes_before_hello_ack_ok() {
+    let validator = StubValidator::new("alice", vec![TUNNEL_SCOPE.into()], &[("good", "ds-1")]);
+    let registration_id = Uuid::new_v4();
+    let admission = Arc::new(GatedAdmission {
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+        registration_id,
+    });
+    let h = spawn_controller_admitted_listener(validator, admission.clone()).await;
+
+    let dial_task = tokio::spawn({
+        let config = cfg(h.port, "good", "devsrv");
+        async move { dial(&config).await }
+    });
+    // The handshake is parked inside admit; the client must still be
+    // waiting for its HelloAck.
+    tokio::time::timeout(Duration::from_secs(5), admission.entered.notified())
+        .await
+        .expect("admission never ran");
+    assert!(
+        !dial_task.is_finished(),
+        "client dial completed before admission resolved"
+    );
+    admission.release.notify_one();
+
+    let (_registration, _yamux) = tokio::time::timeout(Duration::from_secs(5), dial_task)
+        .await
+        .expect("dial never completed")
+        .expect("dial task panicked")
+        .expect("dial should succeed once admission resolves");
+    assert!(wait_registered(&h.registry, "alice", "ds-1").await);
+    // The registration carries the permit's UUID so controller kill
+    // commands can target it precisely.
+    assert_eq!(
+        h.registry
+            .get("alice", "ds-1")
+            .expect("registered")
+            .registration_id,
+        registration_id
+    );
+}
+
+/// `ControlUnavailable` maps to the stable `control_unavailable`
+/// refusal code on the wire, distinct from the capacity code.
+struct UnavailableAdmission;
+
+#[async_trait]
+impl RegistrationAdmission for UnavailableAdmission {
+    async fn admit(
+        &self,
+        _hello: &chan_tunnel_proto::Hello,
+        _validated: &Validated,
+    ) -> Result<RegistrationPermit, ServerError> {
+        Err(ServerError::ControlUnavailable)
+    }
+}
+
+#[tokio::test]
+async fn control_unavailable_denial_carries_the_stable_refusal_code() {
+    let validator = StubValidator::new("alice", vec![TUNNEL_SCOPE.into()], &[("good", "ds-1")]);
+    let h = spawn_controller_admitted_listener(validator, Arc::new(UnavailableAdmission)).await;
+
+    let error = dial(&cfg(h.port, "good", "devsrv"))
+        .await
+        .map(|_| ())
+        .expect_err("control-unavailable denial should refuse the handshake");
+    match error {
+        ClientError::RemoteRefusal { code, message } => {
+            assert_eq!(code, error_code::CONTROL_UNAVAILABLE);
+            assert!(message.contains("control is unavailable"), "got: {message}");
+        }
+        other => panic!("expected RemoteRefusal, got {other:?}"),
+    }
+    assert!(h.registry.list_workspaces_for("alice").is_empty());
+}
+
 #[tokio::test]
 async fn reconnect_evicts_previous_registration() {
     // The same token resolves to the same devserver id, so a second dial

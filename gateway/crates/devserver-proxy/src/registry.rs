@@ -126,6 +126,17 @@ impl Registry {
             .collect()
     }
 
+    /// Size of the `username -> user_id` cache. Tests assert the
+    /// fail-closed path empties it without re-registering a tunnel,
+    /// which would repopulate the cache through the validator wrapper.
+    #[cfg(test)]
+    pub(crate) fn cached_user_count(&self) -> usize {
+        self.user_ids
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .len()
+    }
+
     /// Fail closed after the controller reconnect grace expires.
     /// Clears every local tunnel and all cached user identities in one
     /// proxy-local operation; new registrations remain blocked by control

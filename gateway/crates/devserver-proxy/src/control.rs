@@ -64,6 +64,49 @@ pub fn spawn_control_supervisor(
     registry: Registry,
     shutdown: watch::Receiver<bool>,
 ) -> ControlRuntime {
+    spawn_supervisor(config, registry, shutdown, BackoffObserver::disabled())
+}
+
+/// Test-only tap on the computed reconnect delay. Asserting the
+/// backoff schedule from connection-attempt timestamps does not work
+/// under paused Tokio time, so tests read the delays the supervisor
+/// actually sleeps on. Compiles to a ZST outside test builds.
+struct BackoffObserver {
+    #[cfg(test)]
+    delays: Option<mpsc::UnboundedSender<Duration>>,
+}
+
+impl BackoffObserver {
+    fn disabled() -> Self {
+        Self {
+            #[cfg(test)]
+            delays: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn recording(delays: mpsc::UnboundedSender<Duration>) -> Self {
+        Self {
+            delays: Some(delays),
+        }
+    }
+
+    fn observe(&self, delay: Duration) {
+        #[cfg(test)]
+        if let Some(delays) = &self.delays {
+            let _ = delays.send(delay);
+        }
+        #[cfg(not(test))]
+        let _ = delay;
+    }
+}
+
+fn spawn_supervisor(
+    config: Arc<Config>,
+    registry: Registry,
+    shutdown: watch::Receiver<bool>,
+    backoff_observer: BackoffObserver,
+) -> ControlRuntime {
     let (requests_tx, requests_rx) = mpsc::channel(REQUEST_QUEUE_CAPACITY);
     let (readiness_tx, readiness) = watch::channel(false);
     let admission_epoch = Arc::new(AtomicU64::new(1));
@@ -80,6 +123,7 @@ pub fn spawn_control_supervisor(
             readiness_tx,
             admission_epoch,
             shutdown,
+            backoff_observer,
         )
         .await
     });
@@ -208,6 +252,7 @@ async fn supervise(
     readiness: watch::Sender<bool>,
     admission_epoch: Arc<AtomicU64>,
     mut shutdown: watch::Receiver<bool>,
+    backoff_observer: BackoffObserver,
 ) -> anyhow::Result<()> {
     let boot_id = Uuid::new_v4();
     let mut backoff = BACKOFF_MIN;
@@ -273,6 +318,10 @@ async fn supervise(
         }
 
         let delay = jitter(backoff);
+        // The observer exists so tests can assert the backoff schedule
+        // without measuring wall-clock gaps between connection attempts,
+        // which paused time does not preserve faithfully.
+        backoff_observer.observe(delay);
         let sleep = tokio::time::sleep(delay);
         tokio::pin!(sleep);
         loop {
@@ -777,14 +826,19 @@ enum AttemptError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicBool;
+
+    use async_trait::async_trait;
     use chan_tunnel_proto::{Hello, ProtocolVersion};
-    use chan_tunnel_server::Validated;
+    use chan_tunnel_server::{serve_tunnel_listener_with_admission, Validated, Validator};
     use devserver_control::{
         serve_control_listener, spawn_controller_owned, ControllerHandle, ProxyStatus,
     };
     use devserver_control_proto::ProxyOriginTemplate;
+    use http_body_util::BodyExt;
     use tokio::io::duplex;
     use tokio::net::TcpListener;
+    use tokio_util::compat::FuturesAsyncReadCompatExt;
 
     fn test_config(control_addr: std::net::SocketAddr) -> Arc<Config> {
         Arc::new(Config {
@@ -1206,5 +1260,851 @@ mod tests {
             admission_epoch: 8,
             ..permit
         }));
+    }
+
+    // Fake controller: a minimal in-test peer for the control supervisor.
+    // It speaks just enough of the control protocol over real h2/TCP for
+    // supervise() to treat a session as established, and it exposes
+    // per-session commands plus an online switch so tests can sever and
+    // restore control connectivity on demand. A 5s Ping keeps the
+    // proxy's 15s controller deadline satisfied while a session is up.
+    enum FakeEvent {
+        Session {
+            boot_id: Uuid,
+            cmd: mpsc::Sender<FakeCommand>,
+        },
+        Snapshot {
+            base_generation: u64,
+            rows: usize,
+        },
+    }
+
+    enum FakeCommand {
+        FleetReady,
+        Drop,
+    }
+
+    struct FakeControl {
+        addr: std::net::SocketAddr,
+        online: Arc<AtomicBool>,
+        events: mpsc::UnboundedReceiver<FakeEvent>,
+        shutdown: watch::Sender<bool>,
+        accept_task: tokio::task::JoinHandle<()>,
+    }
+
+    impl FakeControl {
+        async fn start() -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let online = Arc::new(AtomicBool::new(true));
+            let (events_tx, events) = mpsc::unbounded_channel();
+            let (shutdown, shutdown_rx) = watch::channel(false);
+            let accept_task = tokio::spawn(fake_accept_loop(
+                listener,
+                online.clone(),
+                events_tx,
+                shutdown_rx,
+            ));
+            Self {
+                addr,
+                online,
+                events,
+                shutdown,
+                accept_task,
+            }
+        }
+
+        fn set_online(&self, online: bool) {
+            self.online.store(online, Ordering::Relaxed);
+        }
+
+        async fn next_session(&mut self) -> (Uuid, mpsc::Sender<FakeCommand>) {
+            loop {
+                if let FakeEvent::Session { boot_id, cmd } = self.next_event().await {
+                    return (boot_id, cmd);
+                }
+            }
+        }
+
+        async fn next_snapshot(&mut self) -> (u64, usize) {
+            loop {
+                if let FakeEvent::Snapshot {
+                    base_generation,
+                    rows,
+                } = self.next_event().await
+                {
+                    return (base_generation, rows);
+                }
+            }
+        }
+
+        async fn next_event(&mut self) -> FakeEvent {
+            tokio::time::timeout(Duration::from_secs(30), self.events.recv())
+                .await
+                .expect("fake controller event timed out")
+                .expect("fake controller event channel closed")
+        }
+
+        async fn stop(self) {
+            let _ = self.shutdown.send(true);
+            self.accept_task.await.unwrap();
+        }
+    }
+
+    async fn fake_accept_loop(
+        listener: TcpListener,
+        online: Arc<AtomicBool>,
+        events: mpsc::UnboundedSender<FakeEvent>,
+        mut shutdown: watch::Receiver<bool>,
+    ) {
+        let mut sessions = tokio::task::JoinSet::new();
+        loop {
+            tokio::select! {
+                biased;
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        break;
+                    }
+                }
+                _ = sessions.join_next(), if !sessions.is_empty() => {}
+                accepted = listener.accept() => {
+                    match accepted {
+                        Ok((stream, _)) => {
+                            if !online.load(Ordering::Relaxed) {
+                                // Simulated controller outage: the
+                                // proxy's connect succeeds but the
+                                // session dies before the h2 handshake.
+                                drop(stream);
+                                continue;
+                            }
+                            sessions.spawn(fake_connection(stream, events.clone(), shutdown.clone()));
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
+        }
+        sessions.shutdown().await;
+    }
+
+    async fn fake_connection(
+        stream: TcpStream,
+        events: mpsc::UnboundedSender<FakeEvent>,
+        mut shutdown: watch::Receiver<bool>,
+    ) {
+        let mut connection = match h2::server::handshake(stream).await {
+            Ok(connection) => connection,
+            Err(_) => return,
+        };
+        let Some(Ok((request, mut respond))) = connection.accept().await else {
+            return;
+        };
+        let authorized = request.method() == Method::POST
+            && request.uri().path() == CONNECT_PATH
+            && request
+                .headers()
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                == Some("Bearer proxy-token");
+        if !authorized {
+            let response = axum::http::Response::builder()
+                .status(StatusCode::UNAUTHORIZED)
+                .body(())
+                .unwrap();
+            let _ = respond.send_response(response, true);
+            return;
+        }
+        let response = axum::http::Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, CONTENT_TYPE)
+            .body(())
+            .unwrap();
+        let send = match respond.send_response(response, false) {
+            Ok(send) => send,
+            Err(_) => return,
+        };
+        let session = run_fake_session(H2Duplex::new(send, request.into_body()), events);
+        tokio::pin!(session);
+        // The h2 connection future must be polled for the session's
+        // frames to flow; when the peer goes away accept() returns None.
+        tokio::select! {
+            _ = &mut session => {}
+            _ = async { while connection.accept().await.is_some() {} } => {}
+            _ = shutdown.changed() => {}
+        }
+    }
+
+    async fn run_fake_session<S>(stream: S, events: mpsc::UnboundedSender<FakeEvent>)
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
+        let (mut reader, mut writer) = tokio::io::split(stream);
+        let hello: ClientFrame = match read_frame(&mut reader).await {
+            Ok(frame) => frame,
+            Err(_) => return,
+        };
+        let ClientFrame::ClientHello { boot_id, .. } = hello else {
+            return;
+        };
+        let server_hello = ServerFrame::ServerHello {
+            protocol_version: PROTOCOL_VERSION,
+            package_version: env!("CARGO_PKG_VERSION").into(),
+            heartbeat_seconds: 5,
+            dead_seconds: 15,
+            grace_seconds: 30,
+        };
+        if write_frame(&mut writer, &server_hello).await.is_err() {
+            return;
+        }
+        let (cmd, mut commands) = mpsc::channel(8);
+        let _ = events.send(FakeEvent::Session { boot_id, cmd });
+        let mut rows = 0usize;
+        let base_generation = loop {
+            match read_frame::<_, ClientFrame>(&mut reader).await {
+                Ok(ClientFrame::SnapshotStart { .. }) => {}
+                Ok(ClientFrame::SnapshotChunk { rows: chunk }) => rows += chunk.len(),
+                Ok(ClientFrame::SnapshotEnd { base_generation }) => break base_generation,
+                _ => return,
+            }
+        };
+        let accepted = ServerFrame::SnapshotAccepted { base_generation };
+        if write_frame(&mut writer, &accepted).await.is_err() {
+            return;
+        }
+        let _ = events.send(FakeEvent::Snapshot {
+            base_generation,
+            rows,
+        });
+        // One framed reader for the rest of the session. Recreating
+        // read_frame inside select! would cancel a partially consumed
+        // frame whenever a command or the ping ticker wins the race.
+        let (frames_tx, mut frames) = mpsc::channel(64);
+        let reader_task = tokio::spawn(async move {
+            loop {
+                let frame = read_frame::<_, ClientFrame>(&mut reader).await;
+                let terminal = frame.is_err();
+                if frames_tx.send(frame).await.is_err() || terminal {
+                    break;
+                }
+            }
+        });
+        let mut ping = tokio::time::interval(Duration::from_secs(5));
+        let mut nonce = 0_u64;
+        loop {
+            tokio::select! {
+                _ = ping.tick() => {
+                    nonce += 1;
+                    if write_frame(&mut writer, &ServerFrame::Ping { nonce }).await.is_err() {
+                        break;
+                    }
+                }
+                command = commands.recv() => {
+                    match command {
+                        Some(FakeCommand::FleetReady) => {
+                            if write_frame(&mut writer, &ServerFrame::FleetReady).await.is_err() {
+                                break;
+                            }
+                        }
+                        Some(FakeCommand::Drop) | None => break,
+                    }
+                }
+                frame = frames.recv() => {
+                    match frame {
+                        Some(Ok(ClientFrame::AdmissionRequest {
+                            request_id,
+                            registration_id,
+                            ..
+                        })) => {
+                            let decision = ServerFrame::AdmissionDecision {
+                                request_id,
+                                registration_id,
+                                decision: AdmissionDecision::Admit,
+                            };
+                            if write_frame(&mut writer, &decision).await.is_err() {
+                                break;
+                            }
+                        }
+                        Some(Ok(_)) => {}
+                        Some(Err(_)) | None => break,
+                    }
+                }
+            }
+        }
+        reader_task.abort();
+        let _ = reader_task.await;
+    }
+
+    struct StubValidator;
+
+    #[async_trait]
+    impl Validator for StubValidator {
+        async fn validate(&self, token: &str) -> Result<Validated, ServerError> {
+            match token {
+                "good" => Ok(Validated {
+                    user_id: Uuid::new_v4(),
+                    username: "alice".into(),
+                    devserver_id: "ds-1".into(),
+                    scopes: vec!["tunnel".into()],
+                    gateway_assertion_key: None,
+                }),
+                _ => Err(ServerError::InvalidToken),
+            }
+        }
+    }
+
+    /// Dial the tunnel listener as a real client and keep the yamux
+    /// connection driven in the background so the registration stays
+    /// alive across paused-time advances. The returned handle aborts
+    /// the pump (and the per-dial listener, when owned) on drop-free
+    /// cleanup via `stop`.
+    struct TunnelClient {
+        pump: tokio::task::JoinHandle<()>,
+        listener: Option<tokio::task::JoinHandle<()>>,
+    }
+
+    impl TunnelClient {
+        async fn stop(self) {
+            self.pump.abort();
+            if let Some(listener) = self.listener {
+                listener.abort();
+            }
+        }
+    }
+
+    async fn dial_tunnel(port: u16, router: axum::Router) -> TunnelClient {
+        let config = chan_tunnel_client::ClientConfig {
+            tunnel_url: format!("http://127.0.0.1:{port}/v1/tunnel")
+                .parse()
+                .unwrap(),
+            token: "good".into(),
+            workspace: "devsrv".into(),
+            name: None,
+            client_version: "chan/test".into(),
+            initial_backoff: Duration::from_millis(50),
+            max_backoff: Duration::from_secs(1),
+            dial_timeout: Duration::from_secs(5),
+            events: None,
+            proxy: None,
+            max_concurrent_substreams: chan_tunnel_client::DEFAULT_MAX_CONCURRENT_SUBSTREAMS,
+        };
+        let (_registration, connection) = chan_tunnel_client::dial(&config)
+            .await
+            .expect("tunnel dial");
+        let pump = tokio::spawn(async move {
+            let _ = chan_tunnel_client::serve_substreams(connection, router).await;
+        });
+        TunnelClient {
+            pump,
+            listener: None,
+        }
+    }
+
+    async fn spawn_tunnel_listener(
+        registry: &Registry,
+        admission: Arc<dyn RegistrationAdmission>,
+        capture_users: bool,
+    ) -> (u16, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let validator: Arc<dyn Validator> = if capture_users {
+            Arc::new(crate::identity_validator::CapturingValidator::new(
+                StubValidator,
+                registry.clone(),
+            ))
+        } else {
+            Arc::new(StubValidator)
+        };
+        let tunnels = registry.tunnels();
+        let task = tokio::spawn(async move {
+            let _ =
+                serve_tunnel_listener_with_admission(listener, validator, admission, tunnels, 0)
+                    .await;
+        });
+        (port, task)
+    }
+
+    struct ProxyHarness {
+        registry: Registry,
+        control: FakeControl,
+        admission: Arc<dyn RegistrationAdmission>,
+        readiness: watch::Receiver<bool>,
+        tunnel_port: u16,
+        shutdown: watch::Sender<bool>,
+        supervisor: tokio::task::JoinHandle<anyhow::Result<()>>,
+        tunnel_listener: tokio::task::JoinHandle<()>,
+    }
+
+    async fn spawn_proxy() -> ProxyHarness {
+        let control = FakeControl::start().await;
+        let registry = Registry::new();
+        let (shutdown, shutdown_rx) = watch::channel(false);
+        let ControlRuntime {
+            admission,
+            readiness,
+            task,
+        } = spawn_control_supervisor(test_config(control.addr), registry.clone(), shutdown_rx);
+        let (tunnel_port, tunnel_listener) = spawn_tunnel_listener(
+            &registry,
+            Arc::new(chan_tunnel_server::AllowAllAdmission),
+            true,
+        )
+        .await;
+        ProxyHarness {
+            registry,
+            control,
+            admission,
+            readiness,
+            tunnel_port,
+            shutdown,
+            supervisor: task,
+            tunnel_listener,
+        }
+    }
+
+    impl ProxyHarness {
+        async fn wait_readiness(&self, want: bool) {
+            let mut readiness = self.readiness.clone();
+            tokio::time::timeout(Duration::from_secs(30), async move {
+                while *readiness.borrow_and_update() != want {
+                    readiness.changed().await.unwrap();
+                }
+            })
+            .await
+            .expect("readiness transition timed out");
+        }
+
+        /// Drive the first control session to FleetReady and return its
+        /// command channel.
+        async fn become_ready(&mut self) -> mpsc::Sender<FakeCommand> {
+            let (_, session) = self.control.next_session().await;
+            self.control.next_snapshot().await;
+            session.send(FakeCommand::FleetReady).await.unwrap();
+            self.wait_readiness(true).await;
+            session
+        }
+
+        async fn wait_registration(&self) {
+            tokio::time::timeout(Duration::from_secs(30), async {
+                while self.registry.get("alice", "ds-1").is_none() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("registration never landed");
+        }
+
+        async fn stop(self) {
+            let _ = self.shutdown.send(true);
+            self.supervisor.await.unwrap().unwrap();
+            self.tunnel_listener.abort();
+            self.control.stop().await;
+        }
+    }
+
+    /// Advance simulated time in small steps with real-time yields in
+    /// between. One long sleep under paused time lets the clock jump
+    /// past the fake controller's keepalive ticks without the socket
+    /// round trips those ticks need, so the proxy would see a silent
+    /// controller and tear the session down.
+    async fn advance_paced(total: Duration) {
+        let mut remaining = total;
+        while remaining > Duration::ZERO {
+            let step = remaining.min(Duration::from_secs(1));
+            tokio::time::sleep(step).await;
+            settle().await;
+            remaining -= step;
+        }
+    }
+
+    fn admission_inputs() -> (Hello, Validated) {
+        (
+            Hello {
+                protocol: ProtocolVersion::V1,
+                client_version: "test".into(),
+                workspace: "devserver".into(),
+                name: None,
+            },
+            Validated {
+                user_id: Uuid::new_v4(),
+                username: "alice".into(),
+                devserver_id: "ds-9".into(),
+                scopes: vec!["tunnel".into()],
+                gateway_assertion_key: None,
+            },
+        )
+    }
+
+    /// Round-trip one h1 request through the registry's yamux handle:
+    /// the same data path the public listener uses for tenant traffic.
+    async fn http_get(registry: &Registry, path: &str) -> String {
+        let entry = registry.get("alice", "ds-1").expect("registered tunnel");
+        let stream = entry.handle.open().await.expect("substream open");
+        let io = hyper_util::rt::TokioIo::new(stream.compat());
+        let (mut sender, connection) = hyper::client::conn::http1::handshake(io)
+            .await
+            .expect("h1 handshake");
+        let driver = tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        let request = Request::get(path)
+            .header(header::HOST, "alice.p1.devserver.chan.app")
+            .body(http_body_util::Empty::<bytes::Bytes>::new())
+            .unwrap();
+        let response = sender.send_request(request).await.expect("h1 response");
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        driver.abort();
+        String::from_utf8(body.to_vec()).unwrap()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reconnect_backoff_doubles_from_half_a_second_to_a_ten_second_cap() {
+        // The sink accepts and holds every connection without speaking
+        // h2, so each supervise attempt dies at the 10s handshake
+        // timeout and the supervisor keeps cycling through its backoff
+        // schedule. The observer reports each computed delay; jitter()
+        // scales each base by 0.8..=1.2, so every reported delay must
+        // land inside the band of its schedule step.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let sink = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                held.push(stream);
+            }
+        });
+        let registry = Registry::new();
+        let (shutdown, shutdown_rx) = watch::channel(false);
+        let (delays_tx, mut delays) = mpsc::unbounded_channel::<Duration>();
+        let runtime = spawn_supervisor(
+            test_config(addr),
+            registry,
+            shutdown_rx,
+            BackoffObserver::recording(delays_tx),
+        );
+
+        let bases = [
+            Duration::from_millis(500),
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+            Duration::from_secs(4),
+            Duration::from_secs(8),
+            Duration::from_secs(10),
+            Duration::from_secs(10),
+        ];
+        for (index, base) in bases.iter().enumerate() {
+            let delay = tokio::time::timeout(Duration::from_secs(120), delays.recv())
+                .await
+                .expect("reconnect attempt never happened")
+                .unwrap();
+            assert!(
+                delay >= base.mul_f64(0.8),
+                "backoff {index} {delay:?} below the jitter floor for {base:?}"
+            );
+            assert!(
+                delay <= base.mul_f64(1.2),
+                "backoff {index} {delay:?} above the jitter ceiling for {base:?}"
+            );
+        }
+        shutdown.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(30), runtime.task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        sink.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reconnect_inside_grace_cancels_the_eviction_timer() {
+        let mut proxy = spawn_proxy().await;
+        let (first_boot, session) = proxy.control.next_session().await;
+        proxy.control.next_snapshot().await;
+        session.send(FakeCommand::FleetReady).await.unwrap();
+        proxy.wait_readiness(true).await;
+        let client = dial_tunnel(proxy.tunnel_port, axum::Router::new()).await;
+        proxy.wait_registration().await;
+        assert_eq!(proxy.registry.cached_user_count(), 1);
+
+        session.send(FakeCommand::Drop).await.unwrap();
+        proxy.wait_readiness(false).await;
+        advance_paced(Duration::from_secs(20)).await;
+        assert!(proxy.registry.get("alice", "ds-1").is_some());
+
+        // The boot id survives the reconnect; the controller matches the
+        // replacement session to the same proxy incarnation.
+        let (boot_id, session) = proxy.control.next_session().await;
+        assert_eq!(boot_id, first_boot);
+        let (_, rows) = proxy.control.next_snapshot().await;
+        assert_eq!(rows, 1);
+        // SnapshotAccepted cancels the eviction timer but does not make
+        // the proxy ready or open admission: only FleetReady does.
+        assert!(!*proxy.readiness.borrow());
+        let (hello, validated) = admission_inputs();
+        let error = proxy.admission.admit(&hello, &validated).await.unwrap_err();
+        assert!(matches!(error, ServerError::ControlUnavailable));
+
+        session.send(FakeCommand::FleetReady).await.unwrap();
+        proxy.wait_readiness(true).await;
+        // Push well past the original 30s deadline: the reconnect must
+        // have disarmed the eviction, not merely delayed it.
+        advance_paced(Duration::from_secs(60)).await;
+        assert!(proxy.registry.get("alice", "ds-1").is_some());
+        client.stop().await;
+        proxy.stop().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn grace_expiry_evicts_everything_until_a_fresh_fleet_ready() {
+        let mut proxy = spawn_proxy().await;
+        let session = proxy.become_ready().await;
+        let client = dial_tunnel(proxy.tunnel_port, axum::Router::new()).await;
+        proxy.wait_registration().await;
+        assert_eq!(proxy.registry.cached_user_count(), 1);
+
+        // Controller hard-down: refuse reconnects so the grace deadline
+        // runs out with no session to cancel it.
+        proxy.control.set_online(false);
+        session.send(FakeCommand::Drop).await.unwrap();
+        proxy.wait_readiness(false).await;
+        advance_paced(Duration::from_secs(35)).await;
+
+        assert!(proxy.registry.tunnels().list_all().is_empty());
+        assert_eq!(proxy.registry.cached_user_count(), 0);
+        // The eviction closed the tunnel's yamux connection underneath
+        // the client.
+        tokio::time::timeout(Duration::from_secs(30), client.pump)
+            .await
+            .expect("client connection outlived the eviction")
+            .unwrap();
+
+        // Recovery: SnapshotAccepted alone must not reopen admission;
+        // only FleetReady on the fresh session does.
+        proxy.control.set_online(true);
+        let (_, session) = proxy.control.next_session().await;
+        let (_, rows) = proxy.control.next_snapshot().await;
+        assert_eq!(rows, 0);
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!*proxy.readiness.borrow());
+        session.send(FakeCommand::FleetReady).await.unwrap();
+        proxy.wait_readiness(true).await;
+        proxy.stop().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tunnel_traffic_survives_a_control_disconnect_inside_grace() {
+        let mut proxy = spawn_proxy().await;
+        let session = proxy.become_ready().await;
+        let router = axum::Router::new().route("/ping", axum::routing::get(|| async { "pong" }));
+        let client = dial_tunnel(proxy.tunnel_port, router).await;
+        proxy.wait_registration().await;
+        assert_eq!(http_get(&proxy.registry, "/ping").await, "pong");
+
+        proxy.control.set_online(false);
+        session.send(FakeCommand::Drop).await.unwrap();
+        proxy.wait_readiness(false).await;
+        advance_paced(Duration::from_secs(15)).await;
+        assert_eq!(http_get(&proxy.registry, "/ping").await, "pong");
+        client.stop().await;
+        proxy.stop().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn control_disconnect_refuses_new_admission_and_stales_outstanding_permits() {
+        let mut proxy = spawn_proxy().await;
+        let session = proxy.become_ready().await;
+        let (hello, validated) = admission_inputs();
+        // The fake controller auto-admits while the session is ready.
+        let permit = proxy.admission.admit(&hello, &validated).await.unwrap();
+        assert!(proxy.admission.permit_is_current(permit));
+
+        proxy.control.set_online(false);
+        session.send(FakeCommand::Drop).await.unwrap();
+        proxy.wait_readiness(false).await;
+
+        // The epoch bump on connection loss fences the pre-disconnect
+        // permit, and the readiness fast-path refuses fresh admissions
+        // without queuing a request for a dead session.
+        assert!(!proxy.admission.permit_is_current(permit));
+        let error = proxy.admission.admit(&hello, &validated).await.unwrap_err();
+        assert!(matches!(error, ServerError::ControlUnavailable));
+        proxy.stop().await;
+    }
+
+    struct FixedPermitAdmission(Uuid);
+
+    #[async_trait]
+    impl RegistrationAdmission for FixedPermitAdmission {
+        async fn admit(
+            &self,
+            _hello: &Hello,
+            _validated: &Validated,
+        ) -> Result<RegistrationPermit, ServerError> {
+            Ok(RegistrationPermit {
+                request_id: Uuid::new_v4(),
+                registration_id: self.0,
+                admission_epoch: 0,
+            })
+        }
+    }
+
+    /// Register one tunnel with a caller-chosen registration UUID by
+    /// dialing a throwaway listener through the real handshake path.
+    async fn dial_with_registration_id(registry: &Registry, registration_id: Uuid) -> TunnelClient {
+        let (port, listener) = spawn_tunnel_listener(
+            registry,
+            Arc::new(FixedPermitAdmission(registration_id)),
+            false,
+        )
+        .await;
+        let mut client = dial_tunnel(port, axum::Router::new()).await;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if registry
+                    .tunnels()
+                    .get("alice", "ds-1")
+                    .is_some_and(|handle| handle.registration_id == registration_id)
+                {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("registration never landed");
+        client.listener = Some(listener);
+        client
+    }
+
+    async fn read_command_result<S>(stream: &mut S, command_id: Uuid) -> (Vec<Uuid>, Vec<Uuid>)
+    where
+        S: tokio::io::AsyncRead + Unpin,
+    {
+        loop {
+            match read_frame::<_, ClientFrame>(stream).await.unwrap() {
+                ClientFrame::CommandResult {
+                    command_id: id,
+                    killed,
+                    missing,
+                    ..
+                } if id == command_id => return (killed, missing),
+                _ => {}
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_delayed_kill_targets_only_its_own_registration_uuid() {
+        // Two registrations for the same (user, devserver) key: the
+        // second replaces the first, as a client reconnect would. A kill
+        // command addressed at the first registration's UUID arrives
+        // afterwards (issued by the controller against its pre-reconnect
+        // view) and must leave the replacement untouched.
+        let registry = Registry::new();
+        let u1 = Uuid::new_v4();
+        let u2 = Uuid::new_v4();
+        let first = dial_with_registration_id(&registry, u1).await;
+        let second = dial_with_registration_id(&registry, u2).await;
+        assert_eq!(
+            registry
+                .tunnels()
+                .get("alice", "ds-1")
+                .unwrap()
+                .registration_id,
+            u2
+        );
+
+        let config = test_config("127.0.0.1:1".parse().unwrap());
+        let (_requests_tx, mut requests_rx) = mpsc::channel(1);
+        let (readiness_tx, _readiness) = watch::channel(false);
+        let (lifecycle_tx, _lifecycle_rx) = mpsc::channel(1);
+        let (proxy_stream, mut controller) = duplex(64 * 1024);
+        let client = tokio::spawn({
+            let registry = registry.clone();
+            async move {
+                run_stream(
+                    proxy_stream,
+                    config.as_ref(),
+                    Uuid::new_v4(),
+                    &registry,
+                    &mut requests_rx,
+                    &readiness_tx,
+                    lifecycle_tx,
+                )
+                .await
+            }
+        });
+
+        let _: ClientFrame = read_frame(&mut controller).await.unwrap();
+        write_frame(
+            &mut controller,
+            &ServerFrame::ServerHello {
+                protocol_version: PROTOCOL_VERSION,
+                package_version: env!("CARGO_PKG_VERSION").into(),
+                heartbeat_seconds: 5,
+                dead_seconds: 15,
+                grace_seconds: 30,
+            },
+        )
+        .await
+        .unwrap();
+        let mut snapshot_rows = Vec::new();
+        let base_generation = loop {
+            match read_frame::<_, ClientFrame>(&mut controller).await.unwrap() {
+                ClientFrame::SnapshotStart { .. } => {}
+                ClientFrame::SnapshotChunk { rows } => snapshot_rows.extend(rows),
+                ClientFrame::SnapshotEnd { base_generation } => break base_generation,
+                other => panic!("unexpected frame during snapshot: {other:?}"),
+            }
+        };
+        assert_eq!(snapshot_rows.len(), 1);
+        assert_eq!(snapshot_rows[0].registration_id, u2);
+        write_frame(
+            &mut controller,
+            &ServerFrame::SnapshotAccepted { base_generation },
+        )
+        .await
+        .unwrap();
+
+        let stale_kill = Uuid::new_v4();
+        write_frame(
+            &mut controller,
+            &ServerFrame::KillRegistrations {
+                command_id: stale_kill,
+                registration_ids: vec![u1],
+            },
+        )
+        .await
+        .unwrap();
+        let (killed, missing) = read_command_result(&mut controller, stale_kill).await;
+        assert!(killed.is_empty());
+        assert_eq!(missing, vec![u1]);
+        assert_eq!(
+            registry
+                .tunnels()
+                .get("alice", "ds-1")
+                .unwrap()
+                .registration_id,
+            u2
+        );
+
+        let live_kill = Uuid::new_v4();
+        write_frame(
+            &mut controller,
+            &ServerFrame::KillRegistrations {
+                command_id: live_kill,
+                registration_ids: vec![u2],
+            },
+        )
+        .await
+        .unwrap();
+        let (killed, missing) = read_command_result(&mut controller, live_kill).await;
+        assert_eq!(killed, vec![u2]);
+        assert!(missing.is_empty());
+        assert!(registry.tunnels().get("alice", "ds-1").is_none());
+
+        drop(controller);
+        let _ = client.await;
+        first.stop().await;
+        second.stop().await;
     }
 }

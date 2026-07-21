@@ -4,10 +4,10 @@
 
 `chan devserver` instances register over chan-tunnel and live until the peer disconnects. The gateway needs a service that:
 
-1. Accepts the tunnel registration handshake.
+1. Accepts the tunnel registration handshake, gated on a synchronous admission decision from devserver-control.
 2. Reverse-proxies HTTP and WebSocket traffic into the registered workspace.
 3. Gates devservers behind a token minted by identity-service. devserver-proxy writes a host-only gate cookie plus a host-only readable CSRF cookie for unsafe browser writes.
-4. Supports admin operations (snapshot, evict, per-user list and bulk evict).
+4. Reports its own liveness and control readiness, and nothing else: the aggregate admin API (snapshots, evictions, watches) lives in devserver-control.
 
 The workspace list, sign-in surface and every piece of user-facing UI live in identity-service. devserver-proxy has no SPA and no public `/api/*` of its own.
 
@@ -15,13 +15,13 @@ The workspace list, sign-in surface and every piece of user-facing UI live in id
 
 Two public hostnames pointed at the same process:
 
-- `devserver.chan.app` (apex): admin + tunnel + healthz only.
+- `devserver.chan.app` (apex): tunnel ingress + health/readiness only.
   - `POST /v1/tunnel` -- raw h2c, handled by `chan-tunnel-server` on a separate internal listener (`TUNNEL_BIND_ADDR`). nginx `grpc_pass`es this path; everything else on the apex hits the axum HTTP listener.
-  - `/admin/v1/*` -- bearer-gated admin tree.
   - `/healthz` -- liveness.
+  - `/readyz` -- 200 only after the controller session reaches `FleetReady`.
   - Anything else -- 404.
 
-- `*.devserver.chan.app` (wildcard): the devserver's own content -- the launcher SPA at the root and tenant workspaces under `/{workspace}`. A user can hold many live devservers (capped by `MAX_DEVSERVERS_PER_USER`); `{user}--{disc}.devserver.chan.app` addresses one by the first 12 hex chars of its devserver id, and the bare `{user}` host resolves through the gate credential. The `{workspace}` path segment is tenant routing, never a gate key.
+- `*.devserver.chan.app` (wildcard): the devserver's own content -- the launcher SPA at the root and tenant workspaces under `/{workspace}`. A user can hold many live devservers (bounded by the fleet-wide per-user cap the controller enforces at admission); `{user}--{disc}.devserver.chan.app` addresses one by the first 12 hex chars of its devserver id, and the bare `{user}` host resolves through the gate credential. The `{workspace}` path segment is tenant routing, never a gate key.
   - `/` with no `devserver_gate` cookie and no `?t=` -- 302 to `https://id.chan.app/workspaces` (the dashboard front door; the proxy renders no UI of its own).
   - `/` or `/?t=<jwt>` carrying a gate credential -- gated like a tenant path and forwarded to the devserver root, where the launcher SPA is served.
   - `/api/devserver/*` -- 404 (the devserver's local-only management API is never proxied; the gateway carries tenant content only).
@@ -38,8 +38,7 @@ flowchart TD
     Host -->|"wildcard user.devserver.chan.app"| Root{"bare / with no credential?"}
 
     Apex -->|"POST /v1/tunnel"| Tun["h2c handshake (nginx grpc_pass)"]
-    Apex -->|"/admin/v1/*"| Adm["admin tree (bearer-gated)"]
-    Apex -->|"/healthz"| Hz["200 ok"]
+    Apex -->|"/healthz, /readyz"| Hz["200 ok"]
     Apex -->|"else"| NFapex
 
     Root -->|"yes"| Dash["302 to dashboard front door"]
@@ -57,9 +56,9 @@ flowchart TD
 
 Host-keyed apex/wildcard dispatch, then the ordered auth gate on the wildcard path; the textual rules below carry the exact contract.
 
-The tunnel listener is unchanged: `chan-tunnel-server` runs raw h2 on `TUNNEL_BIND_ADDR`, with the validator chain `CapturingValidator -> ThrottlingValidator -> IdentityValidator`. On a successful handshake the registry caches `(username -> user_id)`.
+The tunnel listener runs `chan-tunnel-server` raw h2 on `TUNNEL_BIND_ADDR`, with the validator chain `CapturingValidator -> ThrottlingValidator -> IdentityValidator`. On a successful handshake the registry caches `(username -> user_id)`. Registration itself is controller-admitted: the listener holds the handshake after token validation while the control session asks devserver-control, and the client sees `HelloAck::Ok` only after an admit decision; a refusal carries the stable `control_unavailable` or `too_many_workspaces` code.
 
-The `Registry` is the in-process map from `(username, devserver_id)` to the live `TunnelHandle` plus the username cache. The second key is the devserver id (the registration name), not a workspace slug. The proxy resolves a disc host through `get_user_devserver_by_prefix` (unique 12-hex-prefix match over the user's live ids) and a bare host by iterating `live_devserver_ids` against the gate credential's `drv` claim. The admin tree reads from the same registry that the proxy handler reads.
+The `Registry` is the in-process map from `(username, devserver_id)` to the live `TunnelHandle` plus the username cache. The second key is the devserver id (the registration name), not a workspace slug. The proxy resolves a disc host through `get_user_devserver_by_prefix` (unique 12-hex-prefix match over the user's live ids) and a bare host by iterating `live_devserver_ids` against the gate credential's `drv` claim. The control session reads the same registry to publish its snapshot and delta stream to the controller, and applies controller kill commands to it by registration UUID.
 
 ## Devserver gate
 
@@ -110,7 +109,7 @@ sequenceDiagram
 
 ### Tunnel registration (apex only)
 
-`POST /v1/tunnel` on `devserver.chan.app:443`. nginx routes this exact path to the h2c tunnel listener (`grpc_pass`, `TUNNEL_BIND_ADDR`, default `:7100`); everything else on the apex `proxy_pass`es to the axum listener on `:7002`. The h2c handler in `chan-tunnel-server` validates the Bearer PAT via identity-service `/internal/v1/tokens/validate`, then registers the devserver in the shared registry.
+`POST /v1/tunnel` on `devserver.chan.app:443`. nginx routes this exact path to the h2c tunnel listener (`grpc_pass`, `TUNNEL_BIND_ADDR`, default `:7100`); everything else on the apex `proxy_pass`es to the axum listener on `:7002`. The h2c handler in `chan-tunnel-server` validates the Bearer PAT via identity-service `/internal/v1/tokens/validate`, then asks devserver-control for an admission decision over the control session before writing `HelloAck::Ok`; only an admitted registration enters the shared registry.
 
 ### Reverse proxy (wildcard host)
 
@@ -146,15 +145,17 @@ Request bodies are wrapped in `http_body_util::Limited` at `MAX_REQUEST_BYTES` (
 
 `tokio_tungstenite::client_async` runs the WS handshake directly on the yamux substream. Two halves run inside a `tokio::select!`. Each half has a 300s idle timeout: if neither side sends a frame within the window, the half drops, the other half falls out of scope, and the substream closes. Without this, an idle peer could pin a yamux window indefinitely.
 
-### Admin tree
+### Control session
 
-The admin tree supports live tunnel snapshots, per-user snapshots, evictions, bulk user evictions, and an SSE watch stream. All routes are bearer-gated by `DEVSERVER_ADMIN_TOKEN` and live on the apex hostname so tenant content cannot reach them via fetch. There is deliberately no per-IP rate limit on this tree: behind nginx every request arrives from one upstream IP, so a per-IP bucket degenerates into a single global one that an attacker could use to lock out the operator CLI; nginx is the rate-limit layer for this surface.
+One authenticated h2 control session to devserver-control carries the full lifecycle: the proxy publishes a registry snapshot on connect and deltas as registrations come and go, answers heartbeats, and applies kill commands by registration UUID. Readiness (`/readyz`) is 200 only once the controller reports `FleetReady` on the current session; while disconnected the proxy refuses new admissions (`control_unavailable`) but keeps serving existing tunnel traffic for a 30-second reconnect grace. A reconnect that completes a fresh snapshot cancels the grace eviction; if the grace expires first, the proxy evicts every local tunnel and clears the username cache, staying unready until a fresh snapshot reaches `FleetReady`.
+
+The aggregate admin tree (fleet snapshots, per-user views, kills, watches) lives in devserver-control, which owns the fleet-wide view across all proxies. The proxy keeps no operator API of its own.
 
 ## Key decisions
 
 ### One process, two listeners, one registry
 
-The h2c tunnel listener and the axum HTTP listener share the in-process `Registry`. A registration on the tunnel listener is visible to the proxy handler on the very next request with no out-of-band sync. If horizontal scale becomes necessary the registry moves into a shared store (Redis, Postgres LISTEN/NOTIFY); both listeners become independent again.
+The h2c tunnel listener and the axum HTTP listener share the in-process `Registry`. A registration on the tunnel listener is visible to the proxy handler on the very next request with no out-of-band sync. Horizontal scale runs as multiple proxy processes, each with its own in-process registry; devserver-control aggregates the fleet from the per-proxy control sessions, so no shared store is needed.
 
 ### No cookie session for the proxy path
 
@@ -184,9 +185,9 @@ The tunnel validator returns `(user_id, username)`. `CapturingValidator` records
 
 The auth assertion on the wildcard path is the entry JWT, not "sub matches owner". identity-service calls `profile.devserver_access(owner, devserver, caller)` before minting any entry token, so a valid signature plus the right `aud` (= the inbound host, which is `{owner}.devserver.chan.app`) plus the right `drv` (= the live devserver id) proves the caller was authorized at mint time. identity owns the access-control policy; devserver-proxy verifies the signed assertion. The session cookie minted on entry-token validation carries the entry's `sub` unchanged so the upstream attribution chain knows whether the request belongs to the owner or a grantee. The entry's optional identity claims (`name`, `email`, resolved by identity at mint) propagate the same way, session cookie included, and are copied into every per-request gateway assertion so the devserver can render participant display strings; the proxy never looks them up itself and they are never an authorization input. Tokens minted without them (older gateways) decode to `None` and the assertion simply omits them.
 
-User-to-user isolation is enforced by `aud`. A token minted for one subdomain (`alice.devserver.chan.app`, disc hosts included) cannot be replayed on another (`bob.devserver.chan.app`) because `decode` rejects on `aud` mismatch. The canonical audience is the lowercase host with default ports stripped; explicit non-default ports remain for local/dev deployments. The `drv` claim binds the token to one devserver: a cookie minted for a rotated/old devserver id no longer matches any of the user's live registrations and 404s (re-share required after rotation). On a bare host with several live devservers the gate tries each live id as `drv`, so the loop is bounded by the user's live set (itself bounded by `MAX_DEVSERVERS_PER_USER`). There is no separate "this user is the owner" check, and intentionally so: requiring it would prevent accepted grantees from reaching the devserver they have been granted.
+User-to-user isolation is enforced by `aud`. A token minted for one subdomain (`alice.devserver.chan.app`, disc hosts included) cannot be replayed on another (`bob.devserver.chan.app`) because `decode` rejects on `aud` mismatch. The canonical audience is the lowercase host with default ports stripped; explicit non-default ports remain for local/dev deployments. The `drv` claim binds the token to one devserver: a cookie minted for a rotated/old devserver id no longer matches any of the user's live registrations and 404s (re-share required after rotation). On a bare host with several live devservers the gate tries each live id as `drv`, so the loop is bounded by the user's live set (itself bounded by the fleet-wide per-user cap the controller enforces at admission). There is no separate "this user is the owner" check, and intentionally so: requiring it would prevent accepted grantees from reaching the devserver they have been granted.
 
-Known collateral, accepted for now: PAT revoke drops ALL of a user's tunnels (`kill_user_tunnels`; the tunnel server does not track token-to-tunnel). Devservers on non-revoked PATs reconnect on their own. A per-devserver kill is a named follow-up.
+Known collateral, accepted for now: PAT revoke drops ALL of a user's tunnels (a user-wide kill through the controller; the tunnel server does not track token-to-tunnel). Devservers on non-revoked PATs reconnect on their own. A single devserver is killed by targeting its registration UUID through the controller's exact kill.
 
 ### Tunnel handshake throttles by token fingerprint
 
@@ -196,18 +197,18 @@ Known collateral, accepted for now: PAT revoke drops ALL of a user's tunnels (`k
 
 `{user}` lives in the host, not the path. The wildcard router does NOT peel a segment: it forwards the full inbound `/{workspace}/...` path (only `?t=` stripped) into the tunnel, and the devserver mounts each tenant at its public `/{workspace}/` slug and routes internally. Getting half of this wrong (proxy strips but the devserver expects the public segment, or vice versa) yields 404s that look like an auth bug; this is the highest-leverage correctness seam and the joint client-to-gateway smoke catches it.
 
-### Admin tree on the apex
+### Admin tree on the controller
 
-Admin routes intentionally live on `devserver.chan.app`, not on the wildcard. Tenant content has no way to call them: the wildcard router never proxies `/admin/v1/*` upstream, and the apex never serves tenant content.
+The aggregate admin tree lives on devserver-control, not on the proxy apex. The controller is the only component with a fleet-wide view: every proxy publishes its registrations over its control session, so snapshots, kills, and watches aggregate correctly across nodes. The proxy apex serves only health/readiness and tunnel ingress, and the wildcard never proxies admin routes, so tenant content has no path to any admin surface on the proxy.
 
-### Domain config is single-source
+### Node origins are explicit config
 
-The apex, wildcard, and the dashboard redirect's id host all derive from one base domain (`CHAN_DOMAIN`, e.g. `chan.app`) plus `PUBLIC_SCHEME`, via `gateway_common::domain::Domains`. identity-service derives the same hosts from the same two vars, so the two cannot drift (the devserver-gate JWT `aud` is the inbound host and must match). `APEX_HOST`, `WILDCARD_SUFFIX`, and `DASHBOARD_URL` are explicit overrides; the wildcard follows the apex unless set, and `DASHBOARD_URL` is needed when the id host runs on a non-default port (the derived form carries none). Defaults are dev-shaped (`localtest.me` / `http`); production sets `CHAN_DOMAIN` + `PUBLIC_SCHEME` once in the shared `/etc/chan-gateway/domain.env`, loaded by both systemd units.
+The proxy derives its hostnames from two required origins rather than a shared domain var: `DEVSERVER_TUNNEL_ORIGIN` (the public origin of the tunnel listener) supplies the apex host, and `DEVSERVER_PROXY_BASE_URL` (the exact public origin of this node's wildcard listener) supplies the wildcard suffix. `DASHBOARD_URL` is the required sign-in redirect target. Each proxy node sets its own base URL and announces it in the control session handshake, so the controller's aggregate view can attribute every registration to the exact node that serves it. The devserver-gate JWT `aud` is the inbound host, so the configured origins must match what clients actually dial.
 
 ## Invariants
 
 - Every registered tunnel has a known `owner_id`.
-- Tunnel registrations are ephemeral; they vanish when the peer disconnects or via admin evict.
+- Tunnel registrations are ephemeral; they vanish when the peer disconnects, via a controller kill command, or when the control-loss grace expires.
 - The proxy path reads no `tower_sessions` cookie. The only cookies it reads or writes are the host-only, whole-host (`Path=/`) `devserver_gate` and `devserver_csrf`.
 - Bearer comparisons run at constant time.
 - Unsafe HTTP methods require `X-Chan-CSRF` to match `devserver_csrf` before forwarding.
@@ -242,6 +243,6 @@ devserver-proxy carries no `Conflict` variant: nothing on this surface PATCHes a
 - Sessions: no `tower_sessions` integration anywhere
 - Per-tunnel labels (the workspace slug is the default; `Hello` carries no separate label)
 - Per-PAT scopes (tunnel scope is implicit on validated PATs)
-- Multi-instance horizontal scale (one process, in-process registry)
+- A local admin API (fleet snapshots, kills, and watches live in devserver-control)
 - Server-side session revocation (24h cookie exp is the only knob; rotating `DEVSERVER_GATE_SECRET` is the nuclear option)
 - Sliding session-cookie expiry
