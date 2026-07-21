@@ -21,6 +21,14 @@ esac
 if [ "$(id -u)" -eq 0 ]; then
     echo ">> refreshing the package database and base build tools" >&2
     if pacman -Q archlinuxarm-keyring >/dev/null 2>&1; then
+        # pacman 7's download sandbox drops to the unprivileged 'alpm' user and
+        # applies a Landlock ruleset. In this Arch Linux ARM CI container the
+        # ruleset cannot be applied (the Landlock syscalls return EPERM), so a
+        # sync dies with "switching to sandbox user 'alpm' failed". Disable the
+        # sandbox on this ARM path only, in pacman.conf so it also covers the
+        # pacman that makepkg --syncdeps shells out to later; the native x86_64
+        # path in the else branch keeps the sandbox.
+        sed -i '/^\[options\]/a DisableSandbox' /etc/pacman.conf
         pacman-key --init
         pacman-key --populate archlinuxarm
         pacman -Syu --needed --noconfirm base-devel curl namcap sudo
