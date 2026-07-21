@@ -1,18 +1,21 @@
 # Local dev stack
 
-Bootstraps the four chan-gateway services (postgres + profile + identity + devserver-proxy) against a workspace `cargo run` build, so you can browse `id.localtest.me:17000` and exercise the dashboard, OAuth flow, and workspace-gate handoff against the real binaries.
+Bootstraps the chan-gateway services (postgres + profile + identity + devserver-control + one to three devserver-proxy nodes) against a workspace `cargo run` build, so you can browse `id.localtest.me:17000` and exercise the dashboard, OAuth flow, and workspace-gate handoff against the real binaries.
 
 `*.localtest.me` resolves to `127.0.0.1` for every subdomain via public DNS, which sidesteps the `/etc/hosts` surgery you would otherwise need to test the wildcard-subdomain shape locally.
 
 Dev port layout (offset by `+10000` from the prod-shaped ports so the runner can coexist with an existing Lima/sdme deployment on the default ports):
 
-| Service       | Port    | URL                                      |
-|---------------|---------|------------------------------------------|
-| profile       | `17001` | http://127.0.0.1:17001                   |
-| identity      | `17000` | http://id.localtest.me:17000             |
-| devserver-proxy   | `17002` | http://devserver.localtest.me:17002 (apex)   |
-|               |         | http://*.devserver.localtest.me:17002 (wild) |
-| workspace tunnel  | `17100` | http://devserver.localtest.me:17100 (h2c)    |
+| Service          | Port    | URL                                            |
+|------------------|---------|------------------------------------------------|
+| profile          | `17001` | http://127.0.0.1:17001                         |
+| identity         | `17000` | http://id.localtest.me:17000                   |
+| devserver-control | `17003` | http://127.0.0.1:17003 (aggregate admin)      |
+|                  | `17101` | h2c proxy control listener                     |
+| devserver-proxy.pN | `17002` | http://pN.devserver.localtest.me:17002 (node) |
+|                  | `17100` | 127.0.0.N:17100 (h2c tunnel)                   |
+
+Every proxy node binds the same two ports on its own loopback alias (p1 on `127.0.0.1`, p2 on `127.0.0.2`, p3 on `127.0.0.3`) because the controller's origin template pins one shared port for the whole fleet. A `chan devserver` client dials one node's tunnel listener directly, e.g. `http://127.0.0.2:17100/v1/tunnel` for p2.
 
 ## One-time setup
 
@@ -30,7 +33,7 @@ Dev port layout (offset by `+10000` from the prod-shaped ports so the runner can
    ```
    packaging/gateway/scripts/dev/setup.sh
    ```
-   This writes the four service env files into `packaging/gateway/scripts/dev/secrets/` and runs profile-service once to apply migrations. Idempotent; re-run is a no-op unless you pass `--force`.
+   This writes the service env files into `packaging/gateway/scripts/dev/secrets/` and runs profile-service once to apply migrations. Idempotent; re-run is a no-op unless you pass `--force`.
 
 ## Run
 
@@ -38,7 +41,7 @@ Dev port layout (offset by `+10000` from the prod-shaped ports so the runner can
 packaging/gateway/scripts/dev/run.sh
 ```
 
-Spawns profile, identity, and devserver-proxy in the foreground. Logs from all three multiplex to stdout, prefixed by service. Ctrl-C sends SIGINT to all three and waits for clean shutdown.
+Spawns profile, identity, devserver-control, and one devserver-proxy in the foreground. Set `CHAN_DEV_PROXIES=3` to boot the full three-node fleet (p1-p3 on their own loopback aliases). Logs from all services multiplex to stdout, prefixed by service. Ctrl-C sends SIGINT to all of them and waits for clean shutdown. The controller holds a 30s convergence window on boot, so a fresh stack takes about half a minute before proxies report ready and admit tunnels.
 
 Then open:
 
@@ -82,7 +85,7 @@ cargo run -p chan -- serve <some-workspace-dir> \
   --tunnel-workspace-name=blog
 ```
 
-The `http://` scheme on the URL triggers chan-tunnel-client's h2c path (no TLS); devserver-proxy's tunnel listener is bound to `127.0.0.1:17100` and speaks h2c directly. Once connected, the dashboard's Workspaces tab lists the workspace; clicking Open redirects the browser through `/api/workspaces/open` to `http://<user>.devserver.localtest.me:17002/blog/`.
+The `http://` scheme on the URL triggers chan-tunnel-client's h2c path (no TLS); devserver-proxy p1's tunnel listener is bound to `127.0.0.1:17100` and speaks h2c directly. Once connected, the dashboard's Workspaces tab lists the workspace; clicking Open redirects the browser through `/api/workspaces/open` to the owning node's tenant host, `http://<user>--<disc>.p1.devserver.localtest.me:17002/blog/`.
 
 ## Notes
 

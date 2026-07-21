@@ -1,17 +1,35 @@
 #!/usr/bin/env bash
-# gateway-zone.sh -- full-stack gateway e2e: multi-devserver routing,
-# entry mints, cap enforcement, and tunnel reconnect against the REAL
-# identity + profile + devserver-proxy services and REAL `chan
-# devserver` processes.
+# gateway-zone.sh -- full-stack gateway e2e: the distributed proxy
+# control plane (one devserver-control controller plus proxy nodes
+# p1-p3), multi-devserver routing, entry mints, fleet-wide cap
+# enforcement, tunnel reconnect, and controller/proxy failure
+# scenarios against the REAL identity + profile + devserver-control +
+# devserver-proxy services and REAL `chan devserver` processes.
 #
-# Topology: everything on host loopback, one process per service,
-# `localtest.me` wildcard DNS (public A/AAAA -> 127.0.0.1/::1) for the
-# devserver hosts. The devservers run host-local rather than in sdme
-# zone containers: on this host the kernel firewall drops
-# container->host TCP (see packaging/gateway/scripts/dev/sdme/
-# devserver-tunnel-e2e/zone-isolation-probe.sh), so a zone topology
-# would need the whole stack including Postgres inside the zone. The
-# multi-devserver semantics under test are identical either way.
+# Topology: everything on host loopback, one process per service.
+# Identity, profile, the OAuth stub, and the controller bind
+# 127.0.0.1. The three proxies share one public port and one tunnel
+# port on their own loopback aliases (p1=127.0.0.2, p2=127.0.0.3,
+# p3=127.0.0.4) because the controller's origin template pins one
+# port for the whole fleet. `localtest.me` wildcard DNS plus curl
+# --resolve stand in for public DNS: every node host is pinned to its
+# proxy's alias, so a request can be aimed at any node for any host.
+#
+# Two TCP shims (node tcp-shim.mjs, spawned like any service) model
+# the edge pieces the fleet needs:
+#   - one control relay per proxy (127.0.0.1:1784{2,3,4}) in front of
+#     the controller's h2c listener; killing relay-p2 drops exactly
+#     p2's control stream for the disconnect scenario,
+#   - one round-robin ingress shim on 127.0.0.1:$TUNNEL_PORT that
+#     distributes tunnel dials across the three nodes, standing in
+#     for the shared-apex edge.
+#
+# The devservers run host-local rather than in sdme zone containers:
+# on this host the kernel firewall drops container->host TCP (see
+# packaging/gateway/scripts/dev/sdme/devserver-tunnel-e2e/zone-
+# isolation-probe.sh), so a zone topology would need the whole stack
+# including Postgres inside the zone. The multi-devserver semantics
+# under test are identical either way.
 #
 # Requirements:
 #   - a running Postgres reachable at $E2E_DATABASE_URL (default
@@ -36,7 +54,8 @@
 # and appending <name> to $SCENARIOS below.
 #
 # Output: plain-text assertion log at $WORK/assertions.log (echoed),
-# service logs under $WORK/logs/. Exit 0 iff every assertion passed.
+# service logs under $WORK/logs/. The run aborts with exit 1 on the
+# FIRST failed assertion; exit 0 means every assertion passed.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -46,49 +65,79 @@ E2E_DATABASE_URL="${E2E_DATABASE_URL:-postgres://chan:chan@127.0.0.1:5432/chan_g
 E2E_SCHEMA="${E2E_SCHEMA:-gateway_zone_e2e}"
 E2E_KEEP="${E2E_KEEP:-}"
 
-# Fixed loopback ports; override only on collision.
+# Fixed loopback ports; override only on collision. The proxies share
+# PROXY_PORT/TUNNEL_PORT on their per-node aliases; the ingress shim
+# owns TUNNEL_PORT on 127.0.0.1.
 ID_PORT="${E2E_ID_PORT:-17800}"
 PROFILE_PORT="${E2E_PROFILE_PORT:-17801}"
 PROXY_PORT="${E2E_PROXY_PORT:-17802}"
 TUNNEL_PORT="${E2E_TUNNEL_PORT:-17810}"
 OAUTH_PORT="${E2E_OAUTH_PORT:-17830}"
-DS_PORTS=(17821 17822 17823)
+CTL_ADMIN_PORT="${E2E_CTL_ADMIN_PORT:-17840}"
+CTL_PROXY_PORT="${E2E_CTL_PROXY_PORT:-17841}"
+DS_PORTS=(17821 17822 17823 17824 17825 17826 17827)
+
+# Fleet shape: three proxy nodes on their own loopback aliases.
+PROXY_IDS=(p1 p2 p3)
+node_ip() { # node_ip <proxy-id> -> loopback alias
+    case "$1" in
+    p1) printf 127.0.0.2 ;;
+    p2) printf 127.0.0.3 ;;
+    p3) printf 127.0.0.4 ;;
+    *) return 1 ;;
+    esac
+}
+node_relay_port() { # node_relay_port <proxy-id> -> control relay listen port
+    case "$1" in
+    p1) printf 17842 ;;
+    p2) printf 17843 ;;
+    p3) printf 17844 ;;
+    *) return 1 ;;
+    esac
+}
+node_tunnel_url() { printf 'http://%s:%s/v1/tunnel' "$(node_ip "$1")" "$TUNNEL_PORT"; }
+SHIM_TUNNEL_URL="http://127.0.0.1:$TUNNEL_PORT/v1/tunnel"
 
 # Headless Chrome for the consent-flow asserts (the puppeteer cache
 # layout, overridable).
 CHROME_BIN="${E2E_CHROME_BIN:-$(ls -d "$HOME"/.cache/puppeteer/chrome/linux-*/chrome-linux64/chrome 2>/dev/null | head -1)}"
 ALICE_EMAIL="e2e-alice@example.com"
+CAROL_EMAIL="e2e-carol@example.com"
+DAVE_EMAIL="e2e-dave@example.com"
 
 DOMAIN=localtest.me
 ID_HOST="id.$DOMAIN:$ID_PORT"
 APEX="devserver.$DOMAIN"
+APEX_ORIGIN="http://$APEX:$PROXY_PORT"
+TUNNEL_ORIGIN="http://$APEX:$TUNNEL_PORT"
 
 # Per-run shared secrets (the stack is torn down with the run).
 GATE_SECRET="e2e-gate-secret-0123456789abcdef0123456789abcdef"
 TOK_PROFILE="e2e-profile-bearer"
 TOK_INTERNAL="e2e-internal-bearer"
 TOK_ADMIN="e2e-admin-bearer"
-# The tunnel-server cap under test: two devservers register, a third
-# is refused.
+TOK_PROXY="e2e-proxy-bearer"
+# The fleet-wide cap under test, enforced by the controller: two
+# devservers of one user register, a third is refused.
 MAX_DEVSERVERS=2
 
 # Scenario dispatch: "all" (default) = core suite + every registered
 # scenario; "core" = the inline suite only; a registered name = stack
 # bring-up + that scenario only. Lanes append their scenario name here.
-SCENARIOS="sweeper watchdog roster upload windowclose"
+SCENARIOS="sweeper watchdog roster upload windowclose matrix sharedingress ctlrestart proxydown ctloutage"
 SCENARIO="${1:-all}"
 RUN_CORE=1
 case "$SCENARIO" in all | core) ;; *) RUN_CORE=0 ;; esac
 
 ASSERT_LOG="$WORK/assertions.log"
-FAILURES=0
 PIDS=()
 
 log() { printf '%s\n' "$*"; }
 assert_pass() { printf 'PASS %s\n' "$*" | tee -a "$ASSERT_LOG"; }
 assert_fail() {
     printf 'FAIL %s\n' "$*" | tee -a "$ASSERT_LOG"
-    FAILURES=$((FAILURES + 1))
+    log "RESULT: aborting on the first failed assertion (see $ASSERT_LOG)"
+    exit 1
 }
 
 cleanup() {
@@ -139,7 +188,8 @@ free_port() { # free_port <port>
         kill "$pid" 2>/dev/null && log "freed port $1 (killed stray pid $pid)"
     done
 }
-for p in "$ID_PORT" "$PROFILE_PORT" "$PROXY_PORT" "$TUNNEL_PORT" "$OAUTH_PORT" "${DS_PORTS[@]}"; do
+for p in "$ID_PORT" "$PROFILE_PORT" "$PROXY_PORT" "$TUNNEL_PORT" "$OAUTH_PORT" \
+    "$CTL_ADMIN_PORT" "$CTL_PROXY_PORT" 17842 17843 17844 "${DS_PORTS[@]}"; do
     free_port "$p"
 done
 
@@ -169,6 +219,30 @@ try {
 EOF
 sql() { node "$WORK/sql.mjs" "$1" "$2"; }
 
+# TCP shim: relays each inbound connection to one target, round-robin
+# across the target list. One instance per proxy fronts the
+# controller's h2c listener (so a scenario can drop exactly one
+# proxy's control stream by killing a relay) and one instance fronts
+# the three tunnel listeners (the shared-apex ingress edge). Either
+# side closing tears down the other, so a killed relay or a dead
+# upstream reads as a clean stream death on both ends.
+cat > "$WORK/tcp-shim.mjs" <<'EOF'
+import net from "node:net";
+const [listen, ...targets] = process.argv.slice(2);
+const [lip, lport] = listen.split(":");
+let next = 0;
+net.createServer((client) => {
+    const [tip, tport] = targets[next++ % targets.length].split(":");
+    const up = net.connect(Number(tport), tip);
+    client.on("error", () => up.destroy());
+    client.on("close", () => up.destroy());
+    up.on("error", () => client.destroy());
+    up.on("close", () => client.destroy());
+    client.pipe(up);
+    up.pipe(client);
+}).listen(Number(lport), lip);
+EOF
+
 # ---------------------------------------------------------------
 # Binaries (cargo-build on demand; warm target = cheap no-op)
 # ---------------------------------------------------------------
@@ -177,8 +251,9 @@ sql() { node "$WORK/sql.mjs" "$1" "$2"; }
 # from a committed ref while the working tree holds in-flight edits).
 GW_BIN="${E2E_GW_BIN:-$REPO/gateway/target/debug}"
 CHAN_BIN="${E2E_CHAN_BIN:-$REPO/target/debug/chan}"
-for b in identity-service profile-service devserver-proxy-service; do
-    [ -x "$GW_BIN/$b" ] || (cd "$REPO/gateway" && cargo build -p "${b%-service}" >/dev/null) || exit 2
+for b in identity-service profile-service devserver-control-service devserver-proxy-service; do
+    pkg="${b%-service}"
+    [ -x "$GW_BIN/$b" ] || (cd "$REPO/gateway" && cargo build -p "$pkg" >/dev/null) || exit 2
 done
 # The operator CLI (package `admin`) seeds the PATs below through
 # identity's /admin/v1/tokens surface.
@@ -225,6 +300,21 @@ wait_http() { # wait_http <name> <url> [tries]
     return 1
 }
 
+# Readiness probe with an optional Host header: the proxies answer
+# /readyz only on the apex host, and the controller holds 503 for its
+# full 30s convergence window, so these waits run long and the
+# expected 503s stay quiet.
+wait_ready() { # wait_ready <name> <url> [host] [tries]
+    local name="$1" url="$2" host="${3:-}" tries="${4:-240}"
+    for _ in $(seq "$tries"); do
+        if curl -fsS -o /dev/null --max-time 2 ${host:+-H "Host: $host"} "$url" 2>/dev/null; then return 0; fi
+        sleep 0.4
+    done
+    log "$name did not become ready at $url; last log lines:"
+    tail -5 "$LOGS/$name.log" || true
+    return 1
+}
+
 # Stub GitHub: identity's provider endpoints point here so the
 # browser phase can sign in without real OAuth.
 spawn stub-oauth node "$REPO/scripts/e2e/stub-oauth.mjs" "$OAUTH_PORT" "$ALICE_EMAIL"
@@ -234,7 +324,7 @@ spawn profile env \
     DATABASE_URL="$DB_URL" \
     PROFILE_AUTH_TOKEN="$TOK_PROFILE" \
     DEVSERVER_ADMIN_TOKEN="$TOK_ADMIN" \
-    DEVSERVER_ADMIN_URL="http://127.0.0.1:$PROXY_PORT" \
+    DEVSERVER_ADMIN_URL="http://127.0.0.1:$CTL_ADMIN_PORT" \
     RUST_LOG=info \
     "$GW_BIN/profile-service"
 
@@ -248,33 +338,76 @@ spawn identity env \
     IDENTITY_ADMIN_TOKEN="$TOK_ADMIN" \
     DEVSERVER_GATE_SECRET="$GATE_SECRET" \
     DEVSERVER_ADMIN_TOKEN="$TOK_ADMIN" \
-    DEVSERVER_ADMIN_URL="http://127.0.0.1:$PROXY_PORT" \
-    DEVSERVER_PROXY_ORIGIN="http://$PROXY_HOST" \
-    DEVSERVER_TUNNEL_ORIGIN="http://$PROXY_HOST" \
+    DEVSERVER_ADMIN_URL="http://127.0.0.1:$CTL_ADMIN_PORT" \
+    DEVSERVER_PROXY_ORIGIN="$APEX_ORIGIN" \
+    DEVSERVER_TUNNEL_ORIGIN="$TUNNEL_ORIGIN" \
     GITHUB_CLIENT_ID=e2e-dummy \
     GITHUB_CLIENT_SECRET=e2e-dummy \
     IDENTITY_OAUTH_ENDPOINTS_BASE="http://127.0.0.1:$OAUTH_PORT" \
     RUST_LOG=info \
     "$GW_BIN/identity-service"
 
-spawn proxy env \
-    BIND_ADDR="127.0.0.1:$PROXY_PORT" \
-    TUNNEL_BIND_ADDR="127.0.0.1:$TUNNEL_PORT" \
-    IDENTITY_URL="http://127.0.0.1:$ID_PORT" \
-    IDENTITY_INTERNAL_TOKEN="$TOK_INTERNAL" \
-    DEVSERVER_GATE_SECRET="$GATE_SECRET" \
-    DEVSERVER_ADMIN_TOKEN="$TOK_ADMIN" \
-    DASHBOARD_URL="http://$ID_HOST/workspaces" \
-    DEVSERVER_TUNNEL_ORIGIN="http://$PROXY_HOST" \
-    DEVSERVER_PROXY_BASE_URL="http://$PROXY_HOST" \
-    FORWARDED_PROTO=http \
-    MAX_DEVSERVERS_PER_USER="$MAX_DEVSERVERS" \
-    RUST_LOG=info \
-    "$GW_BIN/devserver-proxy-service"
+# The controller is a function because the restart scenarios respawn
+# it against the same template.
+spawn_controller() {
+    spawn controller env \
+        BIND_ADDR="127.0.0.1:$CTL_ADMIN_PORT" \
+        PROXY_BIND_ADDR="127.0.0.1:$CTL_PROXY_PORT" \
+        DEVSERVER_ADMIN_TOKEN="$TOK_ADMIN" \
+        DEVSERVER_PROXY_TOKEN="$TOK_PROXY" \
+        DEVSERVER_PROXY_BASE_URL_TEMPLATE="http://{proxy_id}.$APEX:$PROXY_PORT" \
+        MAX_DEVSERVERS_PER_USER="$MAX_DEVSERVERS" \
+        RUST_LOG=info \
+        "$GW_BIN/devserver-control-service"
+}
+spawn_controller
+
+# One control relay per proxy, in front of the controller's h2c
+# listener; the proxies dial their own relay so the disconnect
+# scenario can drop exactly one stream.
+for id in "${PROXY_IDS[@]}"; do
+    spawn "relay-$id" node "$WORK/tcp-shim.mjs" \
+        "127.0.0.1:$(node_relay_port "$id")" "127.0.0.1:$CTL_PROXY_PORT"
+done
+
+# The shared-apex ingress edge: tunnel dials to 127.0.0.1 round-robin
+# across the three nodes.
+spawn ingress-shim node "$WORK/tcp-shim.mjs" \
+    "127.0.0.1:$TUNNEL_PORT" \
+    "127.0.0.2:$TUNNEL_PORT" "127.0.0.3:$TUNNEL_PORT" "127.0.0.4:$TUNNEL_PORT"
+
+spawn_proxy() { # spawn_proxy <proxy-id>
+    local id="$1" ip
+    ip="$(node_ip "$id")"
+    spawn "proxy-$id" env \
+        BIND_ADDR="$ip:$PROXY_PORT" \
+        TUNNEL_BIND_ADDR="$ip:$TUNNEL_PORT" \
+        IDENTITY_URL="http://127.0.0.1:$ID_PORT" \
+        IDENTITY_INTERNAL_TOKEN="$TOK_INTERNAL" \
+        DEVSERVER_GATE_SECRET="$GATE_SECRET" \
+        DASHBOARD_URL="http://$ID_HOST/workspaces" \
+        DEVSERVER_TUNNEL_ORIGIN="$TUNNEL_ORIGIN" \
+        DEVSERVER_PROXY_BASE_URL="http://$id.$APEX:$PROXY_PORT" \
+        DEVSERVER_CONTROL_URL="http://127.0.0.1:$(node_relay_port "$id")" \
+        DEVSERVER_PROXY_TOKEN="$TOK_PROXY" \
+        DEVSERVER_PROXY_ID="$id" \
+        FORWARDED_PROTO=http \
+        RUST_LOG=info \
+        "$GW_BIN/devserver-proxy-service"
+}
+for id in "${PROXY_IDS[@]}"; do
+    spawn_proxy "$id"
+done
 
 wait_http profile "http://127.0.0.1:$PROFILE_PORT/healthz" || exit 2
 wait_http identity "http://127.0.0.1:$ID_PORT/healthz" || exit 2
-wait_http proxy "http://127.0.0.1:$PROXY_PORT/healthz" || exit 2
+# Controller readiness intentionally waits the full convergence
+# window: the fleet reports ready only after every proxy's snapshot
+# has sat complete for 30s. Proxies report ready on FleetReady.
+wait_ready controller "http://127.0.0.1:$CTL_ADMIN_PORT/readyz" || exit 2
+for id in "${PROXY_IDS[@]}"; do
+    wait_ready "proxy-$id" "http://$(node_ip "$id"):$PROXY_PORT/readyz" "$APEX" || exit 2
+done
 
 # healthz answering is not enough: a stray listener could serve it
 # while our own spawn died on the bind conflict. The spawned pid
@@ -288,13 +421,16 @@ require_alive() { # require_alive <name>
         exit 2
     fi
 }
-for svc in stub-oauth profile identity proxy; do
+for svc in stub-oauth profile identity controller relay-p1 relay-p2 relay-p3 \
+    ingress-shim proxy-p1 proxy-p2 proxy-p3; do
     require_alive "$svc"
 done
-log "stack is up"
+log "stack is up (controller ready, p1-p3 at FleetReady)"
 
 # ---------------------------------------------------------------
-# Seed: one user, three PATs (A/B live devservers, C for the cap)
+# Seed: alice (cap suite, two live devservers), bob (a claimed share
+# that never dials), carol and dave (fleet clients on the third node
+# and through the shared ingress)
 # ---------------------------------------------------------------
 # PATs mint through the operator surface (`chan-gateway-admin token
 # create` -> identity /admin/v1/tokens), so the harness exercises the
@@ -303,12 +439,12 @@ log "stack is up"
 # devserver id stays derivable client-side: lowercase hex
 # sha256(secret), the api_tokens cross-service contract.
 
-admin_mint() { # admin_mint <label> -> "secret dsid"
+admin_mint() { # admin_mint <email> <label> -> "secret dsid"
     local out secret dsid
     out="$("$GW_BIN/chan-gateway-admin" \
         --identity-url "http://127.0.0.1:$ID_PORT" --token "$TOK_ADMIN" --json \
-        token create "$ALICE_EMAIL" \
-        --scope tunnel --scope desktop.connect --label "$1" \
+        token create "$1" \
+        --scope tunnel --scope desktop.connect --label "$2" \
         2>> "$LOGS/admin-mint.log")" || return 1
     secret="$(printf %s "$out" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).secret||"")}catch{console.log("")}})')"
     case "$secret" in chan_pat_*) ;; *) return 1 ;; esac
@@ -322,26 +458,36 @@ admin_mint() { # admin_mint <label> -> "secret dsid"
 # ships default-off, so the e2e schema flips the default.
 sql "$E2E_DATABASE_URL" "SET search_path TO $E2E_SCHEMA;
     UPDATE feature_flags SET default_enabled = true WHERE key = 'oauth_login';" || exit 2
-ALICE_ID="$(sql "$E2E_DATABASE_URL" "SET search_path TO $E2E_SCHEMA;
-    INSERT INTO users (id, email, username)
-    VALUES (gen_random_uuid(), '$ALICE_EMAIL',
-            'u' || substr(md5(random()::text), 1, 12))
-    RETURNING id;")"
-ALICE_USER="$(sql "$E2E_DATABASE_URL" \
-    "SET search_path TO $E2E_SCHEMA; SELECT username FROM users WHERE id = '$ALICE_ID';")"
-log "seeded user $ALICE_USER ($ALICE_ID)"
+seed_user() { # seed_user <email> -> "id username"
+    local id
+    id="$(sql "$E2E_DATABASE_URL" "SET search_path TO $E2E_SCHEMA;
+        INSERT INTO users (id, email, username)
+        VALUES (gen_random_uuid(), '$1',
+                'u' || substr(md5(random()::text), 1, 12))
+        RETURNING id;")"
+    printf '%s %s' "$id" "$(sql "$E2E_DATABASE_URL" \
+        "SET search_path TO $E2E_SCHEMA; SELECT username FROM users WHERE id = '$id';")"
+}
+read -r ALICE_ID ALICE_USER <<< "$(seed_user "$ALICE_EMAIL")"
+read -r _ CAROL_USER <<< "$(seed_user "$CAROL_EMAIL")"
+read -r _ DAVE_USER <<< "$(seed_user "$DAVE_EMAIL")"
+log "seeded users alice=$ALICE_USER carol=$CAROL_USER dave=$DAVE_USER"
 
 # The mint IS an assertion (v0.68 item 8: admin token create end to
 # end); everything downstream then proves the minted PATs actually
-# dial, route, and gate.
-if read -r PAT_A DS_A <<< "$(admin_mint e2e-a)" &&
-    read -r PAT_B DS_B <<< "$(admin_mint e2e-b)" &&
-    read -r PAT_C DS_C <<< "$(admin_mint e2e-c)"; then
-    assert_pass "admin mint: token create provisioned 3 PATs via /admin/v1/tokens"
+# dial, route, and gate. Alice gets A/B (live) + C (cap probe); carol
+# gets D (p3) + E (shared ingress); dave gets F (shared ingress) + G
+# (admission probe for the failure scenarios).
+if read -r PAT_A DS_A <<< "$(admin_mint "$ALICE_EMAIL" e2e-a)" &&
+    read -r PAT_B DS_B <<< "$(admin_mint "$ALICE_EMAIL" e2e-b)" &&
+    read -r PAT_C DS_C <<< "$(admin_mint "$ALICE_EMAIL" e2e-c)" &&
+    read -r PAT_D DS_D <<< "$(admin_mint "$CAROL_EMAIL" e2e-d)" &&
+    read -r PAT_E DS_E <<< "$(admin_mint "$CAROL_EMAIL" e2e-e)" &&
+    read -r PAT_F DS_F <<< "$(admin_mint "$DAVE_EMAIL" e2e-f)" &&
+    read -r PAT_G DS_G <<< "$(admin_mint "$DAVE_EMAIL" e2e-g)"; then
+    assert_pass "admin mint: token create provisioned 7 PATs via /admin/v1/tokens"
 else
     assert_fail "admin mint: chan-gateway-admin token create failed (logs/admin-mint.log)"
-    log "cannot seed PATs; aborting"
-    exit 1
 fi
 # Guard probes: the surface refuses a wrong bearer outright and
 # answers an unknown email with the same 404 the CLI narrates.
@@ -366,7 +512,7 @@ else
     assert_fail "admin mint: unknown email expected 404, got $unknown_status"
 fi
 disc() { printf %s "${1:0:12}"; }
-log "devservers: A=$(disc "$DS_A") B=$(disc "$DS_B") C=$(disc "$DS_C") (cap candidate)"
+log "devservers: A=$(disc "$DS_A") B=$(disc "$DS_B") C=$(disc "$DS_C") (cap candidate) D=$(disc "$DS_D") E=$(disc "$DS_E") F=$(disc "$DS_F") G=$(disc "$DS_G")"
 
 # Bob shares a devserver with alice (claimed grant): the consent
 # picker's "shared with you" row. Bob's devserver never dials in, so
@@ -387,29 +533,22 @@ sql "$E2E_DATABASE_URL" "SET search_path TO $E2E_SCHEMA;
 log "seeded bob ($BOB_USER) sharing $(disc "$DS_BOB") with alice"
 
 # ---------------------------------------------------------------
-# Devservers (host-local foreground processes)
+# Aggregate admin helpers (the controller owns the fleet view)
 # ---------------------------------------------------------------
 
-# Every devserver announces the SAME display name so the T5 dedup
-# assertion below exercises the owner-scoped -2 suffix; redials
-# re-announce it, which must be label-stable (no suffix creep).
-DS_DISPLAY_NAME="e2e-box"
+admin_read() { # admin_read <path> -> controller admin JSON (fails on 503)
+    curl -fsS -H "Authorization: Bearer $TOK_ADMIN" "http://127.0.0.1:$CTL_ADMIN_PORT$1"
+}
 
-spawn_devserver() { # spawn_devserver <name> <port> <pat>
-    local name="$1" port="$2" pat="$3"
-    mkdir -p "$WORK/home-$name"
-    spawn "ds-$name" env \
-        CHAN_HOME="$WORK/home-$name" \
-        CHAN_TUNNEL_TOKEN="$pat" \
-        "$CHAN_BIN" devserver --service=none \
-        --bind 127.0.0.1 --port "$port" \
-        --tunnel-url="http://127.0.0.1:$TUNNEL_PORT/v1/tunnel" \
-        --tunnel-devserver-name="$DS_DISPLAY_NAME"
+jrows() { # jrows <field...>: one line per JSON array row, fields space-separated
+    node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{
+        const fs=process.argv.slice(1);
+        for(const r of JSON.parse(d)) console.log(fs.map(f=>String(r[f]??"")).join(" "));
+    }catch{}})' "$@"
 }
 
 admin_tunnels() { # admin_tunnels -> JSON list of alice's live tunnels
-    curl -fsS -H "Authorization: Bearer $TOK_ADMIN" -H "Host: $APEX" \
-        "http://127.0.0.1:$PROXY_PORT/admin/v1/users/$ALICE_USER/tunnels"
+    admin_read "/admin/v1/users/$ALICE_USER/tunnels"
 }
 
 tunnel_count() { admin_tunnels | grep -o '"devserver_id"' | wc -l; }
@@ -423,16 +562,117 @@ wait_tunnels() { # wait_tunnels <expected-count> [tries]
     return 1
 }
 
-spawn_devserver a "${DS_PORTS[0]}" "$PAT_A"
-spawn_devserver b "${DS_PORTS[1]}" "$PAT_B"
+tunnel_field() { # tunnel_field <dsid> <field> -> aggregate row field (empty if absent)
+    admin_read /admin/v1/tunnels | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
+        const [id,f]=process.argv.slice(1);
+        try{const r=JSON.parse(d).find(x=>x.devserver_id===id);console.log(r?String(r[f]??""):"")}catch{console.log("")}})' \
+        "$1" "$2"
+}
 
-if wait_tunnels 2; then
-    assert_pass "tunnels: 2 devservers of one user registered"
+# One read, one row: the peer address and connect time together
+# fingerprint the underlying tunnel connection, so a scenario can
+# prove a registration survived an event (a redial would change both).
+tunnel_fingerprint() { # tunnel_fingerprint <dsid> -> "peer_addr connected_at"
+    admin_read /admin/v1/tunnels | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
+        const id=process.argv[1];
+        try{const r=JSON.parse(d).find(x=>x.devserver_id===id);console.log(r?`${r.peer_addr} ${r.connected_at}`:"")}catch{console.log("")}})' \
+        "$1"
+}
+
+fleet_count() { admin_read /admin/v1/tunnels | grep -o '"devserver_id"' | wc -l; }
+
+wait_fleet() { # wait_fleet <expected-total-rows> [tries]
+    local want="$1" tries="${2:-75}"
+    for _ in $(seq "$tries"); do
+        [ "$(fleet_count)" = "$want" ] && return 0
+        sleep 0.4
+    done
+    return 1
+}
+
+# host_for derives a devserver's tenant host from its aggregate row,
+# so every probe targets the owning node the controller reports
+# rather than an assumption baked into the harness.
+host_for() { # host_for <user> <dsid> -> "<user>--<disc>.<node>.$APEX" (empty if not live)
+    local node
+    node="$(tunnel_field "$2" proxy_id)"
+    [ -n "$node" ] && printf '%s--%s.%s.%s' "$1" "$(disc "$2")" "$node" "$APEX"
+}
+
+# ---------------------------------------------------------------
+# Devservers (host-local foreground processes)
+# ---------------------------------------------------------------
+
+# Alice's devservers announce the SAME display name so the T5 dedup
+# assertion below exercises the owner-scoped -2 suffix; redials
+# re-announce it, which must be label-stable (no suffix creep).
+DS_DISPLAY_NAME="e2e-box"
+
+spawn_devserver() { # spawn_devserver <name> <port> <pat> <tunnel-url>
+    local name="$1" port="$2" pat="$3" turl="$4"
+    mkdir -p "$WORK/home-$name"
+    spawn "ds-$name" env \
+        CHAN_HOME="$WORK/home-$name" \
+        CHAN_TUNNEL_TOKEN="$pat" \
+        "$CHAN_BIN" devserver --service=none \
+        --bind 127.0.0.1 --port "$port" \
+        --tunnel-url="$turl" \
+        --tunnel-devserver-name="$DS_DISPLAY_NAME"
+}
+
+# ---------------------------------------------------------------
+# Fleet bring-up: one real tunnel through each proxy's own listener
+# ---------------------------------------------------------------
+
+# Before any client dials, the converged fleet must show three active
+# proxy rows with empty snapshots; that is the state the controller
+# spent its convergence window assembling.
+proxies_json="$(admin_read /admin/v1/proxies)" || {
+    log "cannot read /admin/v1/proxies; aborting"
+    exit 1
+}
+fleet_shape="$(printf %s "$proxies_json" | jrows proxy_id status tunnel_count proxy_base_url | sort)"
+expected_shape="p1 active 0 http://p1.$APEX:$PROXY_PORT
+p2 active 0 http://p2.$APEX:$PROXY_PORT
+p3 active 0 http://p3.$APEX:$PROXY_PORT"
+if [ "$fleet_shape" = "$expected_shape" ]; then
+    assert_pass "fleet: /admin/v1/proxies shows three active rows with empty snapshots"
 else
-    assert_fail "tunnels: expected 2 registrations, got: $(admin_tunnels)"
+    assert_fail "fleet: expected three active zero-row proxies, got:
+$fleet_shape"
 fi
 
-# T5 (--tunnel-devserver-name): both devservers announced the same
+spawn_devserver a "${DS_PORTS[0]}" "$PAT_A" "$(node_tunnel_url p1)"
+spawn_devserver b "${DS_PORTS[1]}" "$PAT_B" "$(node_tunnel_url p2)"
+spawn_devserver d "${DS_PORTS[3]}" "$PAT_D" "$(node_tunnel_url p3)"
+
+if wait_fleet 3 150 && wait_tunnels 2 75; then
+    assert_pass "tunnels: three devservers registered, one through each proxy"
+else
+    assert_fail "tunnels: expected 3 aggregate rows (2 alice), got fleet=$(fleet_count) alice=$(tunnel_count)"
+fi
+
+# Ownership: every aggregate row names the proxy that accepted the
+# tunnel, with the node base URL identity mints entry origins from.
+ownership="$(admin_read /admin/v1/tunnels | jrows devserver_id user proxy_id proxy_base_url | sort)"
+expected_ownership="$(printf '%s\n' \
+    "$DS_A $ALICE_USER p1 http://p1.$APEX:$PROXY_PORT" \
+    "$DS_B $ALICE_USER p2 http://p2.$APEX:$PROXY_PORT" \
+    "$DS_D $CAROL_USER p3 http://p3.$APEX:$PROXY_PORT" | sort)"
+if [ "$ownership" = "$expected_ownership" ]; then
+    assert_pass "tunnels: aggregate rows carry the owning proxy_id and proxy_base_url"
+else
+    assert_fail "tunnels: ownership rows wrong, got:
+$ownership"
+fi
+per_node="$(admin_read /admin/v1/proxies | jrows proxy_id status tunnel_count | sort | paste -sd' ')"
+if [ "$per_node" = "p1 active 1 p2 active 1 p3 active 1" ]; then
+    assert_pass "fleet: /admin/v1/proxies reports tunnel_count 1 on every node"
+else
+    assert_fail "fleet: expected tunnel_count 1 per node, got: $per_node"
+fi
+
+# T5 (--tunnel-devserver-name): alice's devservers announced the same
 # display name; the gateway persists it as the label (over the PAT
 # label) and dedups within the owner with a -2 suffix. The announce is
 # an async post-registration follow-up (spaced against the identity
@@ -462,13 +702,13 @@ fi
 # Assertions
 # ---------------------------------------------------------------
 
-# Follow-up curls hit wildcard hosts on the loopback listener; the
-# localtest.me public DNS resolves them, --resolve pins v4 loopback so
-# a v6-first resolver can't route past the 127.0.0.1 binds.
-curl_host() { # curl_host <host> <args...>
-    local host="$1"
-    shift
-    curl -sS --resolve "$host:$PROXY_PORT:127.0.0.1" "$@"
+# Follow-up curls hit node wildcard hosts on the owning proxy's
+# loopback alias; --resolve pins v4 so a v6-first resolver can't route
+# past the per-node binds.
+curl_node() { # curl_node <proxy-id> <host> <args...>
+    local id="$1" host="$2"
+    shift 2
+    curl -sS --resolve "$host:$PROXY_PORT:$(node_ip "$id")" "$@"
 }
 
 entry_for() { # entry_for <pat> <json-body> -> desktop entry response body
@@ -482,38 +722,37 @@ json_get() { # json_get <key> (reads object on stdin)
     node -e 'let d="";process.stdin.on("data",c=>c&&(d+=c)).on("end",()=>{try{const v=JSON.parse(d)[process.argv[1]];console.log(v===undefined?"":v)}catch{console.log("")}})' "$1"
 }
 
-# A: desktop entry with an explicit devserver_id mints on that disc
-# host, and the entry URL routes through the tunnel (303 cookie mint,
-# then a devserver-served response behind it). The gate cookie is
-# minted with `Secure`, which curl refuses to replay over plain http,
-# so the harness captures Set-Cookie itself and sends it as an
-# explicit Cookie header (we are testing routing, not browser cookie
-# policy).
-check_entry_routes() { # check_entry_routes <name> <pat> <dsid>
-    local name="$1" pat="$2" dsid="$3"
-    local body entry_url host hdrs cookie code
+# A: desktop entry with an explicit devserver_id mints on the owning
+# node's disc host, and the entry URL routes through that node's
+# tunnel (303 cookie mint, then a devserver-served response behind
+# it). The gate cookie is minted with `Secure`, which curl refuses to
+# replay over plain http, so the harness captures Set-Cookie itself
+# and sends it as an explicit Cookie header (we are testing routing,
+# not browser cookie policy).
+check_entry_routes() { # check_entry_routes <name> <pat> <user> <dsid>
+    local name="$1" pat="$2" user="$3" dsid="$4"
+    local body entry_url node host hdrs cookie code
     body="$(entry_for "$pat" "{\"devserver_id\":\"$dsid\"}")"
     entry_url="$(printf %s "$body" | json_get entry_url)"
-    host="$ALICE_USER--$(disc "$dsid").devserver.$DOMAIN"
-    if [ -z "$entry_url" ]; then
-        assert_fail "entry($name): no entry_url in: $body"
-        return
+    node="$(tunnel_field "$dsid" proxy_id)"
+    host="$user--$(disc "$dsid").$node.$APEX"
+    if [ -z "$entry_url" ] || [ -z "$node" ]; then
+        assert_fail "entry($name): no entry_url ($body) or no aggregate row for $dsid"
     fi
     case "$entry_url" in
-    "http://$host:$PROXY_PORT/"*) assert_pass "entry($name): minted on disc host $host" ;;
-    *) assert_fail "entry($name): expected disc host $host, got $entry_url" ;;
+    "http://$host:$PROXY_PORT/"*) assert_pass "entry($name): minted on node host $host" ;;
+    *) assert_fail "entry($name): expected node host $host, got $entry_url" ;;
     esac
     hdrs="$WORK/hdrs-$name.txt"
-    code="$(curl_host "$host" -o /dev/null -w '%{http_code}' -D "$hdrs" "$entry_url")"
+    code="$(curl_node "$node" "$host" -o /dev/null -w '%{http_code}' -D "$hdrs" "$entry_url")"
     cookie="$(sed -n 's/^[Ss]et-[Cc]ookie: \(devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
     printf %s "$cookie" > "$WORK/cookie-$name.txt"
     if [ "$code" = "303" ] && [ -n "$cookie" ]; then
         assert_pass "entry($name): entry token 303s and mints the gate cookie"
     else
         assert_fail "entry($name): expected 303 + devserver_gate cookie, got $code"
-        return
     fi
-    code="$(curl_host "$host" -o "$WORK/root-$name.html" -w '%{http_code}' \
+    code="$(curl_node "$node" "$host" -o "$WORK/root-$name.html" -w '%{http_code}' \
         -H "Cookie: $cookie" "http://$host:$PROXY_PORT/")"
     # 200 = launcher SPA served through the tunnel. A chan binary
     # built without the web bundles answers with its own "bundle not
@@ -534,16 +773,19 @@ check_entry_routes() { # check_entry_routes <name> <pat> <dsid>
 # requested; the bring-up and its asserts above always run.
 if [ "$RUN_CORE" = 1 ]; then
 
-check_entry_routes a "$PAT_A" "$DS_A"
-check_entry_routes b "$PAT_B" "$DS_B"
+check_entry_routes a "$PAT_A" "$ALICE_USER" "$DS_A"
+check_entry_routes b "$PAT_B" "$ALICE_USER" "$DS_B"
+
+NODE_A="$(tunnel_field "$DS_A" proxy_id)"
+NODE_B="$(tunnel_field "$DS_B" proxy_id)"
+HOST_A="$ALICE_USER--$(disc "$DS_A").$NODE_A.$APEX"
+HOST_B="$ALICE_USER--$(disc "$DS_B").$NODE_B.$APEX"
 
 # B: a cookie minted for devserver A does not admit on B's disc host
 # (drv/aud isolation), same 404 shape as unknown.
-HOST_A="$ALICE_USER--$(disc "$DS_A").devserver.$DOMAIN"
-HOST_B="$ALICE_USER--$(disc "$DS_B").devserver.$DOMAIN"
 COOKIE_A="$(cat "$WORK/cookie-a.txt" 2>/dev/null || true)"
 if [ -n "$COOKIE_A" ]; then
-    code="$(curl_host "$HOST_B" -o /dev/null -w '%{http_code}' -H "Cookie: $COOKIE_A" "http://$HOST_B:$PROXY_PORT/x/")"
+    code="$(curl_node "$NODE_B" "$HOST_B" -o /dev/null -w '%{http_code}' -H "Cookie: $COOKIE_A" "http://$HOST_B:$PROXY_PORT/x/")"
     if [ "$code" = "404" ]; then
         assert_pass "isolation: devserver A's cookie is 404 on B's disc host"
     else
@@ -553,50 +795,52 @@ else
     assert_fail "isolation: no cookie captured for devserver A"
 fi
 
-# C: unknown disc (well-formed, not live) is 404.
-HOST_U="$ALICE_USER--000000000000.devserver.$DOMAIN"
-code="$(curl_host "$HOST_U" -o /dev/null -w '%{http_code}' "http://$HOST_U:$PROXY_PORT/x/")"
+# C: unknown disc (well-formed, not live) is 404 on the node host.
+HOST_U="$ALICE_USER--000000000000.$NODE_A.$APEX"
+code="$(curl_node "$NODE_A" "$HOST_U" -o /dev/null -w '%{http_code}' "http://$HOST_U:$PROXY_PORT/x/")"
 if [ "$code" = "404" ]; then
     assert_pass "routing: unknown disc host is 404"
 else
     assert_fail "routing: unknown disc expected 404, got $code"
 fi
 
-# D: bare host with two live devservers and no credential is 404;
-# naked roots (bare and disc) bounce to the dashboard.
-HOST_BARE="$ALICE_USER.devserver.$DOMAIN"
-code="$(curl_host "$HOST_BARE" -o /dev/null -w '%{http_code}' "http://$HOST_BARE:$PROXY_PORT/x/")"
+# D: the shared apex carries only health/readiness, and the pre-fleet
+# bare user host is no longer a routing surface (tenant traffic lives
+# on node hosts only): both are 404 on a node listener. The naked
+# disc root still bounces to the dashboard.
+code="$(curl_node p1 "$APEX" -o /dev/null -w '%{http_code}' "http://$APEX:$PROXY_PORT/x/")"
 if [ "$code" = "404" ]; then
-    assert_pass "routing: bare host without credential is 404"
+    assert_pass "routing: apex host carries no tenant surface (404)"
 else
-    assert_fail "routing: bare host expected 404, got $code"
+    assert_fail "routing: apex host expected 404, got $code"
 fi
-for h in "$HOST_BARE" "$HOST_A"; do
-    loc="$(curl_host "$h" -o /dev/null -w '%{redirect_url}' "http://$h:$PROXY_PORT/")"
-    if [ "$loc" = "http://$ID_HOST/workspaces" ]; then
-        assert_pass "routing: naked root on $h bounces to the dashboard"
-    else
-        assert_fail "routing: naked root on $h expected dashboard, got '$loc'"
-    fi
-done
+HOST_BARE="$ALICE_USER.$APEX"
+code="$(curl_node p1 "$HOST_BARE" -o /dev/null -w '%{http_code}' "http://$HOST_BARE:$PROXY_PORT/x/")"
+if [ "$code" = "404" ]; then
+    assert_pass "routing: bare user host without a node label is 404"
+else
+    assert_fail "routing: bare user host expected 404, got $code"
+fi
+loc="$(curl_node "$NODE_A" "$HOST_A" -o /dev/null -w '%{redirect_url}' "http://$HOST_A:$PROXY_PORT/")"
+if [ "$loc" = "http://$ID_HOST/workspaces" ]; then
+    assert_pass "routing: naked root on $HOST_A bounces to the dashboard"
+else
+    assert_fail "routing: naked root on $HOST_A expected dashboard, got '$loc'"
+fi
 
-# E: bare-host compat: a session cookie minted on a disc host is
-# host-scoped, but the proxy's bare-host path resolves by the
-# credential's drv claim. Entry tokens are only minted for disc hosts
-# now, so exercise the bare-host resolution with the A cookie's token
-# replayed as a bare-host request: the aud mismatch must 404 (the
-# pre-0.68 bare-host cookies that DO verify are pinned in
-# devserver-proxy's integration tests, which mint bare-host tokens
-# directly).
+# E: node isolation: A's disc host presented to a non-owning node is
+# 404 even carrying A's valid gate cookie, because the host's suffix
+# names p1 and only p1's listener routes it. The full 3x3 form of
+# this check is the matrix scenario.
 if [ -n "$COOKIE_A" ]; then
-    code="$(curl_host "$HOST_BARE" -o /dev/null -w '%{http_code}' -H "Cookie: $COOKIE_A" "http://$HOST_BARE:$PROXY_PORT/x/")"
+    code="$(curl_node "$NODE_B" "$HOST_A" -o /dev/null -w '%{http_code}' -H "Cookie: $COOKIE_A" "http://$HOST_A:$PROXY_PORT/x/")"
     if [ "$code" = "404" ]; then
-        assert_pass "routing: disc-host cookie does not leak onto the bare host"
+        assert_pass "routing: A's node host is 404 on a non-owning node"
     else
-        assert_fail "routing: disc cookie on bare host expected 404, got $code"
+        assert_fail "routing: A's host on $NODE_B expected 404, got $code"
     fi
 else
-    assert_fail "routing: no cookie captured for the bare-host leak check"
+    assert_fail "routing: no cookie captured for the cross-node check"
 fi
 
 # F: share landing `?d=` while signed out stashes and bounces to login.
@@ -609,9 +853,10 @@ else
 fi
 
 # G: cap: a third devserver for the same user is refused at
-# MAX_DEVSERVERS_PER_USER=$MAX_DEVSERVERS; the live set stays at 2 and
-# never contains C's id.
-spawn_devserver c "${DS_PORTS[2]}" "$PAT_C"
+# MAX_DEVSERVERS_PER_USER=$MAX_DEVSERVERS, decided by the controller
+# before HelloAck no matter which node the dial lands on (C dials the
+# shared ingress). The live set stays at 2 and never contains C's id.
+spawn_devserver c "${DS_PORTS[2]}" "$PAT_C" "$SHIM_TUNNEL_URL"
 sleep 4
 tunnels_json="$(admin_tunnels)"
 n="$(printf %s "$tunnels_json" | grep -o '"devserver_id"' | wc -l)"
@@ -621,19 +866,20 @@ else
     assert_fail "cap: expected 2 tunnels without $DS_C, got: $tunnels_json"
 fi
 
-# H: kill + reconnect: admin-kill all tunnels; the devservers redial
-# on their own and the disc host routes again. Devserver C is stopped
-# first: it is still retrying against the cap, and after the kill it
-# could win a slot from A or B and flake the re-registration count.
+# H: kill + reconnect: admin-kill all of alice's tunnels through the
+# controller; the devservers redial on their own and the node host
+# routes again. Devserver C is stopped first: it is still retrying
+# against the cap, and after the kill it could win a slot from A or B
+# and flake the re-registration count.
 if [ -f "$WORK/pids/ds-c.pid" ]; then
     kill "$(cat "$WORK/pids/ds-c.pid")" 2>/dev/null || true
     rm -f "$WORK/pids/ds-c.pid"
 fi
-curl -fsS -X POST -H "Authorization: Bearer $TOK_ADMIN" -H "Host: $APEX" \
-    "http://127.0.0.1:$PROXY_PORT/admin/v1/users/$ALICE_USER/tunnels/kill" >/dev/null
+curl -fsS -X POST -H "Authorization: Bearer $TOK_ADMIN" \
+    "http://127.0.0.1:$CTL_ADMIN_PORT/admin/v1/users/$ALICE_USER/tunnels/kill" >/dev/null
 if wait_tunnels 2 150; then
     assert_pass "reconnect: both devservers re-registered after admin kill"
-    check_entry_routes a-reconnect "$PAT_A" "$DS_A"
+    check_entry_routes a-reconnect "$PAT_A" "$ALICE_USER" "$DS_A"
 else
     assert_fail "reconnect: devservers did not re-register: $(admin_tunnels)"
 fi
@@ -671,95 +917,93 @@ if [ -x "$CHROME_BIN" ]; then
         node "$WORK/gateway-zone-browser.mjs" 2> "$LOGS/browser.log")" || browser_json=""
     if [ -z "$browser_json" ]; then
         assert_fail "consent: browser run produced no output (see logs/browser.log)"
+    fi
+    # radios is an array; count it explicitly (json_get prints
+    # node's inspect form for non-strings).
+    radios_n="$(printf %s "$browser_json" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(String(JSON.parse(d).radios.length))}catch{console.log("-1")}})')"
+    consent_text="$(printf %s "$browser_json" | json_get consent_text)"
+    handoff="$(printf %s "$browser_json" | json_get handoff_url)"
+    if [ "$radios_n" = "0" ]; then
+        assert_pass "consent: account consent renders no devserver picker"
     else
-        # radios is an array; count it explicitly (json_get prints
-        # node's inspect form for non-strings).
-        radios_n="$(printf %s "$browser_json" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(String(JSON.parse(d).radios.length))}catch{console.log("-1")}})')"
-        consent_text="$(printf %s "$browser_json" | json_get consent_text)"
-        handoff="$(printf %s "$browser_json" | json_get handoff_url)"
-        if [ "$radios_n" = "0" ]; then
-            assert_pass "consent: account consent renders no devserver picker"
-        else
-            assert_fail "consent: expected 0 devserver radios, found $radios_n"
-        fi
-        case "$consent_text" in
-        *"access to your account on this gateway"*)
-            assert_pass "consent: the account copy renders"
-            ;;
-        *)
-            assert_fail "consent: account copy missing (see logs/browser.log)"
-            ;;
-        esac
-        if [ -z "$(frag_get "$handoff" devserver_owner)" ] &&
-            [ -z "$(frag_get "$handoff" devserver_id)" ]; then
-            assert_pass "consent: fragment carries no devserver_* keys"
-        else
-            assert_fail "consent: unexpected devserver_* keys: $handoff"
-        fi
+        assert_fail "consent: expected 0 devserver radios, found $radios_n"
+    fi
+    case "$consent_text" in
+    *"access to your account on this gateway"*)
+        assert_pass "consent: the account copy renders"
+        ;;
+    *)
+        assert_fail "consent: account copy missing (see logs/browser.log)"
+        ;;
+    esac
+    if [ -z "$(frag_get "$handoff" devserver_owner)" ] &&
+        [ -z "$(frag_get "$handoff" devserver_id)" ]; then
+        assert_pass "consent: fragment carries no devserver_* keys"
+    else
+        assert_fail "consent: unexpected devserver_* keys: $handoff"
+    fi
 
-        # Redeem the one-time code: 200 exactly once, 410 on replay.
-        code="$(frag_get "$handoff" code)"
-        redeem1="$(curl -sS -o "$WORK/redeem.json" -w '%{http_code}' \
-            -X POST "http://127.0.0.1:$ID_PORT/desktop/authorize/redeem" \
-            -H "content-type: application/json" -d "{\"code\":\"$code\"}")"
-        redeem2="$(curl -sS -o /dev/null -w '%{http_code}' \
-            -X POST "http://127.0.0.1:$ID_PORT/desktop/authorize/redeem" \
-            -H "content-type: application/json" -d "{\"code\":\"$code\"}")"
-        if [ "$redeem1" = "200" ] && [ "$redeem2" = "410" ]; then
-            assert_pass "redeem: one-time code answers 200 once, 410 on replay"
-        else
-            assert_fail "redeem: expected 200 then 410, got $redeem1 then $redeem2"
-        fi
-        browser_pat="$(json_get secret < "$WORK/redeem.json")"
+    # Redeem the one-time code: 200 exactly once, 410 on replay.
+    code="$(frag_get "$handoff" code)"
+    redeem1="$(curl -sS -o "$WORK/redeem.json" -w '%{http_code}' \
+        -X POST "http://127.0.0.1:$ID_PORT/desktop/authorize/redeem" \
+        -H "content-type: application/json" -d "{\"code\":\"$code\"}")"
+    redeem2="$(curl -sS -o /dev/null -w '%{http_code}' \
+        -X POST "http://127.0.0.1:$ID_PORT/desktop/authorize/redeem" \
+        -H "content-type: application/json" -d "{\"code\":\"$code\"}")"
+    if [ "$redeem1" = "200" ] && [ "$redeem2" = "410" ]; then
+        assert_pass "redeem: one-time code answers 200 once, 410 on replay"
+    else
+        assert_fail "redeem: expected 200 then 410, got $redeem1 then $redeem2"
+    fi
+    browser_pat="$(json_get secret < "$WORK/redeem.json")"
 
-        # The redeemed account PAT reads the roster: own live rows plus
-        # bob's claimed share.
-        roster_json="$(curl -sS -H "Authorization: Bearer $browser_pat" \
-            "http://127.0.0.1:$ID_PORT/desktop/v1/devservers")"
-        row_a="$(roster_row "$roster_json" "$DS_A")"
-        if [ "$row_a" = "$ALICE_USER true owner" ]; then
-            assert_pass "roster: redeemed PAT lists devserver A online (owner row)"
-        else
-            assert_fail "roster: devserver A row wrong: '$row_a' in: $roster_json"
-        fi
-        row_b="$(roster_row "$roster_json" "$DS_B")"
-        if [ "$row_b" = "$ALICE_USER true owner" ]; then
-            assert_pass "roster: redeemed PAT lists devserver B online (owner row)"
-        else
-            assert_fail "roster: devserver B row wrong: '$row_b' in: $roster_json"
-        fi
-        row_bob="$(roster_row "$roster_json" "$DS_BOB")"
-        if [ "$row_bob" = "$BOB_USER false editor" ]; then
-            assert_pass "roster: bob's claimed share listed (offline, editor)"
-        else
-            assert_fail "roster: bob share row wrong: '$row_bob' in: $roster_json"
-        fi
+    # The redeemed account PAT reads the roster: own live rows plus
+    # bob's claimed share.
+    roster_json="$(curl -sS -H "Authorization: Bearer $browser_pat" \
+        "http://127.0.0.1:$ID_PORT/desktop/v1/devservers")"
+    row_a="$(roster_row "$roster_json" "$DS_A")"
+    if [ "$row_a" = "$ALICE_USER true owner" ]; then
+        assert_pass "roster: redeemed PAT lists devserver A online (owner row)"
+    else
+        assert_fail "roster: devserver A row wrong: '$row_a' in: $roster_json"
+    fi
+    row_b="$(roster_row "$roster_json" "$DS_B")"
+    if [ "$row_b" = "$ALICE_USER true owner" ]; then
+        assert_pass "roster: redeemed PAT lists devserver B online (owner row)"
+    else
+        assert_fail "roster: devserver B row wrong: '$row_b' in: $roster_json"
+    fi
+    row_bob="$(roster_row "$roster_json" "$DS_BOB")"
+    if [ "$row_bob" = "$BOB_USER false editor" ]; then
+        assert_pass "roster: bob's claimed share listed (offline, editor)"
+    else
+        assert_fail "roster: bob share row wrong: '$row_bob' in: $roster_json"
+    fi
 
-        # Entry mint targeted from the roster row, then the two-hop
-        # routing check (the same shape check_entry_routes uses).
-        entry_owner="${row_a%% *}"
-        entry_body="$(entry_for "$browser_pat" "{\"owner\":\"$entry_owner\",\"devserver_id\":\"$DS_A\"}")"
-        entry_url="$(printf %s "$entry_body" | json_get entry_url)"
-        if [ -n "$entry_url" ]; then
-            # Same two-hop shape as check_entry_routes: capture the
-            # Secure cookie ourselves and replay it explicitly.
-            hdrs="$WORK/hdrs-browser.txt"
-            hop1="$(curl_host "$HOST_A" -o /dev/null -w '%{http_code}' -D "$hdrs" "$entry_url")"
-            bcookie="$(sed -n 's/^[Ss]et-[Cc]ookie: \(devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
-            hop2=""
-            if [ "$hop1" = "303" ] && [ -n "$bcookie" ]; then
-                hop2="$(curl_host "$HOST_A" -o "$WORK/root-browser.html" -w '%{http_code}' \
-                    -H "Cookie: $bcookie" "http://$HOST_A:$PROXY_PORT/")"
-            fi
-            if [ "$hop2" = "200" ] ||
-                { [ -n "$hop2" ] && grep -qi "bundle not built" "$WORK/root-browser.html"; }; then
-                assert_pass "redeem: account PAT opens the roster-picked devserver ($hop2)"
-            else
-                assert_fail "redeem: entry hops expected 303 then devserver answer, got $hop1/$hop2"
-            fi
-        else
-            assert_fail "redeem: desktop entry with the redeemed PAT failed: $entry_body"
-        fi
+    # Entry mint targeted from the roster row, then the two-hop
+    # routing check (the same shape check_entry_routes uses).
+    entry_owner="${row_a%% *}"
+    entry_body="$(entry_for "$browser_pat" "{\"owner\":\"$entry_owner\",\"devserver_id\":\"$DS_A\"}")"
+    entry_url="$(printf %s "$entry_body" | json_get entry_url)"
+    if [ -z "$entry_url" ]; then
+        assert_fail "redeem: desktop entry with the redeemed PAT failed: $entry_body"
+    fi
+    # Same two-hop shape as check_entry_routes: capture the Secure
+    # cookie ourselves and replay it explicitly.
+    hdrs="$WORK/hdrs-browser.txt"
+    hop1="$(curl_node "$NODE_A" "$HOST_A" -o /dev/null -w '%{http_code}' -D "$hdrs" "$entry_url")"
+    bcookie="$(sed -n 's/^[Ss]et-[Cc]ookie: \(devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
+    hop2=""
+    if [ "$hop1" = "303" ] && [ -n "$bcookie" ]; then
+        hop2="$(curl_node "$NODE_A" "$HOST_A" -o "$WORK/root-browser.html" -w '%{http_code}' \
+            -H "Cookie: $bcookie" "http://$HOST_A:$PROXY_PORT/")"
+    fi
+    if [ "$hop2" = "200" ] ||
+        { [ -n "$hop2" ] && grep -qi "bundle not built" "$WORK/root-browser.html"; }; then
+        assert_pass "redeem: account PAT opens the roster-picked devserver ($hop2)"
+    else
+        assert_fail "redeem: entry hops expected 303 then devserver answer, got $hop1/$hop2"
     fi
 else
     assert_fail "consent: headless Chrome not found (set E2E_CHROME_BIN)"
@@ -812,7 +1056,7 @@ scenario_sweeper() {
             DATABASE_URL="$DB_URL" \
             PROFILE_AUTH_TOKEN="$TOK_PROFILE" \
             DEVSERVER_ADMIN_TOKEN="$TOK_ADMIN" \
-            DEVSERVER_ADMIN_URL="http://127.0.0.1:$PROXY_PORT" \
+            DEVSERVER_ADMIN_URL="http://127.0.0.1:$CTL_ADMIN_PORT" \
             ${1:+DEVSERVER_RETENTION_MINUTES="$1"} \
             RUST_LOG=info \
             "$GW_BIN/profile-service"
@@ -840,7 +1084,6 @@ scenario_sweeper() {
         CREATE TABLE sweeper_snap_ds AS SELECT * FROM devservers;
         CREATE TABLE sweeper_snap_grants AS SELECT * FROM devserver_grants;" || {
         assert_fail "sweeper: registry snapshot failed"
-        return
     }
 
     # A stranded row: registered long ago, never dialed, carrying a
@@ -853,12 +1096,10 @@ scenario_sweeper() {
         INSERT INTO devserver_grants (owner_user_id, devserver_id, grantee_email, role)
         VALUES ('$ALICE_ID', '$stale_id', 'e2e-swept@example.com', 'viewer');" || {
         assert_fail "sweeper: stale-row seed failed"
-        return
     }
 
     sweeper_respawn_profile 1 || {
         assert_fail "sweeper: profile restart with retention=1 failed"
-        return
     }
 
     # The first tick fires immediately on spawn: the stale row must go,
@@ -915,26 +1156,25 @@ scenario_sweeper() {
     # announced name with no mint in between. The announce is an async
     # post-registration follow-up (spaced against the validate
     # throttle), so poll for the row.
-    spawn_devserver b "${DS_PORTS[1]}" "$PAT_B"
+    spawn_devserver b "${DS_PORTS[1]}" "$PAT_B" "$(node_tunnel_url p2)"
     if wait_tunnels 2 150; then
         if ! admin_tunnels | grep -q "$DS_B"; then
             assert_fail "sweeper: redial registered but B's id missing: $(admin_tunnels)"
-        else
-            local row_back=0 owned_after
-            for _ in $(seq 30); do
-                # Absence only counts from a successful fetch.
-                if owned_after="$(sweeper_owned)" &&
-                    printf '%s\n' "$owned_after" | grep -q "^$DS_B$"; then
-                    row_back=1
-                    break
-                fi
-                sleep 1
-            done
-            if [ "$row_back" = 1 ]; then
-                assert_pass "sweeper: redial's name announce recreated B's registry row"
-            else
-                assert_fail "sweeper: B's row did not come back after the redial announce"
+        fi
+        local row_back=0 owned_after
+        for _ in $(seq 30); do
+            # Absence only counts from a successful fetch.
+            if owned_after="$(sweeper_owned)" &&
+                printf '%s\n' "$owned_after" | grep -q "^$DS_B$"; then
+                row_back=1
+                break
             fi
+            sleep 1
+        done
+        if [ "$row_back" = 1 ]; then
+            assert_pass "sweeper: redial's name announce recreated B's registry row"
+        else
+            assert_fail "sweeper: B's row did not come back after the redial announce"
         fi
     else
         assert_fail "sweeper: devserver B did not re-register after redial"
@@ -944,7 +1184,6 @@ scenario_sweeper() {
     # row the 1-minute window swept; devservers before grants (FK).
     sweeper_respawn_profile || {
         assert_fail "sweeper: profile restore restart failed"
-        return
     }
     sweeper_sql "
         INSERT INTO devservers SELECT * FROM sweeper_snap_ds s
@@ -956,7 +1195,6 @@ scenario_sweeper() {
         DROP TABLE sweeper_snap_ds;
         DROP TABLE sweeper_snap_grants;" || {
         assert_fail "sweeper: registry restore failed"
-        return
     }
     if sweeper_owned | grep -q "^$DS_B$"; then
         assert_pass "sweeper: registry restored (B's row back for later scenarios)"
@@ -966,7 +1204,7 @@ scenario_sweeper() {
 }
 
 # Scenario: gateway devserver liveness watchdog (item 5). Holds devserver A's
-# window-feed WS through the REAL proxy and proves the pieces the client
+# window-feed WS through A's owning proxy and proves the pieces the client
 # watchdog depends on: the keepalive Ping is answered end to end (the proxy
 # bridge forwards Ping/Pong, the devserver's axum /watch auto-pongs), a SIGSTOP'd
 # proxy leaves the held socket a half-open zombie -- no Pong AND no onclose --
@@ -979,27 +1217,29 @@ scenario_sweeper() {
 scenario_watchdog() {
     # A lone-scenario run skips the core suite, so mint devserver A's entry +
     # gate cookie here (the same two-hop check_entry_routes does).
-    local host body entry_url hdrs cookie
-    host="$ALICE_USER--$(disc "$DS_A").devserver.$DOMAIN"
+    local host node body entry_url hdrs cookie
+    node="$(tunnel_field "$DS_A" proxy_id)"
+    host="$ALICE_USER--$(disc "$DS_A").$node.$APEX"
+    if [ -z "$node" ]; then
+        assert_fail "watchdog: devserver A has no aggregate row"
+    fi
     body="$(entry_for "$PAT_A" "{\"devserver_id\":\"$DS_A\"}")"
     entry_url="$(printf %s "$body" | json_get entry_url)"
     if [ -z "$entry_url" ]; then
         assert_fail "watchdog: no entry_url minted for devserver A: $body"
-        return
     fi
     hdrs="$WORK/hdrs-watchdog.txt"
-    curl_host "$host" -o /dev/null -D "$hdrs" "$entry_url" >/dev/null
+    curl_node "$node" "$host" -o /dev/null -D "$hdrs" "$entry_url" >/dev/null
     cookie="$(sed -n 's/^[Ss]et-[Cc]ookie: \(devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
     if [ -z "$cookie" ]; then
         assert_fail "watchdog: no gate cookie minted for devserver A"
-        return
     fi
 
     # A fresh dial through the proxy still routes to the devserver (200, or the
     # no-bundle banner from a chan built without web assets) -- the poll-heals
     # path the launcher green dot rides even while a held socket is dead.
     local fresh
-    fresh="$(curl_host "$host" -o /dev/null -w '%{http_code}' -H "Cookie: $cookie" \
+    fresh="$(curl_node "$node" "$host" -o /dev/null -w '%{http_code}' -H "Cookie: $cookie" \
         "http://$host:$PROXY_PORT/")"
     case "$fresh" in
     200 | 404) assert_pass "watchdog: a fresh dial routes to the devserver ($fresh)" ;;
@@ -1014,8 +1254,8 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 const require = createRequire(process.env.WORK + "/x.js");
 const { WebSocket } = require("ws");
-const { WORK, PROXY_PORT, WD_HOST, WD_COOKIE } = process.env;
-const PROXY_PID = Number(fs.readFileSync(`${WORK}/pids/proxy.pid`, "utf8").trim());
+const { WORK, PROXY_IP, PROXY_PORT, WD_HOST, WD_COOKIE, PROXY_PIDFILE } = process.env;
+const PROXY_PID = Number(fs.readFileSync(PROXY_PIDFILE, "utf8").trim());
 const log = (o) => console.log(JSON.stringify(o));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Send a WS Ping; resolve true iff a Pong comes back within `ms`.
@@ -1028,7 +1268,7 @@ function pingPong(ws, ms) {
     setTimeout(() => { if (!done) { done = true; ws.off("pong", onPong); resolve(false); } }, ms);
   });
 }
-const ws = new WebSocket(`ws://127.0.0.1:${PROXY_PORT}/api/library/windows/watch`, {
+const ws = new WebSocket(`ws://${PROXY_IP}:${PROXY_PORT}/api/library/windows/watch`, {
   headers: { Host: `${WD_HOST}:${PROXY_PORT}`, Cookie: WD_COOKIE },
 });
 let firstFrame = false, closed = false;
@@ -1045,7 +1285,9 @@ const aliveKeepalive = await pingPong(ws, 3000);
 log({ phase: "alive", firstFrame, pong: aliveKeepalive });
 
 // Freeze the proxy: the held client<->proxy TCP stays ESTABLISHED (kernel), but
-// the frozen app forwards nothing -- the sleep-zombie condition.
+// the frozen app forwards nothing -- the sleep-zombie condition. A few seconds
+// here stays well under the controller's heartbeat deadline, so the freeze
+// does not read as a control-plane failure.
 process.kill(PROXY_PID, "SIGSTOP");
 await sleep(1000);
 const frozenPong = await pingPong(ws, 4000);
@@ -1065,13 +1307,16 @@ try { ws.terminate(); } catch {}
 process.exit(0);
 PROBE
 
-    local out probe="$WORK/watchdog-probe.mjs"
-    out="$(WORK="$WORK" PROXY_PORT="$PROXY_PORT" WD_HOST="$host" WD_COOKIE="$cookie" \
+    local out probe="$WORK/watchdog-probe.mjs" probe_ip
+    probe_ip="$(node_ip "$node")"
+    out="$(env WORK="$WORK" PROXY_IP="$probe_ip" PROXY_PORT="$PROXY_PORT" \
+        WD_HOST="$host" WD_COOKIE="$cookie" \
+        PROXY_PIDFILE="$WORK/pids/proxy-$node.pid" \
         node "$probe" 2>> "$LOGS/watchdog.log")"
     # Belt and braces: whatever the probe did, make sure the proxy is running
     # again so the stack stays usable for later scenarios / teardown.
     local ppid
-    ppid="$(cat "$WORK/pids/proxy.pid" 2>/dev/null)"
+    ppid="$(cat "$WORK/pids/proxy-$node.pid" 2>/dev/null)"
     [ -n "$ppid" ] && kill -CONT "$ppid" 2>/dev/null
     :
 
@@ -1079,7 +1324,6 @@ PROBE
     summary="$(printf %s "$out" | grep '"SUMMARY"' | tail -1)"
     if [ -z "$summary" ]; then
         assert_fail "watchdog: probe produced no summary (see logs/watchdog.log)"
-        return
     fi
     wd_field() { # wd_field <key>; prints SUMMARY.<key> from the probe JSON
         printf %s "$summary" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(String(JSON.parse(d).SUMMARY[process.argv[1]]))}catch{console.log("")}})' "$1"
@@ -1089,7 +1333,6 @@ PROBE
         assert_pass "watchdog: feed WS opened through the proxy"
     else
         assert_fail "watchdog: feed WS did not open through the proxy"
-        return
     fi
     [ "$(wd_field firstFrame)" = "true" ] &&
         assert_pass "watchdog: server pushed the window snapshot on connect" ||
@@ -1146,7 +1389,6 @@ scenario_roster() {
     chan_pat_*) assert_pass "roster: admin mint of a desktop.account PAT" ;;
     *)
         assert_fail "roster: account PAT mint failed (logs/admin-mint.log)"
-        return
         ;;
     esac
     # A PAT is a devserver only when it carries the tunnel scope, so
@@ -1172,7 +1414,6 @@ scenario_roster() {
         assert_pass "roster: account PAT reads the roster (200)"
     else
         assert_fail "roster: expected 200, got $code: $roster_json"
-        return
     fi
     if [ "$(rrow "$roster_json" "$DS_A")" = "$ALICE_USER true owner" ]; then
         assert_pass "roster: own live devserver A is online (owner row)"
@@ -1187,7 +1428,7 @@ scenario_roster() {
     if [ "$(rrow "$roster_json" "$DS_BOB")" = "$BOB_USER false editor" ]; then
         assert_pass "roster: bob's claimed share listed (offline, editor)"
     else
-        assert_fail "roster: bob share row wrong in: $roster_json"
+        assert_fail "roster: bob share row wrong: '$row_bob' in: $roster_json"
     fi
     if printf %s "$roster_json" | grep -q "$account_dsid"; then
         assert_fail "roster: the account PAT's mint registered a phantom devserver row"
@@ -1239,7 +1480,7 @@ scenario_roster() {
 
     # Redial devserver A and wait for the flip back so the stack is
     # left as found.
-    spawn_devserver a "${DS_PORTS[0]}" "$PAT_A"
+    spawn_devserver a "${DS_PORTS[0]}" "$PAT_A" "$(node_tunnel_url p1)"
     local back=0
     for _ in $(seq 150); do
         code="$(roster_get "$WORK/roster3.json")"
@@ -1260,17 +1501,18 @@ scenario_roster() {
     # to end (the same two-hop shape check_entry_routes uses); the
     # shared row is registered but dark, so it answers the
     # devserver_offline reason.
-    local entry_body entry_url hdrs cookie hop1 hop2 host
+    local entry_body entry_url node hdrs cookie hop1 hop2 host
     entry_body="$(entry_for "$ROSTER_PAT" "{\"owner\":\"$ALICE_USER\",\"devserver_id\":\"$DS_A\"}")"
     entry_url="$(printf %s "$entry_body" | json_get entry_url)"
-    host="$ALICE_USER--$(disc "$DS_A").devserver.$DOMAIN"
+    node="$(tunnel_field "$DS_A" proxy_id)"
+    host="$ALICE_USER--$(disc "$DS_A").$node.$APEX"
     if [ -n "$entry_url" ]; then
         hdrs="$WORK/hdrs-roster-entry.txt"
-        hop1="$(curl_host "$host" -o /dev/null -w '%{http_code}' -D "$hdrs" "$entry_url")"
+        hop1="$(curl_node "$node" "$host" -o /dev/null -w '%{http_code}' -D "$hdrs" "$entry_url")"
         cookie="$(sed -n 's/^[Ss]et-[Cc]ookie: \(devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
         hop2=""
         if [ "$hop1" = "303" ] && [ -n "$cookie" ]; then
-            hop2="$(curl_host "$host" -o "$WORK/root-roster.html" -w '%{http_code}' \
+            hop2="$(curl_node "$node" "$host" -o "$WORK/root-roster.html" -w '%{http_code}' \
                 -H "Cookie: $cookie" "http://$host:$PROXY_PORT/")"
         fi
         if [ "$hop2" = "200" ] ||
@@ -1305,23 +1547,22 @@ scenario_roster() {
 # devservers bind loopback, so the mutable launcher surface is up)
 # and removes it afterwards so the stack is left as found.
 scenario_upload() {
-    local host body entry_url hdrs gate csrf cookies
-    host="$ALICE_USER--$(disc "$DS_A").devserver.$DOMAIN"
+    local host node body entry_url hdrs gate csrf cookies
+    node="$(tunnel_field "$DS_A" proxy_id)"
+    host="$ALICE_USER--$(disc "$DS_A").$node.$APEX"
     body="$(entry_for "$PAT_A" "{\"devserver_id\":\"$DS_A\"}")"
     entry_url="$(printf %s "$body" | json_get entry_url)"
     if [ -z "$entry_url" ]; then
         assert_fail "upload: no entry_url minted for devserver A: $body"
-        return
     fi
     hdrs="$WORK/hdrs-upload.txt"
-    curl_host "$host" -o /dev/null -D "$hdrs" "$entry_url" >/dev/null
+    curl_node "$node" "$host" -o /dev/null -D "$hdrs" "$entry_url" >/dev/null
     gate="$(sed -n 's/^[Ss]et-[Cc]ookie: \(devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
     csrf="$(sed -n 's/^[Ss]et-[Cc]ookie: devserver_csrf=\([^;]*\).*/\1/p' "$hdrs" | head -1)"
     if [ -n "$gate" ] && [ -n "$csrf" ]; then
         assert_pass "upload: entry 303 mints the gate + csrf cookie pair"
     else
         assert_fail "upload: expected devserver_gate + devserver_csrf on the entry 303"
-        return
     fi
     cookies="$gate; devserver_csrf=$csrf"
 
@@ -1333,7 +1574,7 @@ scenario_upload() {
     ws_dir="$WORK/upload-ws"
     rm -rf "$ws_dir"
     mkdir -p "$ws_dir"
-    add_body="$(curl_host "$host" -X POST \
+    add_body="$(curl_node "$node" "$host" -X POST \
         "http://$host:$PROXY_PORT/api/library/workspaces" \
         -H "Cookie: $cookies" -H "x-chan-csrf: $csrf" \
         -H "content-type: application/json" \
@@ -1344,7 +1585,6 @@ scenario_upload() {
         assert_pass "upload: workspace registered + mounted through the tunnel"
     else
         assert_fail "upload: workspace add through the tunnel failed: $add_body"
-        return
     fi
 
     # The guard half: no `x-chan-csrf` mirror -> the proxy's own 403
@@ -1353,7 +1593,7 @@ scenario_upload() {
     local payload code
     payload="$WORK/upload-payload.txt"
     printf 'tunneled upload payload\n' > "$payload"
-    code="$(curl_host "$host" -o "$WORK/upload-noheader.txt" -w '%{http_code}' \
+    code="$(curl_node "$node" "$host" -o "$WORK/upload-noheader.txt" -w '%{http_code}' \
         -X POST "http://$host:$PROXY_PORT/$prefix/api/files/upload" \
         -H "Cookie: $cookies" \
         -F "file=@$payload" -F "dir=")"
@@ -1366,7 +1606,7 @@ scenario_upload() {
     # The fix half: the mirrored header admits the multipart POST and
     # the devserver writes the file into the workspace root.
     local uploaded_path
-    code="$(curl_host "$host" -o "$WORK/upload-ok.json" -w '%{http_code}' \
+    code="$(curl_node "$node" "$host" -o "$WORK/upload-ok.json" -w '%{http_code}' \
         -X POST "http://$host:$PROXY_PORT/$prefix/api/files/upload" \
         -H "Cookie: $cookies" -H "x-chan-csrf: $csrf" \
         -F "file=@$payload" -F "dir=")"
@@ -1384,7 +1624,7 @@ scenario_upload() {
 
     # Leave the stack as found: unregister the scratch workspace (the
     # DELETE unmounts first; it is a mutation, so it carries the mirror).
-    code="$(curl_host "$host" -o /dev/null -w '%{http_code}' \
+    code="$(curl_node "$node" "$host" -o /dev/null -w '%{http_code}' \
         -X DELETE "http://$host:$PROXY_PORT/api/library/workspaces/$ws_id" \
         -H "Cookie: $cookies" -H "x-chan-csrf: $csrf")"
     if [ "$code" = "204" ] || [ "$code" = "200" ]; then
@@ -1404,30 +1644,29 @@ scenario_upload() {
 #   discard: DELETE /api/library/windows/{id}   (Cookie + X-Chan-CSRF)
 #   verify:  GET /api/library/windows           (record gone)
 scenario_windowclose() {
-    local host body entry_url hdrs gate csrf cookie code
-    host="$ALICE_USER--$(disc "$DS_A").devserver.$DOMAIN"
+    local host node body entry_url hdrs gate csrf cookie code
+    node="$(tunnel_field "$DS_A" proxy_id)"
+    host="$ALICE_USER--$(disc "$DS_A").$node.$APEX"
     body="$(entry_for "$PAT_A" "{\"devserver_id\":\"$DS_A\"}")"
     entry_url="$(printf %s "$body" | json_get entry_url)"
     if [ -z "$entry_url" ]; then
         assert_fail "windowclose: no entry_url minted for devserver A: $body"
-        return
     fi
     hdrs="$WORK/hdrs-windowclose.txt"
-    code="$(curl_host "$host" -o /dev/null -w '%{http_code}' -D "$hdrs" "$entry_url")"
+    code="$(curl_node "$node" "$host" -o /dev/null -w '%{http_code}' -D "$hdrs" "$entry_url")"
     gate="$(sed -n 's/^[Ss]et-[Cc]ookie: devserver_gate=\([^;]*\).*/\1/p' "$hdrs" | head -1)"
     csrf="$(sed -n 's/^[Ss]et-[Cc]ookie: devserver_csrf=\([^;]*\).*/\1/p' "$hdrs" | head -1)"
     if [ "$code" = "303" ] && [ -n "$gate" ] && [ -n "$csrf" ]; then
         assert_pass "windowclose: entry 303 mints the gate + csrf cookie pair"
     else
         assert_fail "windowclose: expected 303 + both cookies, got $code gate=${gate:+y} csrf=${csrf:+y}"
-        return
     fi
     cookie="devserver_gate=$gate; devserver_csrf=$csrf"
 
     # Mint a terminal window through the tunnel (the desktop's
     # mint_library_window shape) and confirm it lists.
     local wid
-    code="$(curl_host "$host" -o "$WORK/windowclose-mint.json" -w '%{http_code}' \
+    code="$(curl_node "$node" "$host" -o "$WORK/windowclose-mint.json" -w '%{http_code}' \
         -X POST -H "Cookie: $cookie" -H "X-Chan-CSRF: $csrf" \
         -H "content-type: application/json" -d '{"kind":"terminal"}' \
         "http://$host:$PROXY_PORT/api/library/windows")"
@@ -1436,21 +1675,19 @@ scenario_windowclose() {
         assert_pass "windowclose: window minted through the proxy ($wid)"
     else
         assert_fail "windowclose: mint expected 2xx + window_id, got $code: $(head -c 200 "$WORK/windowclose-mint.json")"
-        return
     fi
-    curl_host "$host" -o "$WORK/windowclose-list0.json" -s \
+    curl_node "$node" "$host" -o "$WORK/windowclose-list0.json" -s \
         -H "Cookie: $cookie" "http://$host:$PROXY_PORT/api/library/windows"
     if grep -q "\"$wid\"" "$WORK/windowclose-list0.json"; then
         assert_pass "windowclose: minted record is in the windows list"
     else
         assert_fail "windowclose: minted record missing from list: $(head -c 200 "$WORK/windowclose-list0.json")"
-        return
     fi
 
     # The guard half: a DELETE without the csrf mirror is refused at the
     # proxy (bare-body 403) and the record survives -- so the mirrored
     # header below is what makes the close land.
-    code="$(curl_host "$host" -o "$WORK/windowclose-nocsrf.txt" -w '%{http_code}' \
+    code="$(curl_node "$node" "$host" -o "$WORK/windowclose-nocsrf.txt" -w '%{http_code}' \
         -X DELETE -H "Cookie: $cookie" \
         "http://$host:$PROXY_PORT/api/library/windows/$wid")"
     if [ "$code" = "403" ] && grep -q '^forbidden$' "$WORK/windowclose-nocsrf.txt"; then
@@ -1458,34 +1695,565 @@ scenario_windowclose() {
     else
         assert_fail "windowclose: unmirrored DELETE expected 403 forbidden, got $code: $(head -c 120 "$WORK/windowclose-nocsrf.txt")"
     fi
-    curl_host "$host" -o "$WORK/windowclose-list1.json" -s \
+    curl_node "$node" "$host" -o "$WORK/windowclose-list1.json" -s \
         -H "Cookie: $cookie" "http://$host:$PROXY_PORT/api/library/windows"
     if grep -q "\"$wid\"" "$WORK/windowclose-list1.json"; then
         assert_pass "windowclose: the refused DELETE left the record in place"
     else
         assert_fail "windowclose: record vanished without an admitted DELETE"
-        return
     fi
 
     # The close half: the desktop's DELETE (Cookie + X-Chan-CSRF) lands
     # and the record leaves the next list fetch -- the reconcile has
     # nothing to reopen, so the window stays closed.
-    code="$(curl_host "$host" -o "$WORK/windowclose-del.txt" -w '%{http_code}' \
+    code="$(curl_node "$node" "$host" -o "$WORK/windowclose-del.txt" -w '%{http_code}' \
         -X DELETE -H "Cookie: $cookie" -H "X-Chan-CSRF: $csrf" \
         "http://$host:$PROXY_PORT/api/library/windows/$wid")"
     if [ "$code" = "200" ] || [ "$code" = "204" ]; then
         assert_pass "windowclose: csrf-mirrored DELETE answers $code"
     else
         assert_fail "windowclose: DELETE expected 2xx, got $code: $(head -c 200 "$WORK/windowclose-del.txt")"
-        return
     fi
-    curl_host "$host" -o "$WORK/windowclose-list2.json" -s \
+    curl_node "$node" "$host" -o "$WORK/windowclose-list2.json" -s \
         -H "Cookie: $cookie" "http://$host:$PROXY_PORT/api/library/windows"
     if grep -q "\"$wid\"" "$WORK/windowclose-list2.json"; then
         assert_fail "windowclose: record still present after DELETE: $(head -c 200 "$WORK/windowclose-list2.json")"
     else
         assert_pass "windowclose: record gone from the next windows fetch"
     fi
+}
+
+# ---------------------------------------------------------------
+# Fleet scenarios: the three-proxy matrix, shared-ingress
+# distribution, and the controller/proxy failure modes.
+# ---------------------------------------------------------------
+
+# mint_gate_cookie <pat> <user> <dsid>: runs the entry two-hop and
+# sets MC_NODE / MC_HOST / MC_COOKIE for the owning node. Scenarios
+# capture these BEFORE breaking something, because the aggregate row
+# they derive from may legitimately be gone afterwards.
+mint_gate_cookie() {
+    local pat="$1" user="$2" dsid="$3" body entry_url hdrs
+    MC_NODE=""
+    MC_HOST=""
+    MC_COOKIE=""
+    body="$(entry_for "$pat" "{\"devserver_id\":\"$dsid\"}")"
+    entry_url="$(printf %s "$body" | json_get entry_url)"
+    MC_NODE="$(tunnel_field "$dsid" proxy_id)"
+    [ -n "$entry_url" ] && [ -n "$MC_NODE" ] || return 1
+    MC_HOST="$user--$(disc "$dsid").$MC_NODE.$APEX"
+    hdrs="$WORK/hdrs-mc-$(disc "$dsid").txt"
+    curl_node "$MC_NODE" "$MC_HOST" -o /dev/null -D "$hdrs" "$entry_url" >/dev/null
+    MC_COOKIE="$(sed -n 's/^[Ss]et-[Cc]ookie: \(devserver_gate=[^;]*\).*/\1/p' "$hdrs" | head -1)"
+    [ -n "$MC_COOKIE" ]
+}
+
+node_readyz() { # node_readyz <proxy-id> -> http code of the node's /readyz
+    curl -sS -o /dev/null -w '%{http_code}' --max-time 2 -H "Host: $APEX" \
+        "http://$(node_ip "$1"):$PROXY_PORT/readyz" 2>/dev/null || true
+}
+
+# Scenario: the 3x3 node matrix plus aggregate admin completeness.
+# Every live tunnel is probed through every node: the owning node
+# answers 200, both non-owning nodes answer 404 (the host suffix
+# names a node they are not, so the request never reaches a gate
+# check). Afterwards the aggregate reads must still show exactly the
+# fleet the harness placed.
+scenario_matrix() {
+    local pats=("$PAT_A" "$PAT_B" "$PAT_D")
+    local dsids=("$DS_A" "$DS_B" "$DS_D")
+    local users=("$ALICE_USER" "$ALICE_USER" "$CAROL_USER")
+    local names=(A B D)
+    local i id owner host cookie codes expected
+    for i in 0 1 2; do
+        mint_gate_cookie "${pats[$i]}" "${users[$i]}" "${dsids[$i]}" || {
+            assert_fail "matrix: could not mint a gate cookie for devserver ${names[$i]}"
+        }
+        owner="$MC_NODE"
+        host="$MC_HOST"
+        cookie="$MC_COOKIE"
+        codes=""
+        expected=""
+        for id in "${PROXY_IDS[@]}"; do
+            codes+="$(curl_node "$id" "$host" -o /dev/null -w '%{http_code}' \
+                -H "Cookie: $cookie" "http://$host:$PROXY_PORT/api/health") "
+            if [ "$id" = "$owner" ]; then expected+="200 "; else expected+="404 "; fi
+        done
+        codes="${codes% }"
+        expected="${expected% }"
+        if [ "$codes" = "$expected" ]; then
+            assert_pass "matrix: ${names[$i]} on $owner serves 200, the other nodes 404 ($codes)"
+        else
+            assert_fail "matrix: ${names[$i]} expected '$expected', got '$codes'"
+        fi
+    done
+
+    # A green matrix can still hide a rejected gateway assertion in a
+    # client log (the assertion is verified devserver-side), so poll
+    # every client log before trusting the matrix.
+    if grep -lhi "assertion" "$LOGS"/ds-*.log 2>/dev/null | grep -q .; then
+        grep -hi "assertion" "$LOGS"/ds-*.log | tail -5
+        assert_fail "matrix: a devserver client logged an assertion failure"
+    else
+        assert_pass "matrix: no assertion failures in any devserver client log"
+    fi
+
+    # Aggregate completeness: exactly the placed rows, each with the
+    # owning proxy, and per-user reads that add up to the same set.
+    local agg expected_ids
+    agg="$(admin_read /admin/v1/tunnels | jrows devserver_id | sort | paste -sd' ')"
+    expected_ids="$(printf '%s\n' "$DS_A" "$DS_B" "$DS_D" | sort | paste -sd' ')"
+    if [ "$agg" = "$expected_ids" ]; then
+        assert_pass "matrix: /admin/v1/tunnels aggregates exactly the three registrations"
+    else
+        assert_fail "matrix: aggregate rows wrong: $agg"
+    fi
+    local alice_n carol_n
+    alice_n="$(tunnel_count)"
+    carol_n="$(admin_read "/admin/v1/users/$CAROL_USER/tunnels" | grep -o '"devserver_id"' | wc -l)"
+    if [ "$alice_n" = "2" ] && [ "$carol_n" = "1" ]; then
+        assert_pass "matrix: per-user reads stay complete across nodes (alice=2 carol=1)"
+    else
+        assert_fail "matrix: per-user reads wrong (alice=$alice_n carol=$carol_n)"
+    fi
+    local proxy_rows
+    proxy_rows="$(admin_read /admin/v1/proxies | jrows proxy_id status tunnel_count package_version | sort)"
+    if [ "$(printf '%s\n' "$proxy_rows" | wc -l)" = "3" ] &&
+        printf '%s\n' "$proxy_rows" | awk '$2!="active"||$3!=1||$4==""{f=1} END{exit f}'; then
+        assert_pass "matrix: /admin/v1/proxies shows three active rows with versions"
+    else
+        assert_fail "matrix: proxy rows wrong:
+$proxy_rows"
+    fi
+}
+
+# Scenario: shared-ingress distribution. Two more devservers (carol's
+# E, dave's F) dial the round-robin shim on the shared apex, so their
+# h2 connections land on different nodes; ownership must then stay
+# put (the row's proxy_id and connection fingerprint do not drift), each
+# tunnel routes only through its owning node, and an exact admin kill
+# evicts the registration on the owning process.
+scenario_sharedingress() {
+    spawn_devserver e "${DS_PORTS[4]}" "$PAT_E" "$SHIM_TUNNEL_URL"
+    spawn_devserver f "${DS_PORTS[5]}" "$PAT_F" "$SHIM_TUNNEL_URL"
+
+    local ne="" nf="" i
+    for i in $(seq 150); do
+        ne="$(tunnel_field "$DS_E" proxy_id)"
+        nf="$(tunnel_field "$DS_F" proxy_id)"
+        [ -n "$ne" ] && [ -n "$nf" ] && break
+        sleep 0.4
+    done
+    if [ -z "$ne" ] || [ -z "$nf" ]; then
+        assert_fail "sharedingress: E/F did not register through the shared apex (E='$ne' F='$nf')"
+    fi
+    if [ "$ne" != "$nf" ]; then
+        assert_pass "sharedingress: the edge distributed E and F across nodes (E=$ne F=$nf)"
+    else
+        assert_fail "sharedingress: E and F landed on the same node ($ne); round-robin broken"
+    fi
+
+    # Ownership is decided at admission and does not change afterwards.
+    local re1 rf1
+    re1="$(tunnel_fingerprint "$DS_E")"
+    rf1="$(tunnel_fingerprint "$DS_F")"
+    sleep 3
+    if [ "$(tunnel_fingerprint "$DS_E")" = "$re1" ] &&
+        [ "$(tunnel_fingerprint "$DS_F")" = "$rf1" ] &&
+        [ "$(tunnel_field "$DS_E" proxy_id)" = "$ne" ] &&
+        [ "$(tunnel_field "$DS_F" proxy_id)" = "$nf" ]; then
+        assert_pass "sharedingress: ownership stays put after acceptance"
+    else
+        assert_fail "sharedingress: ownership drifted after acceptance"
+    fi
+
+    check_entry_routes sh-e "$PAT_E" "$CAROL_USER" "$DS_E"
+    check_entry_routes sh-f "$PAT_F" "$DAVE_USER" "$DS_F"
+
+    # E's node host on F's node is 404: distribution did not make
+    # every node serve every tunnel.
+    local host_e code
+    host_e="$CAROL_USER--$(disc "$DS_E").$ne.$APEX"
+    code="$(curl_node "$nf" "$host_e" -o /dev/null -w '%{http_code}' "http://$host_e:$PROXY_PORT/api/health")"
+    if [ "$code" = "404" ]; then
+        assert_pass "sharedingress: E's host is 404 on F's node"
+    else
+        assert_fail "sharedingress: E's host on $nf expected 404, got $code"
+    fi
+
+    # Exact kills route to the owning process only; the rest of the
+    # fleet is untouched.
+    local kcode
+    kcode="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+        -H "Authorization: Bearer $TOK_ADMIN" \
+        "http://127.0.0.1:$CTL_ADMIN_PORT/admin/v1/tunnels/$CAROL_USER/$DS_E/kill")"
+    if [ "$kcode" = "204" ]; then
+        assert_pass "sharedingress: exact kill of E confirmed (204)"
+    else
+        assert_fail "sharedingress: exact kill of E expected 204, got $kcode"
+    fi
+    kcode="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+        -H "Authorization: Bearer $TOK_ADMIN" \
+        "http://127.0.0.1:$CTL_ADMIN_PORT/admin/v1/tunnels/$DAVE_USER/$DS_F/kill")"
+    if [ "$kcode" = "204" ]; then
+        assert_pass "sharedingress: exact kill of F confirmed (204)"
+    else
+        assert_fail "sharedingress: exact kill of F expected 204, got $kcode"
+    fi
+    # The 204 confirms the eviction on the owning process, so E's host
+    # stops routing immediately; the redialing client cannot beat this
+    # probe because it first has to rebuild its tunnel.
+    code="$(curl_node "$ne" "$host_e" -o /dev/null -w '%{http_code}' "http://$host_e:$PROXY_PORT/api/health")"
+    if [ "$code" = "404" ]; then
+        assert_pass "sharedingress: the kill evicted E on its owning node"
+    else
+        assert_fail "sharedingress: E still routes on $ne after the kill ($code)"
+    fi
+    # Stop the clients so their automatic redial cannot re-register,
+    # then the aggregate converges back to the three steady rows.
+    for n in e f; do
+        if [ -f "$WORK/pids/ds-$n.pid" ]; then
+            kill "$(cat "$WORK/pids/ds-$n.pid")" 2>/dev/null || true
+            rm -f "$WORK/pids/ds-$n.pid"
+        fi
+    done
+    local gone=0
+    for _ in $(seq 75); do
+        if [ -z "$(tunnel_field "$DS_E" proxy_id)" ] && [ -z "$(tunnel_field "$DS_F" proxy_id)" ]; then
+            gone=1
+            break
+        fi
+        sleep 0.4
+    done
+    if [ "$gone" = 1 ] && [ "$(fleet_count)" = "3" ]; then
+        assert_pass "sharedingress: only the killed rows left the aggregate"
+    else
+        assert_fail "sharedingress: aggregate did not return to 3 rows: $(admin_read /admin/v1/tunnels)"
+    fi
+}
+
+# Scenario: controller restart. The controller is killed and
+# immediately respawned: admin reads hold 503 through the new
+# convergence window, the reconnecting proxies' snapshots cancel
+# their local eviction timers before the 30s grace expires, the fleet
+# reconstructs every owner, and the existing tunnels survive (the
+# reconstructed rows keep the same connection fingerprints; a redial
+# would change both peer address and connect time).
+scenario_ctlrestart() {
+    local reg_a reg_b reg_d
+    reg_a="$(tunnel_fingerprint "$DS_A")"
+    reg_b="$(tunnel_fingerprint "$DS_B")"
+    reg_d="$(tunnel_fingerprint "$DS_D")"
+    if [ -z "$reg_a" ] || [ -z "$reg_b" ] || [ -z "$reg_d" ]; then
+        assert_fail "ctlrestart: missing pre-restart aggregate rows"
+    fi
+    mint_gate_cookie "$PAT_A" "$ALICE_USER" "$DS_A" ||
+        assert_fail "ctlrestart: could not mint a pre-restart cookie for A"
+    local host_a="$MC_HOST" node_a="$MC_NODE" cookie_a="$MC_COOKIE"
+
+    local pid
+    pid="$(cat "$WORK/pids/controller.pid")"
+    kill "$pid" 2>/dev/null
+    for _ in $(seq 25); do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.2
+    done
+    rm -f "$WORK/pids/controller.pid"
+    spawn_controller
+
+    local saw_readyz_503=0 saw_tunnels_503=0 mid="" code tcode i
+    for i in $(seq 220); do
+        code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 \
+            "http://127.0.0.1:$CTL_ADMIN_PORT/readyz" 2>/dev/null || true)"
+        [ "$code" = "503" ] && saw_readyz_503=1
+        if [ "$saw_tunnels_503" = 0 ]; then
+            tcode="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 \
+                -H "Authorization: Bearer $TOK_ADMIN" \
+                "http://127.0.0.1:$CTL_ADMIN_PORT/admin/v1/tunnels" 2>/dev/null || true)"
+            [ "$tcode" = "503" ] && saw_tunnels_503=1
+        fi
+        # A traffic probe about 8s into convergence: the data plane
+        # never depends on the controller.
+        if [ "$i" = 20 ] && [ -z "$mid" ]; then
+            mid="$(curl_node "$node_a" "$host_a" -o /dev/null -w '%{http_code}' \
+                -H "Cookie: $cookie_a" "http://$host_a:$PROXY_PORT/api/health")"
+        fi
+        [ "$code" = "200" ] && break
+        sleep 0.4
+    done
+    if [ "$code" != "200" ]; then
+        assert_fail "ctlrestart: controller did not converge (last readyz $code)"
+    fi
+    if [ "$saw_readyz_503" = 1 ]; then
+        assert_pass "ctlrestart: /readyz held 503 during convergence"
+    else
+        assert_fail "ctlrestart: /readyz never read 503 during convergence"
+    fi
+    if [ "$saw_tunnels_503" = 1 ]; then
+        assert_pass "ctlrestart: aggregate reads held 503 during convergence"
+    else
+        assert_fail "ctlrestart: /admin/v1/tunnels never read 503 during convergence"
+    fi
+    if [ "$mid" = "200" ]; then
+        assert_pass "ctlrestart: existing traffic routed mid-convergence"
+    else
+        assert_fail "ctlrestart: mid-convergence traffic probe expected 200, got $mid"
+    fi
+
+    if wait_fleet 3 75; then
+        assert_pass "ctlrestart: the fleet reconstructed all three owners"
+    else
+        assert_fail "ctlrestart: aggregate did not rebuild to 3 rows"
+    fi
+    if [ "$(tunnel_fingerprint "$DS_A")" = "$reg_a" ] &&
+        [ "$(tunnel_fingerprint "$DS_B")" = "$reg_b" ] &&
+        [ "$(tunnel_fingerprint "$DS_D")" = "$reg_d" ]; then
+        assert_pass "ctlrestart: snapshots cancelled eviction; no registration died"
+    else
+        assert_fail "ctlrestart: connection fingerprints changed across the restart"
+    fi
+    local per_node
+    per_node="$(admin_read /admin/v1/proxies | jrows proxy_id status tunnel_count | sort | paste -sd' ')"
+    if [ "$per_node" = "p1 active 1 p2 active 1 p3 active 1" ]; then
+        assert_pass "ctlrestart: proxy rows rebuilt with one tunnel each"
+    else
+        assert_fail "ctlrestart: proxy rows wrong after restart: $per_node"
+    fi
+    check_entry_routes ctlrestart-a "$PAT_A" "$ALICE_USER" "$DS_A"
+}
+
+# Scenario: one proxy's control stream drops. Killing relay-p2
+# severs exactly p2's stream: p2 goes unready and refuses new
+# admission immediately, p1/p3 stay ready, p2's existing traffic
+# survives inside its 30s grace, the controller drops the dead
+# session's rows while p1/p3 rows remain, and after grace p2 evicts
+# its registrations. Healing the relay lets p2 rejoin and B redial.
+scenario_proxydown() {
+    mint_gate_cookie "$PAT_B" "$ALICE_USER" "$DS_B" ||
+        assert_fail "proxydown: could not mint a pre-disconnect cookie for B"
+    local host_b="$MC_HOST" node_b="$MC_NODE" cookie_b="$MC_COOKIE"
+    if [ "$node_b" != "p2" ]; then
+        assert_fail "proxydown: B is expected on p2, found on '$node_b'"
+    fi
+
+    local pid
+    pid="$(cat "$WORK/pids/relay-p2.pid")"
+    kill "$pid" 2>/dev/null
+    rm -f "$WORK/pids/relay-p2.pid"
+    log "proxydown: relay-p2 killed; p2's control stream is dead"
+
+    local unready=0 code i
+    for _ in $(seq 75); do
+        code="$(node_readyz p2)"
+        [ "$code" = "503" ] && {
+            unready=1
+            break
+        }
+        sleep 0.2
+    done
+    if [ "$unready" = 1 ]; then
+        assert_pass "proxydown: p2 goes unready as soon as its control stream drops"
+    else
+        assert_fail "proxydown: p2 still reports ready without a control stream"
+    fi
+    for i in p1 p3; do
+        code="$(node_readyz "$i")"
+        if [ "$code" = "200" ]; then
+            assert_pass "proxydown: $i stays ready"
+        else
+            assert_fail "proxydown: $i expected ready, got $code"
+        fi
+    done
+
+    # New admission on the disconnected node is refused: G dials p2
+    # directly and never appears in the aggregate.
+    spawn_devserver g "${DS_PORTS[6]}" "$PAT_G" "$(node_tunnel_url p2)"
+    sleep 6
+    if [ -z "$(tunnel_field "$DS_G" proxy_id)" ]; then
+        assert_pass "proxydown: p2 refuses new admission while disconnected"
+    else
+        assert_fail "proxydown: G was admitted on a disconnected p2"
+    fi
+    if [ -f "$WORK/pids/ds-g.pid" ]; then
+        kill "$(cat "$WORK/pids/ds-g.pid")" 2>/dev/null || true
+        rm -f "$WORK/pids/ds-g.pid"
+    fi
+
+    # Only p2's registrations leave the aggregate.
+    local gone=0
+    for _ in $(seq 50); do
+        [ -z "$(tunnel_field "$DS_B" proxy_id)" ] && {
+            gone=1
+            break
+        }
+        sleep 0.4
+    done
+    if [ "$gone" = 1 ] && [ "$(tunnel_field "$DS_A" proxy_id)" = "p1" ] &&
+        [ "$(tunnel_field "$DS_D" proxy_id)" = "p3" ]; then
+        assert_pass "proxydown: only p2's registrations left the aggregate"
+    else
+        assert_fail "proxydown: aggregate rows wrong after the disconnect"
+    fi
+
+    # Inside grace the data path is untouched.
+    code="$(curl_node p2 "$host_b" -o /dev/null -w '%{http_code}' \
+        -H "Cookie: $cookie_b" "http://$host_b:$PROXY_PORT/api/health")"
+    if [ "$code" = "200" ]; then
+        assert_pass "proxydown: p2 traffic survives inside the grace window"
+    else
+        assert_fail "proxydown: B inside grace expected 200, got $code"
+    fi
+
+    # After the 30s grace p2 evicts everything it owns.
+    local evicted=0
+    for _ in $(seq 175); do
+        code="$(curl_node p2 "$host_b" -o /dev/null -w '%{http_code}' \
+            -H "Cookie: $cookie_b" "http://$host_b:$PROXY_PORT/api/health")"
+        [ "$code" = "404" ] && {
+            evicted=1
+            break
+        }
+        sleep 0.4
+    done
+    if [ "$evicted" = 1 ]; then
+        assert_pass "proxydown: p2 evicted its registrations after grace"
+    else
+        assert_fail "proxydown: B still routes on p2 well past grace (last $code)"
+    fi
+
+    # Heal: the relay returns, p2 rejoins, B redials and is admitted.
+    spawn "relay-p2" node "$WORK/tcp-shim.mjs" \
+        "127.0.0.1:$(node_relay_port p2)" "127.0.0.1:$CTL_PROXY_PORT"
+    if wait_ready proxy-p2 "http://$(node_ip p2):$PROXY_PORT/readyz" "$APEX"; then
+        assert_pass "proxydown: p2 rejoined the fleet after the relay healed"
+    else
+        assert_fail "proxydown: p2 did not rejoin after the relay healed"
+    fi
+    local back=0
+    for _ in $(seq 200); do
+        [ "$(tunnel_field "$DS_B" proxy_id)" = "p2" ] && {
+            back=1
+            break
+        }
+        sleep 0.4
+    done
+    if [ "$back" = 1 ] && [ "$(fleet_count)" = "3" ]; then
+        assert_pass "proxydown: B re-registered on p2; the fleet is whole again"
+    else
+        assert_fail "proxydown: B did not re-register on p2"
+    fi
+}
+
+# Scenario: controller outage. The controller is killed and stays
+# down past the grace window: every proxy goes unready, new admission
+# stops fleet-wide, identity fails closed without fleet state,
+# existing traffic survives inside grace, and after grace every proxy
+# evicts its registrations. Restarting the controller then rebuilds
+# the fleet from reconnecting proxies and redialing clients.
+scenario_ctloutage() {
+    mint_gate_cookie "$PAT_A" "$ALICE_USER" "$DS_A" ||
+        assert_fail "ctloutage: could not mint a pre-outage cookie for A"
+    local host_a="$MC_HOST" node_a="$MC_NODE" cookie_a="$MC_COOKIE"
+
+    local pid
+    pid="$(cat "$WORK/pids/controller.pid")"
+    kill "$pid" 2>/dev/null
+    for _ in $(seq 25); do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.2
+    done
+    rm -f "$WORK/pids/controller.pid"
+    log "ctloutage: controller is down and stays down past grace"
+
+    # Every proxy goes unready once its control stream dies.
+    local id code unready_n
+    unready_n=0
+    for _ in $(seq 75); do
+        unready_n=0
+        for id in "${PROXY_IDS[@]}"; do
+            [ "$(node_readyz "$id")" = "503" ] && unready_n=$((unready_n + 1))
+        done
+        [ "$unready_n" = 3 ] && break
+        sleep 0.2
+    done
+    if [ "$unready_n" = 3 ]; then
+        assert_pass "ctloutage: all three proxies go unready without the controller"
+    else
+        assert_fail "ctloutage: only $unready_n/3 proxies went unready"
+    fi
+
+    # Admission stops fleet-wide (G dials p1 directly and cannot
+    # register), and identity fails closed: no fleet state, no entry.
+    spawn_devserver g "${DS_PORTS[6]}" "$PAT_G" "$(node_tunnel_url p1)"
+    sleep 6
+    local ebody
+    ebody="$(entry_for "$PAT_A" "{\"devserver_id\":\"$DS_A\"}")"
+    if [ -z "$(printf %s "$ebody" | json_get entry_url)" ]; then
+        assert_pass "ctloutage: identity mints no entry without fleet state"
+    else
+        assert_fail "ctloutage: identity minted an entry during the outage: $ebody"
+    fi
+
+    # Existing traffic survives inside the grace window.
+    code="$(curl_node "$node_a" "$host_a" -o /dev/null -w '%{http_code}' \
+        -H "Cookie: $cookie_a" "http://$host_a:$PROXY_PORT/api/health")"
+    if [ "$code" = "200" ]; then
+        assert_pass "ctloutage: existing traffic survives inside grace"
+    else
+        assert_fail "ctloutage: A inside grace expected 200, got $code"
+    fi
+
+    # Past grace every proxy evicts what it owns.
+    local evicted=0
+    for _ in $(seq 175); do
+        code="$(curl_node "$node_a" "$host_a" -o /dev/null -w '%{http_code}' \
+            -H "Cookie: $cookie_a" "http://$host_a:$PROXY_PORT/api/health")"
+        [ "$code" = "404" ] && {
+            evicted=1
+            break
+        }
+        sleep 0.4
+    done
+    if [ "$evicted" = 1 ]; then
+        assert_pass "ctloutage: proxies evicted their registrations after grace"
+    else
+        assert_fail "ctloutage: A still routes on $node_a well past grace (last $code)"
+    fi
+    if [ -f "$WORK/pids/ds-g.pid" ]; then
+        kill "$(cat "$WORK/pids/ds-g.pid")" 2>/dev/null || true
+        rm -f "$WORK/pids/ds-g.pid"
+    fi
+
+    # Recovery: the controller returns, proxies rejoin with empty
+    # snapshots, the redialing clients are re-admitted after
+    # convergence, and G never appears.
+    spawn_controller
+    if wait_ready controller "http://127.0.0.1:$CTL_ADMIN_PORT/readyz"; then
+        assert_pass "ctloutage: controller reconverged after the outage"
+    else
+        assert_fail "ctloutage: controller did not reconverge"
+    fi
+    if wait_fleet 3 300; then
+        assert_pass "ctloutage: clients re-registered after recovery"
+    else
+        assert_fail "ctloutage: fleet did not rebuild to 3 rows after recovery"
+    fi
+    local owners
+    owners="$(admin_read /admin/v1/tunnels | jrows devserver_id proxy_id | sort)"
+    if [ "$(printf '%s\n' "$owners" | awk -v a="$DS_A" '$1==a{print $2}')" = "p1" ] &&
+        [ "$(printf '%s\n' "$owners" | awk -v b="$DS_B" '$1==b{print $2}')" = "p2" ] &&
+        [ "$(printf '%s\n' "$owners" | awk -v d="$DS_D" '$1==d{print $2}')" = "p3" ]; then
+        assert_pass "ctloutage: ownership rebuilt on the original nodes"
+    else
+        assert_fail "ctloutage: ownership wrong after recovery:
+$owners"
+    fi
+    if [ -z "$(tunnel_field "$DS_G" proxy_id)" ]; then
+        assert_pass "ctloutage: the outage admitted nothing (G never registered)"
+    else
+        assert_fail "ctloutage: G registered during the outage"
+    fi
+    check_entry_routes ctloutage-a "$PAT_A" "$ALICE_USER" "$DS_A"
 }
 
 run_scenarios() { # run_scenarios <all|name>
@@ -1507,8 +2275,4 @@ run_scenarios() { # run_scenarios <all|name>
 log ""
 log "==== assertion summary ($ASSERT_LOG) ===="
 cat "$ASSERT_LOG"
-if [ "$FAILURES" -gt 0 ]; then
-    log "RESULT: $FAILURES assertion(s) FAILED"
-    exit 1
-fi
 log "RESULT: all assertions passed"
