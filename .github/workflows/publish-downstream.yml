@@ -470,9 +470,30 @@ jobs:
       - name: Import the Arch Linux ARM rootfs
         run: |
           set -euo pipefail
-          base=https://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz
-          curl -fsSL --retry 3 "$base" -o /tmp/archlinuxarm.tar.gz
-          curl -fsSL --retry 3 "$base.sig" -o /tmp/archlinuxarm.tar.gz.sig
+          # os.archlinuxarm.org serves a certificate that does not cover its
+          # own hostname, so fetch from certificate-valid mirrors that carry
+          # both the rootfs and its signature. The pinned-key gpg verify below
+          # is the integrity anchor and runs on whatever the fetch produced;
+          # certificate verification is never relaxed to reach a broken host.
+          mirrors=(
+            https://ca.us.mirror.archlinuxarm.org/os
+            https://fl.us.mirror.archlinuxarm.org/os
+          )
+          fetched=""
+          for base in "${mirrors[@]}"; do
+            url="$base/ArchLinuxARM-aarch64-latest.tar.gz"
+            if curl -fsSL --retry 3 "$url" -o /tmp/archlinuxarm.tar.gz \
+              && curl -fsSL --retry 3 "$url.sig" -o /tmp/archlinuxarm.tar.gz.sig; then
+              fetched="$base"
+              break
+            fi
+            echo "::warning::$base did not serve both the rootfs and its signature; trying the next mirror"
+          done
+          if [ -z "$fetched" ]; then
+            echo "::error::no Arch Linux ARM mirror served both the rootfs and its signature"
+            exit 1
+          fi
+          echo "Fetched the Arch Linux ARM rootfs from $fetched"
           gpg --batch --keyserver hkps://keyserver.ubuntu.com \
             --recv-keys 68B3537F39A313B3E574D06777193F152BDBE6A6
           fingerprint=$(gpg --batch --with-colons --fingerprint \
