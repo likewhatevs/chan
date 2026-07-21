@@ -1237,6 +1237,12 @@ async fn devserver_shutdown_reaps_tenant_pty() {
 /// must release (a standalone serve on the same root then starts), and a fresh
 /// devserver on the same HOME must come back with the same token and re-mount
 /// the workspace from its persisted config.
+///
+/// Token equality here is WITHIN-ROTATION-WINDOW stability, not
+/// mint-once-forever: the first boot stamps `token_minted_at`, and a restart
+/// keeps the token only until it outlives DEVSERVER_TOKEN_MAX_AGE_SECS (30
+/// days) or an operator runs `chan devserver --rotate-token` (see
+/// devserver_rotate_token_retires_the_old_bearer_and_survives_restart).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn devserver_sigkill_releases_flock_and_survives_config() {
     let sandbox = Sandbox::new();
@@ -1265,13 +1271,99 @@ async fn devserver_sigkill_releases_flock_and_survives_config() {
     let token2 = devserver_token(&second);
     assert_eq!(
         token1, token2,
-        "devserver token must persist across SIGKILL"
+        "devserver token must persist across SIGKILL (within-rotation-window \
+         stability: the fresh mint stamped token_minted_at, so this restart \
+         sits inside the 30-day window)"
     );
 
     let entries = list_workspaces(&client, addr2, &token2).await;
     assert!(
         entries.iter().any(|e| e["prefix"] == prefix),
         "workspace did not re-mount from persisted config: {entries:?}"
+    );
+}
+
+/// The rotation contract end to end (devserver-token-rotation item): an
+/// operator rotate through the live management API retires the old bearer
+/// IMMEDIATELY, a SIGKILL + restart on the same HOME comes back with the
+/// ROTATED token (the stability window restarts at the rotation's mint), the
+/// pre-rotation token stays dead across the restart, and the persisted
+/// workspace set still re-mounts. Red mutation: leave `require_bearer` (or
+/// the launcher gates) reading a copy of the pre-rotation token, or rotate
+/// without persisting -- either fails an assert below.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn devserver_rotate_token_retires_the_old_bearer_and_survives_restart() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.workspace("rotated");
+
+    let (mut first, addr) = spawn_devserver_on_free_port(&sandbox).await;
+    let port = addr.port();
+    let token1 = devserver_token(&first);
+    let client = http();
+    let prefix = mount_workspace(&client, addr, &token1, &root).await;
+
+    // Rotate through the live management API under the current bearer.
+    let res = client
+        .post(format!("http://{addr}/api/devserver/rotate-token"))
+        .bearer_auth(&token1)
+        .send()
+        .await
+        .expect("rotate-token request");
+    assert!(
+        res.status().is_success(),
+        "rotate-token -> {}",
+        res.status()
+    );
+    let rotated: serde_json::Value = res.json().await.expect("rotate-token response json");
+    let token_new = rotated["token"]
+        .as_str()
+        .expect("rotate-token response carries the new token")
+        .to_string();
+    assert_ne!(token1, token_new, "rotation must mint a different bearer");
+
+    // The old bearer dies on the very next request; the new one authorizes.
+    let res = client
+        .get(format!("http://{addr}/api/devserver/workspaces"))
+        .bearer_auth(&token1)
+        .send()
+        .await
+        .expect("old-token probe");
+    assert_eq!(
+        res.status().as_u16(),
+        401,
+        "the pre-rotation bearer must stop authorizing on the live server"
+    );
+    let entries = list_workspaces(&client, addr, &token_new).await;
+    assert!(
+        entries.iter().any(|e| e["prefix"] == prefix),
+        "the rotated bearer must serve the management API: {entries:?}"
+    );
+
+    // SIGKILL (no shutdown flush): proves the rotation PERSISTED at rotation
+    // time. The restart re-emits the marker with the rotated token.
+    first.child.kill().expect("SIGKILL devserver");
+    first.child.wait().expect("reap killed devserver");
+    let (second, addr2) = spawn_devserver(&sandbox, port).await;
+    let token2 = devserver_token(&second);
+    assert_eq!(
+        token_new, token2,
+        "the restart must come back with the ROTATED token, not the original"
+    );
+    let res = client
+        .get(format!("http://{addr2}/api/devserver/workspaces"))
+        .bearer_auth(&token1)
+        .send()
+        .await
+        .expect("old-token probe after restart");
+    assert_eq!(
+        res.status().as_u16(),
+        401,
+        "the pre-rotation bearer must stay dead across the restart"
+    );
+    let entries = list_workspaces(&client, addr2, &token2).await;
+    assert!(
+        entries.iter().any(|e| e["prefix"] == prefix),
+        "workspace did not re-mount after rotate + restart: {entries:?}"
     );
 }
 
