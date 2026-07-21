@@ -41,8 +41,8 @@ pub use chan_shell::{ControlRequest, ControlResponse};
 // pushes a SurveySpec to the SPA and formats the SurveyReply for the CLI.
 // TeamOp tags the `cs terminal team` op (new | load).
 use chan_shell::{
-    submit_writes, Identity, PaneOp, PastePrefer, ResolvedSubmit, ServeKind, SubmitAgent,
-    SurveyReply, SurveySpec, TeamOp, MAX_CLIPBOARD_BYTES, MAX_CONTROL_REQUEST_BYTES,
+    submit_writes, Identity, PaneOp, PastePrefer, ServeKind, SubmitAgent, SurveyReply, SurveySpec,
+    TeamOp, MAX_CLIPBOARD_BYTES, MAX_CONTROL_REQUEST_BYTES,
 };
 
 #[derive(Debug, Serialize)]
@@ -1092,7 +1092,10 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
                 tab_name.as_deref(),
                 tab_group.as_deref(),
                 &data,
-                submit.as_ref(),
+                // Whether to submit, plus the agent the sender named. Any
+                // legacy client-resolved template is dropped here: the
+                // registry derives each session's chord itself.
+                submit.map(|s| s.agent()),
             ))
         }
         ControlRequest::TermList => {
@@ -3255,14 +3258,18 @@ fn strip_leading_slash(p: &Path) -> String {
 /// every terminal by accident. The bytes are not written to the PTY here:
 /// the per-session drainer delivers each queued write when its agent is idle
 /// (the serialization the Rich Prompt / poke-chain workflow needs), so
-/// compatible submitted writes can be framed together at drain time. The
-/// caller already resolved `submit`, including an env-only template override.
+/// compatible submitted writes can be framed together at drain time.
+///
+/// `submit` is the sender's request (submit, plus the agent it named); the
+/// registry derives each matched session's real agent and applies THAT
+/// chord. When they disagree, the reply says so next to the queue position,
+/// so a sender learns the correction instead of re-circulating a wrong name.
 fn term_write(
     registry: &TerminalRegistry,
     tab_name: Option<&str>,
     tab_group: Option<&str>,
     data: &str,
-    submit: Option<&ResolvedSubmit>,
+    submit: Option<SubmitAgent>,
 ) -> Result<String, String> {
     if tab_name.is_none() && tab_group.is_none() {
         return Err("term write needs a tab name and/or group selector".into());
@@ -3283,6 +3290,28 @@ fn term_write(
     };
     if outcome.full > 0 {
         message.push_str(&format!("; {} at queue cap (dropped)", outcome.full));
+    }
+    if let Some(requested) = submit {
+        // Registry map order is arbitrary; sort so a fan-out reply reads the
+        // same way every time.
+        let mut diverged = outcome.diverged;
+        diverged.sort_by(|a, b| a.tab.cmp(&b.tab));
+        for d in diverged {
+            match d.applied {
+                Some(applied) => message.push_str(&format!(
+                    "; {} runs {}, not {}: the {} chord was applied",
+                    d.tab,
+                    applied.name(),
+                    requested.name(),
+                    applied.name(),
+                )),
+                None => message.push_str(&format!(
+                    "; {} is a shell session: no {} chord applied",
+                    d.tab,
+                    requested.name(),
+                )),
+            }
+        }
     }
     Ok(message)
 }
@@ -3392,6 +3421,9 @@ fn term_list(registry: &TerminalRegistry, windows: &[WindowRecord]) -> Result<St
         };
         let entry = serde_json::json!({
             "name": summary.tab_name,
+            // The server-derived submit agent (null for a shell session), so
+            // a sender can look up a target's chord instead of guessing it.
+            "agent": summary.agent.map(SubmitAgent::name),
             "session_id": summary.session_id,
             "window": window,
             "window_kind": window_kind,
@@ -4956,6 +4988,118 @@ mod tests {
         term_write(&registry, Some("Watched"), None, "poke", None).expect("queued");
         term_write(&registry, Some("Watched"), None, "poke", None).expect("queued");
         assert_eq!(depth_of(&term_list(&registry, &[]).expect("term list")), 2);
+    }
+
+    #[test]
+    fn term_list_exposes_the_derived_agent_per_session() {
+        // The discovery half of the submit-chord authority: a sender reads
+        // the target's agent off the list instead of guessing it. CHAN_AGENT
+        // in the spawn env names the agent without spawning a real agent CLI.
+        let (_root, registry) = empty_registry();
+        use crate::terminal_sessions::CreateOptions;
+        for (name, agent_env) in [("poked", Some("codex")), ("plain", None)] {
+            registry
+                .create(CreateOptions {
+                    size: portable_pty::PtySize {
+                        rows: 24,
+                        cols: 80,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    },
+                    tab_name: Some((*name).to_string()),
+                    tab_group: None,
+                    window_id: None,
+                    mcp_env: false,
+                    cwd: None,
+                    command: None,
+                    env: agent_env
+                        .map(|a| [("CHAN_AGENT".to_string(), a.to_string())].into())
+                        .unwrap_or_default(),
+                })
+                .expect("spawn session");
+        }
+        let json = term_list(&registry, &[]).expect("term list");
+        let value: Value = serde_json::from_str(&json).expect("json");
+        let entries = value["groups"]["default"]
+            .as_array()
+            .expect("default group");
+        let agent_of = |n: &str| {
+            entries
+                .iter()
+                .find(|e| e["name"] == n)
+                .unwrap_or_else(|| panic!("entry {n} missing: {value}"))["agent"]
+                .clone()
+        };
+        assert_eq!(agent_of("poked"), serde_json::json!("codex"));
+        assert_eq!(agent_of("plain"), serde_json::json!(null));
+    }
+
+    #[test]
+    fn term_write_reports_a_submit_divergence_in_the_ack() {
+        // The authority half's visible edge: when the sender's --submit agent
+        // is not what the target runs, the ack says what was applied; a
+        // matching request stays a bare "queued at position N".
+        let (_root, registry) = empty_registry();
+        use crate::terminal_sessions::CreateOptions;
+        let spawn = |name: &str, agent_env: Option<&str>| {
+            registry
+                .create(CreateOptions {
+                    size: portable_pty::PtySize {
+                        rows: 24,
+                        cols: 80,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    },
+                    tab_name: Some(name.to_string()),
+                    tab_group: None,
+                    window_id: None,
+                    mcp_env: false,
+                    cwd: None,
+                    command: None,
+                    env: agent_env
+                        .map(|a| [("CHAN_AGENT".to_string(), a.to_string())].into())
+                        .unwrap_or_default(),
+                })
+                .expect("spawn session")
+        };
+        spawn("Watched", Some("codex"));
+        spawn("Sh", None);
+
+        let reply = term_write(
+            &registry,
+            Some("Watched"),
+            None,
+            "poke",
+            Some(SubmitAgent::Claude),
+        )
+        .expect("queued");
+        assert_eq!(
+            reply,
+            "queued at position 1; Watched runs codex, not claude: the codex chord was applied"
+        );
+
+        let reply = term_write(
+            &registry,
+            Some("Watched"),
+            None,
+            "poke",
+            Some(SubmitAgent::Codex),
+        )
+        .expect("queued");
+        assert_eq!(reply, "queued at position 2", "a match adds no note");
+
+        let reply = term_write(
+            &registry,
+            Some("Sh"),
+            None,
+            "poke",
+            Some(SubmitAgent::Claude),
+        )
+        .expect("queued");
+        assert_eq!(
+            reply,
+            "queued at position 1; Sh is a shell session: no claude chord applied"
+        );
     }
 
     #[test]

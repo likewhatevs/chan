@@ -793,17 +793,23 @@ SEE ALSO:
 pub(crate) const CS_TERMINAL_LIST: &str = r#"List every live terminal session this server owns, grouped by tab
 group.
 
-The markdown table carries one row per session: name, session id,
-window, pane, tab, window kind, window status and cwd. The window
+The markdown table carries one row per session: name, agent,
+session id, window, pane, tab, window kind, window status and
+cwd. `agent` is the server-derived submit agent (claude / codex /
+gemini / opencode, `-` for a shell session), derived from the
+session's spawn command and CHAN_AGENT spawn env; it is what a
+`cs terminal write --submit` delivery will actually encode for,
+so read it here instead of guessing a target's chord. The window
 columns are resolved against the library's window set, so a session
 reads back kind `workspace`, `standalone-terminal` or `control`
 with status `alive` / `offline` while its window has a row,
 `orphaned` once that window is gone, and `none` when the session
 was created outside any browser window. --json emits the raw
 payload ({"groups": {...}}) instead; --json --pretty indents it.
-The JSON form also carries queue_depth per session, the number of
-messages still pending in that session's write queue, which the
-markdown table omits.
+The JSON form carries the same `agent` field (null for a shell
+session) plus queue_depth per session, the number of messages
+still pending in that session's write queue, which the markdown
+table omits.
 "#;
 
 /// `cs terminal list` examples, side effects, and caveats.
@@ -1367,15 +1373,15 @@ only). At least one of --tab-name / --tab-group is required.
 The bytes are QUEUED, not written straight through. Each session
 has its own FIFO, and the drainer delivers only once that
 session's output has gone quiet. At one idle opportunity the
-longest run of consecutive --submit=claude / --submit=codex /
---submit=opencode messages is framed as a single chronological
-prompt, so a burst of notifications costs one agent turn instead
-of one turn each and the agent can reconcile them before acting.
-A write with no --submit, gemini, a Rich Prompt turn and a runtime
-submit override each end that run and are delivered on their own.
-The command prints the message's position among the
-target's pending messages and returns at once; it never waits for
-the agent's reply.
+longest run of consecutive submitted messages sharing the
+target's proven built-in encoding is framed as a single
+chronological prompt, so a burst of notifications costs one agent
+turn instead of one turn each and the agent can reconcile them
+before acting. A write with no --submit, a gemini target, a Rich
+Prompt turn and a runtime submit override each end that run and
+are delivered on their own. The command prints the message's
+position among the target's pending messages and returns at
+once; it never waits for the agent's reply.
 
 The queue holds 100 entries per target, where a gemini message
 costs two entries and every other message costs one. The queue is
@@ -1384,13 +1390,28 @@ detected from output quiescence, so a target sitting at its
 prompt with a PAUSED, half-typed buffer reads as idle; that rare
 case is not detected.
 
---submit encodes the bytes so the named agent submits them
-hands-free (trailing newlines are stripped first): claude appends a
-chord, codex and opencode wrap the text in bracketed paste plus a
-CR, while gemini takes the CR as its own later queue entry, one
-idle gate after the body. Omit it and the text parks in the agent's
-compose box unsubmitted, since a bare newline is a newline to an
-agent, not a submit.
+--submit submits the bytes into each target hands-free (trailing
+newlines are stripped first). The SERVER owns the encoding: for
+every matched session it derives that session's agent from the
+session's own spawn command and CHAN_AGENT spawn env, and applies
+THAT agent's chord, so the value you pass only records what you
+believed the target runs. A mismatch is corrected server-side and
+noted in the ack; a target that derives to no agent (a shell)
+receives plain text with no chord. The applied encodings: claude
+appends a chord, codex and opencode wrap the text in bracketed
+paste plus a CR, gemini takes the CR as its own later queue
+entry, one idle gate after the body. Omit --submit and the text
+parks in the agent's compose box unsubmitted, since a bare
+newline is a newline to an agent, not a submit.
+
+CHAN_AGENT is read from the TARGET session's spawn environment
+(it overrides the command sniff there); CHAN_MODE is read by
+nothing. Chord templates resolve where the derivation runs, in
+the SERVER's environment: env CHAN_SUBMIT_<AGENT>, then the
+server's <config>/chan/submit.toml, then the built-in default. A
+CHAN_SUBMIT_* value in the WRITER's environment has no effect.
+Discover a target's agent with cs terminal list (the agent
+column, null/- for a shell session).
 "#;
 
 /// `cs terminal write` examples, side effects, and caveats.
@@ -1407,13 +1428,17 @@ pub(crate) const CS_TERMINAL_WRITE_AFTER: &str = r#"EXAMPLES:
 
   printf 'review %s\n' notes.md \
     | cs t w --tab-group alpha --stdin --submit codex
-    one poke broadcast to every tab of group alpha
+    one poke broadcast to every tab of group alpha; each tab
+    gets its own server-derived chord, mixed agents included
 
 SIDE EFFECTS:
   Enqueues the bytes onto each matching session's write queue; the
   PTY sees them later, when the drainer fires. The ack ("queued at
   position N" for a single match, "queued to N terminal session(s)"
-  for a fan-out) goes to stderr; stdout stays empty.
+  for a fan-out) goes to stderr; stdout stays empty. When a
+  target's derived agent is not the one --submit named, the ack
+  appends the correction (e.g. "; @@B runs codex, not claude: the
+  codex chord was applied").
 
   --submit gemini is one logical queued message and one ack, but it
   occupies TWO entries: text, then a bare CR after a full idle gate.

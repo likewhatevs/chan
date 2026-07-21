@@ -23,10 +23,10 @@ use clap::{Args, Parser, Subcommand};
 use crate::help;
 
 use crate::control::{absolutize, control_socket_env, open_env, send_control_request};
-use crate::submit::{ResolvedSubmit, SubmitAgent};
+use crate::submit::SubmitAgent;
 use crate::wire::{
     ControlRequest, PaneOp, PastePrefer, SplitDir, SurveyFollowup, SurveySpec, TeamOp,
-    GRAPH_LINK_PREFIX, MAX_CLIPBOARD_BYTES,
+    TermWriteSubmit, GRAPH_LINK_PREFIX, MAX_CLIPBOARD_BYTES,
 };
 
 /// What `cs` is and what it needs to work. Consts rather than doc
@@ -726,14 +726,16 @@ pub enum TerminalAction {
         /// Read the bytes from this process's stdin instead of `cmd`.
         #[arg(long)]
         stdin: bool,
-        /// After the bytes, encode them so the named agent submits the input
-        /// hands-free (the completion-poke path). Trailing newlines are
-        /// stripped first. Values: `claude` (Cmd+Enter chord),
-        /// `gemini` (plain CR as its own later queue entry, one idle gate
-        /// after the body), or `codex` / `opencode` (bracketed-paste wrap +
-        /// CR in one write). Omit it to write pure bytes: the input parks in
-        /// the agent's compose box unsubmitted (a bare newline is a newline
-        /// to an agent, not a submit).
+        /// Submit the input into each target hands-free (the completion-poke
+        /// path). The SERVER picks the actual submit encoding: it derives
+        /// every matched session's agent from that session's own spawn
+        /// command and CHAN_AGENT, so the value here only says what you
+        /// believed the target runs; a mismatch is corrected server-side and
+        /// noted in the ack, and a shell target gets plain text with no
+        /// chord. Values: claude | codex | gemini | opencode. Omit the flag
+        /// to write pure bytes: the input parks in the agent's compose box
+        /// unsubmitted (a bare newline is a newline to an agent, not a
+        /// submit).
         #[arg(long, value_name = "AGENT", verbatim_doc_comment)]
         submit: Option<SubmitAgent>,
         /// Target every session with this tab name.
@@ -1782,9 +1784,11 @@ async fn cmd_shell_terminal(action: TerminalAction) -> Result<()> {
             } else {
                 cmd.ok_or_else(|| anyhow::anyhow!("cs terminal write needs a command or --stdin"))?
             };
-            // Resolve the logical submit metadata in this process so an
-            // env-only template override survives the control-wire hop. The
-            // server retains the text + resolved spec until drain time.
+            // The wire carries only the request: whether to submit, plus the
+            // agent this sender named (for the server's divergence note). The
+            // server derives each matched session's real agent and resolves
+            // the chord template in ITS environment, so a CHAN_SUBMIT_<AGENT>
+            // override must live server-side, not in this process.
             let socket = control_socket_env()?;
             let message = send_control_request(
                 &socket,
@@ -1792,7 +1796,7 @@ async fn cmd_shell_terminal(action: TerminalAction) -> Result<()> {
                     tab_name,
                     tab_group,
                     data,
-                    submit: submit.map(ResolvedSubmit::resolve),
+                    submit: submit.map(TermWriteSubmit::Agent),
                 },
             )
             .await?;
@@ -2340,13 +2344,16 @@ fn render_terminal_list_markdown(raw: &str) -> Result<String> {
     let mut out = String::new();
     for (group, sessions) in groups {
         out.push_str(&format!("## {group}\n\n"));
-        out.push_str("| name | session | window | pane | tab | kind | status | cwd |\n");
-        out.push_str("| --- | --- | --- | --- | --- | --- | --- | --- |\n");
+        out.push_str("| name | agent | session | window | pane | tab | kind | status | cwd |\n");
+        out.push_str("| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
         if let Some(arr) = sessions.as_array() {
             for s in arr {
                 out.push_str(&format!(
-                    "| {} | {} | {} | {} | {} | {} | {} | {} |\n",
+                    "| {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
                     str_field(s, "name"),
+                    // The server-derived submit agent ("-" for a shell
+                    // session), so a poker never has to guess the target.
+                    str_field(s, "agent"),
                     str_field(s, "session_id"),
                     str_field(s, "window"),
                     str_field(s, "pane"),
@@ -2508,26 +2515,29 @@ mod tests {
 
     #[test]
     fn terminal_list_markdown_renders_window_columns() {
-        let raw = r#"{"groups":{"default":[{"name":"probe","session_id":"s1","window":"w-abc","pane":"p-1","tab":"t-1","window_kind":"standalone-terminal","window_status":"alive","cwd":"/tmp"}]}}"#;
+        let raw = r#"{"groups":{"default":[{"name":"probe","agent":"codex","session_id":"s1","window":"w-abc","pane":"p-1","tab":"t-1","window_kind":"standalone-terminal","window_status":"alive","cwd":"/tmp"}]}}"#;
         let out = render_terminal_list_markdown(raw).expect("render");
         assert!(
-            out.contains("| name | session | window | pane | tab | kind | status | cwd |"),
+            out.contains("| name | agent | session | window | pane | tab | kind | status | cwd |"),
             "header: {out}"
         );
         assert!(
-            out.contains("| probe | s1 | w-abc | p-1 | t-1 | standalone-terminal | alive | /tmp |"),
+            out.contains(
+                "| probe | codex | s1 | w-abc | p-1 | t-1 | standalone-terminal | alive | /tmp |"
+            ),
             "row: {out}"
         );
     }
 
     #[test]
     fn terminal_list_markdown_tolerates_a_pre_identity_server() {
-        // A server that omits the window/pane/tab/kind/status fields renders `-`
-        // in those columns rather than erroring.
+        // A server that omits the agent/window/pane/tab/kind/status fields
+        // (or reports a null agent for a shell session) renders `-` in those
+        // columns rather than erroring.
         let raw = r#"{"groups":{"default":[{"name":"probe","session_id":"s1","cwd":"/tmp"}]}}"#;
         let out = render_terminal_list_markdown(raw).expect("render");
         assert!(
-            out.contains("| probe | s1 | - | - | - | - | - | /tmp |"),
+            out.contains("| probe | - | s1 | - | - | - | - | - | /tmp |"),
             "row: {out}"
         );
     }

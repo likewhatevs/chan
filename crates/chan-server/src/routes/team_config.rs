@@ -403,15 +403,18 @@ pub(crate) fn generate_bootstrap_md(
         \x20       $'poke from <me>: <1-line>; read <path>'\n\n",
     );
     out.push_str(
-        "`--submit=<target-agent>` appends the submit chord the TARGET agent reads,\n\
-         so the poke fires instead of parking in the compose box. Use the target's\n\
-         `agent` from the roster above:\n\n",
+        "`--submit=<target-agent>` makes the poke SUBMIT instead of parking in the\n\
+         compose box. The server derives each target's real agent from that\n\
+         session's spawn command and `CHAN_AGENT` spawn env (`CHAN_MODE` is read\n\
+         by nothing) and applies THAT chord, so a mismatched name still fires and\n\
+         the ack notes the correction; `cs terminal list` shows each session's\n\
+         derived agent. The roster above records what each member runs:\n\n",
     );
     out.push_str(&render_poke_chords(config));
     out.push_str(
-        "A shell member is not an agent: drop --submit and the buffer's trailing\n\
-         newline submits it. Without --submit the poke parks unsubmitted in an\n\
-         agent's compose box.\n\n",
+        "A shell member derives no agent and gets no chord ever: its trailing\n\
+         newline is what submits, with or without --submit. Without --submit an\n\
+         agent poke parks unsubmitted in the compose box.\n\n",
     );
 
     out.push_str("## Files\n\n");
@@ -575,8 +578,9 @@ pub(crate) fn generate_bootstrap_script(
             continue;
         };
         let prompt = identity_prompt(config, dir, m);
-        // --submit=<agent> appends the agent's submit chord so the poke
-        // fires instead of parking in the compose box (apply_submit_chord).
+        // --submit makes the poke fire instead of parking in the compose
+        // box; the server derives the target's chord at enqueue, and the
+        // <agent> named here is the same derived roster value.
         out.push_str(&format!(
             "cs terminal write --tab-name={} --submit={agent} $'{}'\n",
             sh_squote(&m.handle),

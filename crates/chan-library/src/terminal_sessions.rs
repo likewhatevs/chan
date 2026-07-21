@@ -25,7 +25,7 @@ use serde::Serialize;
 use tokio::sync::{broadcast, watch, Notify};
 use tokio::task::JoinHandle;
 
-use chan_shell::{plan_submitted_input, PtyInputPlan, ResolvedSubmit};
+use chan_shell::{plan_submitted_input, PtyInputPlan, ResolvedSubmit, SubmitAgent};
 
 use crate::config::TerminalConfig;
 use crate::time::{now_unix_millis, now_unix_secs};
@@ -327,6 +327,12 @@ pub struct TerminalSessionSummary {
     /// count the SPA badge shows, so `cs terminal list --json` can observe a
     /// drain from outside a browser.
     pub queue_depth: usize,
+    /// The submit agent this session's terminal runs, derived server-side
+    /// from its spawn command and `CHAN_AGENT` (the same rule the SPA session
+    /// frame uses). `None` is a shell session with no submit chord. Exposed
+    /// so a `cs terminal write` sender can discover a target's agent at
+    /// runtime instead of guessing it.
+    pub agent: Option<SubmitAgent>,
 }
 
 #[cfg(target_os = "linux")]
@@ -476,12 +482,26 @@ pub struct RosterEntry {
 /// were already at `WRITE_QUEUE_CAP` (the write was dropped for those), and
 /// `position` the message depth after the push when EXACTLY one session
 /// matched (the caller's 1-based position among the pending messages; `None`
-/// for a broadcast or a full single).
-#[derive(Debug, Default, Clone, Copy)]
+/// for a broadcast or a full single). `diverged` lists each QUEUED session
+/// whose server-derived agent disagrees with the agent the sender named, so
+/// the control reply can say what was actually applied.
+#[derive(Debug, Default, Clone)]
 pub struct EnqueueOutcome {
     pub queued: usize,
     pub full: usize,
     pub position: Option<usize>,
+    pub diverged: Vec<SubmitDivergence>,
+}
+
+/// One queued session whose derived agent disagrees with the sender's
+/// requested `--submit` agent. `applied: None` is a shell session: it
+/// received the text with no chord at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubmitDivergence {
+    /// The session's tab name, or its session id when unnamed, so the reply
+    /// can address the target the way the sender selected it.
+    pub tab: String,
+    pub applied: Option<SubmitAgent>,
 }
 
 #[derive(Debug)]
@@ -1345,6 +1365,7 @@ impl Registry {
                 tab_id: session.tab_id(),
                 cwd: session.cwd(),
                 queue_depth: session.queue_depth(),
+                agent: session.derived_submit_agent(),
             })
             .collect()
     }
@@ -1435,14 +1456,22 @@ impl Registry {
     /// semantics as `write_input_matching` (a `None` axis matches all; both
     /// narrow to the intersection), but the bytes are QUEUED, not written
     /// straight to the PTY: the drainer delivers logical messages when the
-    /// agent is idle. Submit encoding is retained until drain time. See
-    /// [`EnqueueOutcome`] for the return shape.
+    /// agent is idle. See [`EnqueueOutcome`] for the return shape.
+    ///
+    /// The server is authoritative over the chord. `submit` names the agent
+    /// the SENDER believed the target runs and means only "submit this";
+    /// each matched session's chord is derived HERE from that session's own
+    /// spawn command and `CHAN_AGENT`, and its template resolves in this
+    /// process's environment (env `CHAN_SUBMIT_<AGENT>` > `submit.toml` >
+    /// built-in). A group write onto a mixed-agent team therefore delivers a
+    /// per-session-correct chord, and a session that derives to no agent (a
+    /// shell) gets the plain text with no chord, whatever the sender asked.
     pub fn enqueue_write_matching(
         &self,
         tab_name: Option<&str>,
         tab_group: Option<&str>,
         data: &str,
-        submit: Option<&ResolvedSubmit>,
+        submit: Option<SubmitAgent>,
     ) -> EnqueueOutcome {
         let sessions = self.sessions.lock().expect("terminal registry poisoned");
         let matched: Vec<&Arc<Session>> = sessions
@@ -1466,11 +1495,27 @@ impl Registry {
         let single = matched.len() == 1;
         let mut outcome = EnqueueOutcome::default();
         for session in matched {
-            match session.enqueue_cs_write(data.to_string(), submit.cloned()) {
+            let derived = session.derived_submit_agent();
+            let resolved = match submit {
+                Some(_) => derived.map(ResolvedSubmit::resolve),
+                None => None,
+            };
+            match session.enqueue_cs_write(data.to_string(), resolved) {
                 Some(position) => {
                     outcome.queued += 1;
                     if single {
                         outcome.position = Some(position);
+                    }
+                    if let Some(requested) = submit {
+                        if derived != Some(requested) {
+                            outcome.diverged.push(SubmitDivergence {
+                                tab: session
+                                    .tab_name
+                                    .clone()
+                                    .unwrap_or_else(|| session.id.clone()),
+                                applied: derived,
+                            });
+                        }
                     }
                 }
                 None => outcome.full += 1,
@@ -3004,6 +3049,19 @@ impl Session {
         }
     }
 
+    /// The submit agent this session's terminal runs, derived from its own
+    /// spawn command and `CHAN_AGENT` spawn env -- the same
+    /// `SubmitAgent::derive` rule the SPA session frame uses
+    /// (`routes/terminal.rs::session_frame`). This is the server-side
+    /// authority for chord selection on the write path: `None` is a shell
+    /// session that never receives a chord.
+    fn derived_submit_agent(&self) -> Option<SubmitAgent> {
+        SubmitAgent::derive(
+            self.spawn_opts.command.as_deref().unwrap_or_default(),
+            self.spawn_opts.env.get("CHAN_AGENT").map(String::as_str),
+        )
+    }
+
     /// Push one `cs terminal write` message, all-or-nothing at the entry cap
     /// (a partial push could deliver a body whose chord was silently dropped).
     /// Returns the message depth after the push: the poke's 1-based position
@@ -3651,13 +3709,27 @@ mod tests {
     fn test_session_with_commands(
         ring_bytes: usize,
     ) -> (Arc<Session>, std::sync::mpsc::Receiver<PtyCommand>) {
+        test_agent_session(ring_bytes, "test-session", None, None, None, &[])
+    }
+
+    /// A fake session with explicit identity and spawn command/env, so the
+    /// server-side chord-authority tests can register mixed-agent sessions in
+    /// a Registry and observe delivered PTY bytes via the recorded commands.
+    fn test_agent_session(
+        ring_bytes: usize,
+        id: &str,
+        tab_name: Option<&str>,
+        tab_group: Option<&str>,
+        command: Option<&str>,
+        env: &[(&str, &str)],
+    ) -> (Arc<Session>, std::sync::mpsc::Receiver<PtyCommand>) {
         let (command_tx, command_rx) = std::sync::mpsc::channel();
         let (output_tx, _) = broadcast::channel(BROADCAST_CAP);
         let (write_queue, last_deliver_at, awaiting_gen) = fresh_queue_state();
         let session = Arc::new(Session {
-            id: "test-session".to_string(),
-            tab_name: None,
-            tab_group: None,
+            id: id.to_string(),
+            tab_name: tab_name.map(str::to_string),
+            tab_group: tab_group.map(str::to_string),
             window_id: Mutex::new(None),
             pane_id: Mutex::new(None),
             tab_id: Mutex::new(None),
@@ -3665,13 +3737,16 @@ mod tests {
             workspace_root: PathBuf::from("/"),
             spawn_opts: CreateOptions {
                 size: test_size(),
-                tab_name: None,
-                tab_group: None,
+                tab_name: tab_name.map(str::to_string),
+                tab_group: tab_group.map(str::to_string),
                 window_id: None,
                 mcp_env: true,
                 cwd: None,
-                command: None,
-                env: Default::default(),
+                command: command.map(str::to_string),
+                env: env
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
             },
             child_pid: None,
             #[cfg(target_os = "linux")]
@@ -3700,6 +3775,207 @@ mod tests {
             exit: Mutex::new(None),
         });
         (session, command_rx)
+    }
+
+    /// Register a fake session the way `create` would, so
+    /// `enqueue_write_matching` sees it. The write-authority tests need
+    /// sessions whose spawn command names an agent WITHOUT spawning that
+    /// agent for real.
+    fn register_session(registry: &Registry, session: &Arc<Session>) {
+        registry
+            .sessions
+            .lock()
+            .expect("terminal registry poisoned")
+            .insert(session.id.clone(), Arc::clone(session));
+    }
+
+    /// Deliver a session's queue head now: mark its output quiet, then tick
+    /// the drainer past the idle threshold.
+    fn drain_now(session: &Arc<Session>) {
+        let base = now_unix_millis();
+        session.last_output_at.store(base, Ordering::Relaxed);
+        session.try_drain_batch(base + WRITE_QUEUE_QUIET_MS + 10);
+    }
+
+    fn delivered_input(rx: &std::sync::mpsc::Receiver<PtyCommand>) -> Vec<u8> {
+        match rx.try_recv().expect("a delivered PTY command") {
+            PtyCommand::Input(data) => data,
+            PtyCommand::InputSequence { .. } => {
+                panic!("expected a single input write, got an input sequence")
+            }
+            _ => panic!("expected a single input write, got a non-input command"),
+        }
+    }
+
+    // The server-side chord authority: the sender's `--submit` value never
+    // picks delivery bytes; each matched session's chord derives from that
+    // session's own spawn command + CHAN_AGENT at enqueue.
+
+    #[test]
+    fn server_overrides_a_wrong_sender_chord_with_the_targets_own() {
+        let registry = Registry::new(test_config(1024, 4, 10));
+        let (codex, rx) =
+            test_agent_session(1024, "s-codex", Some("@@T"), None, Some("codex"), &[]);
+        register_session(&registry, &codex);
+
+        let outcome =
+            registry.enqueue_write_matching(Some("@@T"), None, "poke\n", Some(SubmitAgent::Claude));
+        assert_eq!(outcome.queued, 1);
+        assert_eq!(outcome.position, Some(1));
+        assert_eq!(
+            outcome.diverged,
+            vec![SubmitDivergence {
+                tab: "@@T".into(),
+                applied: Some(SubmitAgent::Codex),
+            }]
+        );
+
+        drain_now(&codex);
+        assert_eq!(
+            delivered_input(&rx),
+            b"\x1b[200~poke\x1b[201~\r".to_vec(),
+            "the target's codex chord must win over the sender's claude"
+        );
+    }
+
+    #[test]
+    fn a_shell_target_gets_no_chord_whatever_the_sender_asked() {
+        let registry = Registry::new(test_config(1024, 4, 10));
+        let (shell, rx) =
+            test_agent_session(1024, "s-shell", Some("@@Sh"), None, Some("bash"), &[]);
+        register_session(&registry, &shell);
+
+        let outcome = registry.enqueue_write_matching(
+            Some("@@Sh"),
+            None,
+            "poke\n",
+            Some(SubmitAgent::Claude),
+        );
+        assert_eq!(outcome.queued, 1);
+        assert_eq!(
+            outcome.diverged,
+            vec![SubmitDivergence {
+                tab: "@@Sh".into(),
+                applied: None,
+            }]
+        );
+
+        drain_now(&shell);
+        assert_eq!(
+            delivered_input(&rx),
+            b"poke\n".to_vec(),
+            "raw text only: no chord, trailing newline untouched"
+        );
+    }
+
+    #[test]
+    fn a_mixed_agent_group_broadcast_is_per_session_correct() {
+        let registry = Registry::new(test_config(1024, 8, 10));
+        let (claude, rx_claude) = test_agent_session(
+            1024,
+            "s-claude",
+            Some("@@A"),
+            Some("alpha"),
+            Some("claude"),
+            &[],
+        );
+        let (codex, rx_codex) = test_agent_session(
+            1024,
+            "s-codex",
+            Some("@@B"),
+            Some("alpha"),
+            Some("codex"),
+            &[],
+        );
+        let (shell, rx_shell) = test_agent_session(
+            1024,
+            "s-shell",
+            Some("@@C"),
+            Some("alpha"),
+            Some("bash"),
+            &[],
+        );
+        for session in [&claude, &codex, &shell] {
+            register_session(&registry, session);
+        }
+
+        let outcome =
+            registry.enqueue_write_matching(None, Some("alpha"), "poke", Some(SubmitAgent::Claude));
+        assert_eq!(outcome.queued, 3);
+        assert_eq!(outcome.position, None, "a broadcast reports no position");
+        let mut diverged = outcome.diverged;
+        diverged.sort_by(|a, b| a.tab.cmp(&b.tab));
+        assert_eq!(
+            diverged,
+            vec![
+                SubmitDivergence {
+                    tab: "@@B".into(),
+                    applied: Some(SubmitAgent::Codex),
+                },
+                SubmitDivergence {
+                    tab: "@@C".into(),
+                    applied: None,
+                },
+            ]
+        );
+
+        for session in [&claude, &codex, &shell] {
+            drain_now(session);
+        }
+        let delivered = [
+            delivered_input(&rx_claude),
+            delivered_input(&rx_codex),
+            delivered_input(&rx_shell),
+        ];
+        assert_eq!(delivered[0], b"poke\x1b[27;9;13~".to_vec());
+        assert_eq!(delivered[1], b"\x1b[200~poke\x1b[201~\r".to_vec());
+        assert_eq!(delivered[2], b"poke".to_vec());
+        assert!(
+            delivered[0] != delivered[1] && delivered[1] != delivered[2],
+            "one broadcast, three per-session byte strings"
+        );
+    }
+
+    #[test]
+    fn chan_agent_spawn_env_wins_over_the_spawn_command() {
+        let registry = Registry::new(test_config(1024, 8, 10));
+        // bash + CHAN_AGENT=codex: the env override names the agent.
+        let (env_codex, rx_codex) = test_agent_session(
+            1024,
+            "s-env-codex",
+            Some("@@E1"),
+            None,
+            Some("bash"),
+            &[("CHAN_AGENT", "codex")],
+        );
+        // codex + CHAN_AGENT=claude: the env override beats the command sniff.
+        let (env_claude, rx_claude) = test_agent_session(
+            1024,
+            "s-env-claude",
+            Some("@@E2"),
+            None,
+            Some("codex"),
+            &[("CHAN_AGENT", "claude")],
+        );
+        register_session(&registry, &env_codex);
+        register_session(&registry, &env_claude);
+
+        let outcome =
+            registry.enqueue_write_matching(Some("@@E1"), None, "poke", Some(SubmitAgent::Codex));
+        assert_eq!(outcome.queued, 1);
+        assert!(outcome.diverged.is_empty(), "requested matches derived");
+        let outcome =
+            registry.enqueue_write_matching(Some("@@E2"), None, "poke", Some(SubmitAgent::Claude));
+        assert_eq!(outcome.queued, 1);
+        assert!(outcome.diverged.is_empty(), "requested matches derived");
+
+        drain_now(&env_codex);
+        drain_now(&env_claude);
+        assert_eq!(
+            delivered_input(&rx_codex),
+            b"\x1b[200~poke\x1b[201~\r".to_vec()
+        );
+        assert_eq!(delivered_input(&rx_claude), b"poke\x1b[27;9;13~".to_vec());
     }
 
     async fn collect_until(session: &mut AttachHandle, needle: &str, timeout: Duration) -> String {

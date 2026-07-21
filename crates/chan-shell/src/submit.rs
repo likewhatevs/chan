@@ -77,8 +77,9 @@ pub enum SubmitTemplateSource {
 }
 
 /// The submit metadata carried with logical terminal input until drain time.
-/// Resolving in the producer preserves env-only overrides from a short-lived
-/// `cs` process instead of asking the server to resolve them again.
+/// Resolved where the chord authority lives, in the server: from the derived
+/// per-session agent at enqueue (`cs terminal write`) or from the SPA-sent
+/// agent name (Rich Prompt), against the server's own env and config.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedSubmit {
     pub agent: SubmitAgent,

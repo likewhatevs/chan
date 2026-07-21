@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::submit::ResolvedSubmit;
+use crate::submit::{ResolvedSubmit, SubmitAgent};
 
 /// Default `cs terminal survey` reply window, in seconds. The CLI flag
 /// `--timeout` defaults to the same value; this serde default only covers a
@@ -48,6 +48,33 @@ pub const GRAPH_LINK_PREFIX: &str = "chan://graph?";
 /// grow the request `String` without bound; an over-cap line is truncated and
 /// fails to parse, yielding a clean error instead of an OOM.
 pub const MAX_CONTROL_REQUEST_BYTES: u64 = 48 * 1024 * 1024;
+
+/// The submit request riding a [`ControlRequest::TermWrite`]: present means
+/// "submit into the target", and the agent NAME is what the sender believed
+/// the target runs (kept only for the server's divergence note). The server
+/// derives each matched session's real agent and resolves the chord template
+/// in its own environment, so nothing in this value picks delivery bytes.
+///
+/// Untagged so the current client's bare agent name (`"claude"`) and the
+/// former client shape (a fully client-resolved `ResolvedSubmit` object)
+/// both decode: an older `cs` against a newer server keeps working, with its
+/// client-resolved template ignored in favor of the server's own resolution.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum TermWriteSubmit {
+    Agent(SubmitAgent),
+    LegacyResolved(ResolvedSubmit),
+}
+
+impl TermWriteSubmit {
+    /// The agent the sender named, whichever wire shape carried it.
+    pub fn agent(&self) -> SubmitAgent {
+        match self {
+            TermWriteSubmit::Agent(agent) => *agent,
+            TermWriteSubmit::LegacyResolved(resolved) => resolved.agent,
+        }
+    }
+}
 
 /// A command from a `cs`-spawned terminal to the chan-server it belongs
 /// to. The internal `type` tag plus `snake_case` variant names are the
@@ -147,6 +174,12 @@ pub enum ControlRequest {
     },
     // Category 2: act on / inspect live PTY sessions the server owns. No
     // window_id; the server resolves sessions through its registry.
+    //
+    // `submit` present means "submit this into the target(s)"; the value is
+    // the agent the SENDER believes the target runs. The server is
+    // authoritative over the chord: it derives each matched session's real
+    // agent and applies THAT chord, reporting a divergence in the reply, so
+    // the sender's value never picks delivery bytes.
     TermWrite {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tab_name: Option<String>,
@@ -154,7 +187,7 @@ pub enum ControlRequest {
         tab_group: Option<String>,
         data: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        submit: Option<ResolvedSubmit>,
+        submit: Option<TermWriteSubmit>,
     },
     TermList,
     // Category 2: list the windows this tenant knows about -- the same
@@ -598,33 +631,50 @@ impl SurveyReply {
 #[cfg(test)]
 mod term_write_wire_tests {
     //! These pin the EXACT on-wire JSON of the terminal write request. The
-    //! logical text plus the resolved submit spec are what the server retains
-    //! until drain time, so a serde rename that drifts them changes delivery
-    //! bytes with a green build.
+    //! logical text is what the server retains until drain time, and the
+    //! submit field is the sender's request (whether to submit, plus the
+    //! agent name it believed the target runs), so a serde rename that
+    //! drifts them changes delivery with a green build.
     use super::*;
 
     #[test]
-    fn term_write_carries_logical_text_and_resolved_submit() {
+    fn term_write_carries_logical_text_and_requested_agent() {
         let request = ControlRequest::TermWrite {
             tab_name: Some("@@Worker".into()),
             tab_group: None,
             data: "poke\n".into(),
-            submit: Some(ResolvedSubmit {
-                agent: crate::SubmitAgent::Claude,
-                template: "{}\x1b[27;9;13~".into(),
-                source: crate::SubmitTemplateSource::BuiltIn,
-            }),
+            submit: Some(TermWriteSubmit::Agent(crate::SubmitAgent::Claude)),
         };
         let raw = serde_json::to_string(&request).unwrap();
         assert_eq!(
             raw,
-            r#"{"type":"term_write","tab_name":"@@Worker","data":"poke\n","submit":{"agent":"claude","template":"{}\u001b[27;9;13~","source":"built_in"}}"#
+            r#"{"type":"term_write","tab_name":"@@Worker","data":"poke\n","submit":"claude"}"#
         );
         let back: ControlRequest = serde_json::from_str(&raw).unwrap();
         match back {
             ControlRequest::TermWrite { data, submit, .. } => {
                 assert_eq!(data, "poke\n");
-                assert_eq!(submit.unwrap().agent, crate::SubmitAgent::Claude);
+                assert_eq!(submit.unwrap().agent(), crate::SubmitAgent::Claude);
+            }
+            other => panic!("expected term_write, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn term_write_still_decodes_the_legacy_resolved_submit_object() {
+        // A pre-authority `cs` resolves the template client-side and sends
+        // the full object. The server keeps decoding that shape, reading only
+        // the agent name; the client-resolved template is superseded by the
+        // server's own per-session resolution.
+        let raw = concat!(
+            r#"{"type":"term_write","tab_name":"@@Worker","data":"poke\n","#,
+            r#""submit":{"agent":"codex","template":"{}TAIL","source":"built_in"}}"#
+        );
+        let back: ControlRequest = serde_json::from_str(raw).unwrap();
+        match back {
+            ControlRequest::TermWrite { data, submit, .. } => {
+                assert_eq!(data, "poke\n");
+                assert_eq!(submit.unwrap().agent(), crate::SubmitAgent::Codex);
             }
             other => panic!("expected term_write, got {other:?}"),
         }
