@@ -1,8 +1,8 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use gateway_common::devserver_control_client::DevserverControlError;
 use gateway_common::profile_client::ProfileError;
-use gateway_common::workspace_admin_client::WorkspaceAdminError;
 use serde_json::json;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -72,15 +72,15 @@ impl From<ProfileError> for Error {
     }
 }
 
-/// devserver-proxy admin failures only surface in the account-delete and
-/// token-revoke paths. Map them to Upstream so the caller can decide
+/// devserver-control admin failures only surface in the account-delete
+/// and token-revoke paths. Map them to Upstream so the caller can decide
 /// whether to log-and-continue (every current caller does) or to
 /// `?` straight through.
-impl From<WorkspaceAdminError> for Error {
-    fn from(e: WorkspaceAdminError) -> Self {
+impl From<DevserverControlError> for Error {
+    fn from(e: DevserverControlError) -> Self {
         match e {
-            WorkspaceAdminError::Upstream(m) => Error::Upstream(m),
-            WorkspaceAdminError::Reqwest(e) => Error::Reqwest(e),
+            DevserverControlError::Upstream(m) => Error::Upstream(m),
+            DevserverControlError::Reqwest(e) => Error::Reqwest(e),
         }
     }
 }
@@ -113,7 +113,7 @@ impl IntoResponse for Error {
             Error::Gone(m) => (StatusCode::GONE, error_body(m)),
             Error::Conflict(m) => (StatusCode::CONFLICT, error_body(m)),
             // Upstream detail (oauth2 RequestTokenError, profile-service body,
-            // devserver-proxy admin response) stays in the server log; the public
+            // devserver-control admin response) stays in the server log; the public
             // body is fixed so OAuth provider errors and profile SQL fragments
             // do not leak through the 502.
             Error::Upstream(detail) => {

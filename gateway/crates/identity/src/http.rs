@@ -112,7 +112,7 @@ pub fn router(
     token_throttle: TokenThrottle,
 ) -> Router {
     // Host-only on id.chan.app: no Domain attribute, so the cookie
-    // does not propagate to devserver.chan.app or its subdomains. The
+    // does not propagate to the proxy fleet's tenant origins. The
     // devserver-gate handoff covers the cross-service auth need; see
     // crates/identity/design.md.
     let session_layer = SessionManagerLayer::new(store)
@@ -626,13 +626,13 @@ struct DevserverView {
 #[derive(Serialize)]
 struct MeResponse {
     user: User,
-    /// Live devserver snapshot for this user, sourced from the proxy
-    /// admin tunnel list (one row per live devserver). Empty when
-    /// nothing is connected (or the user is blocked, or the proxy is
-    /// unreachable; in the unreachable case we log and serve an empty
-    /// list so the dashboard renders). Per-workspace online state is
-    /// NOT here: it comes from the devserver's own API over the
-    /// owner's direct connection (design 4.1).
+    /// Live devserver snapshot for this user, sourced from the
+    /// controller admin tunnel list (one row per live devserver).
+    /// Empty when nothing is connected (or the user is blocked, or the
+    /// controller is unreachable; in the unreachable case we log and
+    /// serve an empty list so the dashboard renders). Per-workspace
+    /// online state is NOT here: it comes from the devserver's own API
+    /// over the owner's direct connection (design 4.1).
     devservers: Vec<DevserverView>,
     /// Resolved feature flags for this user. Map of flag_key -> bool.
     /// Sourced from profile each call (no caching) so a gradual
@@ -649,9 +649,9 @@ async fn me(State(state): State<AppState>, session: Session) -> Result<Response>
         return Err(Error::Unauthorized);
     };
 
-    // Workspace list comes from devserver-proxy. Blocked users get an empty
+    // Workspace list comes from devserver-control. Blocked users get an empty
     // list; the SPA renders the blocked view from `user.blocked_at`.
-    // devserver-proxy outages also surface as empty (with a log line)
+    // devserver-control outages also surface as empty (with a log line)
     // rather than failing the whole `/api/me`: the dashboard is the
     // user's only way to discover other state (rename, PATs, account
     // delete), and that state still loads from profile-service.
@@ -737,7 +737,7 @@ async fn providers_list(State(state): State<AppState>) -> Json<ProvidersResponse
 
 async fn delete_profile(State(state): State<AppState>, session: Session) -> Result<StatusCode> {
     let uid = current_user_id(&session).await?;
-    // Look the user up before delete so we can hand devserver-proxy the
+    // Look the user up before delete so we can hand devserver-control the
     // username for the bulk tunnel evict; the row is gone after the
     // DELETE returns, including via FK cascade. Tolerate "already
     // gone" (cookie outlived the row) by treating None as a no-op.
@@ -752,7 +752,7 @@ async fn delete_profile(State(state): State<AppState>, session: Session) -> Resu
     state.cfg.profile_client.delete_user(uid).await?;
 
     // Best-effort: drop every live tunnel the user had open.
-    // devserver-proxy holds those substreams in-process, so the cascade
+    // The proxy fleet holds those substreams in-process, so the cascade
     // above doesn't reach them. A failure here logs and continues;
     // the remote chan devserver will get rejected on its next handshake
     // anyway because the PAT is now gone.
@@ -974,7 +974,7 @@ async fn tokens_revoke(
     // open. chan-serve instances using a non-revoked token will
     // reconnect on the next handshake; instances using the revoked
     // token fail the next validate and stay disconnected. A failure
-    // to reach devserver-proxy logs and continues; the next handshake
+    // to reach devserver-control logs and continues; the next handshake
     // will refuse the token anyway via the DB check.
     if let Some(client) = &state.cfg.workspace_admin {
         match client.kill_user_tunnels(&user.username).await {
@@ -1188,6 +1188,11 @@ enum EntryTarget {
     Ok {
         devserver_id: String,
         role: String,
+        /// Controller-reported base of the proxy node holding the
+        /// registration. The entry mint validates it against the
+        /// configured proxy namespace and builds the tenant origin
+        /// from it; identity never derives a host on its own.
+        proxy_base_url: String,
     },
     /// No live tunnel matches: none at all, none matching the
     /// selector, or an ambiguous disc prefix.
@@ -1206,7 +1211,7 @@ enum EntryTarget {
 /// to the first (sorted) one the caller can access, so pre-disc
 /// clients keep a deterministic target. The access check runs per
 /// candidate; the loop is bounded by the owner's live set (itself
-/// bounded by the proxy's devserver cap).
+/// bounded by the controller's fleet-wide devserver cap).
 async fn resolve_entry_target(
     state: &AppState,
     owner_id: Uuid,
@@ -1214,35 +1219,32 @@ async fn resolve_entry_target(
     caller: Uuid,
     selector: Option<&str>,
 ) -> Result<EntryTarget> {
-    let client =
-        state.cfg.workspace_admin.as_ref().ok_or_else(|| {
-            Error::Anyhow(anyhow::anyhow!("workspace admin client not configured"))
-        })?;
-    let mut ids: Vec<String> = client
-        .list_user_tunnels(owner_username)
-        .await?
-        .into_iter()
-        .map(|t| t.devserver_id)
-        .collect();
+    let client = state.cfg.workspace_admin.as_ref().ok_or_else(|| {
+        Error::Anyhow(anyhow::anyhow!(
+            "devserver-control admin client not configured"
+        ))
+    })?;
+    let mut tunnels = client.list_user_tunnels(owner_username).await?;
     if let Some(sel) = selector {
-        ids.retain(|id| id.starts_with(sel));
-        if ids.len() > 1 {
+        tunnels.retain(|t| t.devserver_id.starts_with(sel));
+        if tunnels.len() > 1 {
             return Ok(EntryTarget::Offline);
         }
     }
-    if ids.is_empty() {
+    if tunnels.is_empty() {
         return Ok(EntryTarget::Offline);
     }
-    for id in ids {
+    for t in tunnels {
         if let Some(access) = state
             .cfg
             .profile_client
-            .devserver_access(owner_id, &id, caller)
+            .devserver_access(owner_id, &t.devserver_id, caller)
             .await?
         {
             return Ok(EntryTarget::Ok {
-                devserver_id: id,
+                devserver_id: t.devserver_id,
                 role: access.role,
+                proxy_base_url: t.proxy_base_url,
             });
         }
     }
@@ -1262,9 +1264,10 @@ async fn resolve_entry_target(
 ///      call profile `devserver_access?as=<self>` on it. Owner and grantee
 ///      both return a role; no-access (or no live devserver) returns 404.
 ///      A grant gives the WHOLE devserver.
-///   3. On access, mint an entry JWT (drv = the devserver_id) against the
-///      owner's `{owner}.devserver.chan.app` host and 303 to the proxy so
-///      it sets its gate cookies and serves `/{workspace}/`.
+///   3. On access, mint an entry JWT (drv = the devserver_id) against
+///      the tenant origin built from the controller row's node base
+///      (`{owner}--{disc}.{proxy}.<apex>`) and 303 to that node so it
+///      sets its gate cookies and serves `/{workspace}/`.
 async fn share_landing(
     State(state): State<AppState>,
     session: Session,
@@ -1324,8 +1327,12 @@ async fn share_landing(
         selector.as_deref(),
     )
     .await?;
-    let (devserver_id, role) = match target {
-        EntryTarget::Ok { devserver_id, role } => (devserver_id, role),
+    let (devserver_id, role, proxy_base_url) = match target {
+        EntryTarget::Ok {
+            devserver_id,
+            role,
+            proxy_base_url,
+        } => (devserver_id, role, proxy_base_url),
         EntryTarget::Offline | EntryTarget::Denied => {
             tracing::info!(
                 owner = %owner_user.username,
@@ -1337,13 +1344,14 @@ async fn share_landing(
         }
     };
 
-    let host = state
+    // The tenant origin comes from the controller row's node base, not
+    // from the shared apex: a row identity cannot place inside the
+    // configured proxy namespace is an upstream failure, never a mint.
+    let tenant = state
         .cfg
-        .devserver_host_for(&owner_user.username, &devserver_id);
-    let aud = chan_tunnel_proto::gateway_assertion::canonical_audience(&format!(
-        "{host}{}",
-        state.cfg.workspace_public_port
-    ));
+        .tenant_origin_for(&owner_user.username, &devserver_id, &proxy_base_url)
+        .map_err(|e| Error::Upstream(e.to_string()))?;
+    let aud = chan_tunnel_proto::gateway_assertion::canonical_audience(&tenant.authority);
     let token = gateway_common::devserver_gate::encode_entry(
         state.cfg.workspace_gate_secret.as_bytes(),
         uid,
@@ -1363,11 +1371,7 @@ async fn share_landing(
         "share landing: minting entry token",
     );
 
-    let url = format!(
-        "{scheme}://{host}{port}/{workspace}/?t={token}",
-        scheme = state.cfg.workspace_public_scheme,
-        port = state.cfg.workspace_public_port,
-    );
+    let url = format!("{}/{workspace}/?t={token}", tenant.origin);
     Ok(Redirect::to(&url))
 }
 
@@ -1375,8 +1379,9 @@ async fn share_landing(
 /// devserver ROOT. Same flow as `share_landing` minus the `/{workspace}`
 /// segment: resolve the owner's one live devserver, check access (owner
 /// or grantee), mint an entry JWT (`drv` = that devserver_id) against
-/// `{owner}.devserver.chan.app`, and 303 to the proxy ROOT `…/?t={token}`
-/// so the proxy sets its gate cookies and forwards `/` to the launcher. The
+/// the owning node's tenant origin, and 303 to that node's ROOT
+/// `…/?t={token}` so the proxy sets its gate cookies and forwards `/`
+/// to the launcher. The
 /// per-workspace `share_landing` above is the same shape with a tenant path.
 async fn share_landing_root(
     State(state): State<AppState>,
@@ -1437,8 +1442,12 @@ async fn share_landing_root(
         selector.as_deref(),
     )
     .await?;
-    let (devserver_id, role) = match target {
-        EntryTarget::Ok { devserver_id, role } => (devserver_id, role),
+    let (devserver_id, role, proxy_base_url) = match target {
+        EntryTarget::Ok {
+            devserver_id,
+            role,
+            proxy_base_url,
+        } => (devserver_id, role, proxy_base_url),
         EntryTarget::Offline | EntryTarget::Denied => {
             tracing::info!(
                 owner = %owner_user.username,
@@ -1449,13 +1458,14 @@ async fn share_landing_root(
         }
     };
 
-    let host = state
+    // Same fail-closed rule as the per-workspace landing: the tenant
+    // origin comes from the controller row's node base, and a row
+    // outside the configured proxy namespace is an upstream failure.
+    let tenant = state
         .cfg
-        .devserver_host_for(&owner_user.username, &devserver_id);
-    let aud = chan_tunnel_proto::gateway_assertion::canonical_audience(&format!(
-        "{host}{}",
-        state.cfg.workspace_public_port
-    ));
+        .tenant_origin_for(&owner_user.username, &devserver_id, &proxy_base_url)
+        .map_err(|e| Error::Upstream(e.to_string()))?;
+    let aud = chan_tunnel_proto::gateway_assertion::canonical_audience(&tenant.authority);
     let token = gateway_common::devserver_gate::encode_entry(
         state.cfg.workspace_gate_secret.as_bytes(),
         uid,
@@ -1474,11 +1484,7 @@ async fn share_landing_root(
         "whole-devserver landing: minting entry token",
     );
 
-    let url = format!(
-        "{scheme}://{host}{port}/?t={token}",
-        scheme = state.cfg.workspace_public_scheme,
-        port = state.cfg.workspace_public_port,
-    );
+    let url = format!("{}/?t={token}", tenant.origin);
     Ok(Redirect::to(&url))
 }
 
@@ -1640,8 +1646,12 @@ async fn desktop_devserver_entry(
         selector.as_deref(),
     )
     .await?;
-    let (devserver_id, role) = match target {
-        EntryTarget::Ok { devserver_id, role } => (devserver_id, role),
+    let (devserver_id, role, proxy_base_url) = match target {
+        EntryTarget::Ok {
+            devserver_id,
+            role,
+            proxy_base_url,
+        } => (devserver_id, role, proxy_base_url),
         EntryTarget::Offline if explicit_target => {
             return Err(Error::DesktopEntryNotFound {
                 reason: ENTRY_REASON_DEVSERVER_OFFLINE,
@@ -1666,11 +1676,15 @@ async fn desktop_devserver_entry(
     };
 
     let path = validate_desktop_entry_path(body.path.as_deref())?;
-    let host = state.cfg.devserver_host_for(&owner_username, &devserver_id);
-    let aud = chan_tunnel_proto::gateway_assertion::canonical_audience(&format!(
-        "{host}{}",
-        state.cfg.workspace_public_port
-    ));
+    // The desktop pins this exact origin as its sole native-authority
+    // source, so it must come from the controller row's node base:
+    // a row outside the configured proxy namespace is an upstream
+    // failure, never a fallback to the shared apex.
+    let tenant = state
+        .cfg
+        .tenant_origin_for(&owner_username, &devserver_id, &proxy_base_url)
+        .map_err(|e| Error::Upstream(e.to_string()))?;
+    let aud = chan_tunnel_proto::gateway_assertion::canonical_audience(&tenant.authority);
     let entry_token = gateway_common::devserver_gate::encode_entry(
         state.cfg.workspace_gate_secret.as_bytes(),
         validated.user_id,
@@ -1680,11 +1694,7 @@ async fn desktop_devserver_entry(
         entry_caller_identity(&state, validated.user_id).await,
     )
     .map_err(|e| Error::Anyhow(anyhow::anyhow!("mint desktop entry token: {e}")))?;
-    let proxy_origin = format!(
-        "{scheme}://{host}{port}",
-        scheme = state.cfg.workspace_public_scheme,
-        port = state.cfg.workspace_public_port,
-    );
+    let proxy_origin = tenant.origin;
     let sep = if path.contains('?') { '&' } else { '?' };
     let entry_url = format!("{proxy_origin}{path}{sep}t={entry_token}");
     tracing::info!(
@@ -2060,7 +2070,7 @@ mod tests {
     #[test]
     fn desktop_entry_response_pins_full_identity_and_exact_origin_fields() {
         let full_id = "a".repeat(64);
-        let proxy_origin = "https://alice--aaaaaaaaaaaa.devserver.chan.app";
+        let proxy_origin = "https://alice--aaaaaaaaaaaa.p1.usr.chan.app";
         let response = DesktopEntryResponse {
             username: "alice".to_string(),
             devserver_id: full_id.clone(),

@@ -4,17 +4,22 @@ use std::sync::Arc;
 use anyhow::Context;
 use url::Url;
 
+use crate::devserver_control_client::DevserverControlClient;
 use crate::profile_client::ProfileClient;
 use crate::providers::{
     github::GitHubProvider, gitlab::GitLabProvider, google::GoogleProvider, Provider,
 };
-use crate::workspace_admin_client::WorkspaceAdminClient;
 
 /// Runtime config sourced from environment variables.
 #[derive(Clone)]
 pub struct Config {
     pub bind_addr: SocketAddr,
     pub base_url: Url,
+    /// Canonical proxy namespace origin (`DEVSERVER_PROXY_ORIGIN`),
+    /// e.g. `https://usr.chan.app`. Every controller-reported node
+    /// base must sit exactly one DNS label below this apex with the
+    /// same scheme and effective port before identity mints tenant
+    /// origins from it.
     pub devserver_proxy_origin: Url,
     pub devserver_tunnel_origin: Url,
     pub database_url: String,
@@ -29,27 +34,12 @@ pub struct Config {
     /// 404 as if they did not exist. chan-gateway-admin presents this
     /// via CHAN_ADMIN_TOKEN.
     pub identity_admin_token: String,
-    /// Wildcard suffix used to mint devserver-gate entry tokens. Each
-    /// tenant opens at `{user}{wildcard_suffix}/{workspace}/`, e.g.
-    /// `alice.devserver.chan.app/blog/`, where `{user}` is the devserver
-    /// host and `{workspace}` is tenant routing. Derived from
-    /// `CHAN_DOMAIN` (`.devserver.<base>`) unless `DEVSERVER_WILDCARD_SUFFIX`
-    /// is set.
-    pub devserver_wildcard_suffix: String,
-    /// Scheme of the devserver-gate redirect URL (`https` in prod,
-    /// `http` for local dev where `*.devserver.localtest.me` resolves
-    /// to 127.0.0.1 without TLS).
-    pub workspace_public_scheme: String,
-    /// Optional `:port` suffix appended to the redirect URL. Empty
-    /// in prod; `:7002` in local dev where devserver-proxy binds the
-    /// axum listener on a non-443 port.
-    pub workspace_public_port: String,
-    /// Pre-built admin client for devserver-proxy. Required when
+    /// Pre-built admin client for devserver-control. Required when
     /// `DEVSERVER_ADMIN_TOKEN` is set; identity uses it on PAT revoke,
     /// account delete, and `/api/me` (dashboard reads). `None` only
     /// in dev / lab setups; the dashboard renders empty workspace lists
     /// and revoke / delete skip the tunnel-kill best-effort hop.
-    pub workspace_admin: Option<WorkspaceAdminClient>,
+    pub workspace_admin: Option<DevserverControlClient>,
     /// HMAC-SHA256 secret used to mint workspace-gate entry tokens.
     /// Same value also configured on devserver-proxy. Required.
     pub workspace_gate_secret: String,
@@ -93,30 +83,18 @@ impl Config {
         // disabled rather than guarded by an empty string.
         let identity_admin_token = std::env::var("IDENTITY_ADMIN_TOKEN").unwrap_or_default();
 
-        let devserver_wildcard_suffix = format!(
-            ".{}",
-            devserver_proxy_origin
-                .host_str()
-                .context("DEVSERVER_PROXY_ORIGIN must contain a host")?
-        );
-        let workspace_public_scheme = devserver_proxy_origin.scheme().to_string();
-        let workspace_public_port = devserver_proxy_origin
-            .port()
-            .map(|port| format!(":{port}"))
-            .unwrap_or_default();
-
         // DEVSERVER_ADMIN_TOKEN enables the admin-side calls (revoke,
         // delete, /api/me workspaces merge); DEVSERVER_ADMIN_URL is
         // required whenever the token is set.
         let workspace_admin = std::env::var("DEVSERVER_ADMIN_TOKEN")
             .ok()
             .filter(|s| !s.is_empty())
-            .map(|tok| -> anyhow::Result<WorkspaceAdminClient> {
+            .map(|tok| -> anyhow::Result<DevserverControlClient> {
                 let admin_url: Url = std::env::var("DEVSERVER_ADMIN_URL")
                     .context("DEVSERVER_ADMIN_URL is required when DEVSERVER_ADMIN_TOKEN is set")?
                     .parse()
                     .context("DEVSERVER_ADMIN_URL must be a URL")?;
-                WorkspaceAdminClient::new(admin_url, tok)
+                DevserverControlClient::new(admin_url, tok)
             })
             .transpose()?;
 
@@ -185,9 +163,6 @@ impl Config {
             profile_client,
             internal_auth_token,
             identity_admin_token,
-            devserver_wildcard_suffix,
-            workspace_public_scheme,
-            workspace_public_port,
             workspace_admin,
             workspace_gate_secret,
             providers,
@@ -206,27 +181,128 @@ impl Config {
         u
     }
 
-    /// Build the disc wildcard host addressing one devserver:
-    /// `{user}--{disc}{devserver_wildcard_suffix}` (e.g.
-    /// `alice--0123456789ab.devserver.chan.app`), where `disc` is the
-    /// first 12 chars of the devserver id. Both parts are lowercased
-    /// explicitly: devserver-proxy lowercases the label on ingest and
-    /// requires the disc to be lowercase hex, and the minted host
-    /// must equal the canonical `aud` the proxy verifies. Ids shorter
-    /// than 12 chars (test fixtures) are used whole; production ids
-    /// are 64 hex chars.
-    pub fn devserver_host_for(&self, username: &str, devserver_id: &str) -> String {
+    /// Build the tenant origin for one live devserver from its
+    /// controller-reported node base: `{owner}--{disc}.` prefixed to
+    /// the node base host with scheme and explicit port preserved,
+    /// e.g. `https://alice--0123456789ab.p1.usr.chan.app` out of
+    /// `https://p1.usr.chan.app`. `disc` is the first 12 chars of the
+    /// devserver id; owner and disc are lowercased explicitly because
+    /// devserver-proxy lowercases the label on ingest and the minted
+    /// host must equal the canonical `aud` the proxy verifies. Ids
+    /// shorter than 12 chars (test fixtures) are used whole;
+    /// production ids are 64 hex chars.
+    ///
+    /// The node base must validate against the configured proxy
+    /// namespace; anything else is an [`InvalidNodeBase`], never a
+    /// fallback to the shared apex.
+    pub fn tenant_origin_for(
+        &self,
+        username: &str,
+        devserver_id: &str,
+        proxy_base_url: &str,
+    ) -> std::result::Result<TenantOrigin, InvalidNodeBase> {
+        let node = self.validate_node_base(proxy_base_url)?;
         let disc: String = devserver_id.chars().take(12).collect();
-        // `.devserver.chan.app` already starts with a dot; the dot is
-        // the separator between the label and the suffix.
-        format!(
-            "{}--{}{}",
+        let host = format!(
+            "{}--{}.{}",
             username.to_ascii_lowercase(),
             disc.to_ascii_lowercase(),
-            &self.devserver_wildcard_suffix[..]
-        )
-        .trim_start_matches('.')
-        .to_string()
+            node.host_str().expect("validate_node_base requires a host"),
+        );
+        let port = node.port().map(|p| format!(":{p}")).unwrap_or_default();
+        Ok(TenantOrigin {
+            origin: format!("{}://{host}{port}", node.scheme()),
+            authority: format!("{host}{port}"),
+        })
+    }
+
+    /// Validate a controller-reported node base against the configured
+    /// proxy namespace (`DEVSERVER_PROXY_ORIGIN`): a canonical origin
+    /// (scheme + host + optional port; no credentials, path, query, or
+    /// fragment) whose host is exactly one DNS label below the apex
+    /// with the same scheme and effective port. This is the structural
+    /// rule the desktop applies to entry origins, one label up. The
+    /// controller already checked the base against its template;
+    /// identity re-checks because a fleet row it cannot place inside
+    /// the configured namespace must fail closed, never mint.
+    fn validate_node_base(&self, raw: &str) -> std::result::Result<Url, InvalidNodeBase> {
+        let url: Url = raw
+            .trim()
+            .parse()
+            .map_err(|_| InvalidNodeBase::new(raw, "not a URL"))?;
+        if !matches!(url.scheme(), "http" | "https")
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.path() != "/"
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(InvalidNodeBase::new(
+                raw,
+                "not a canonical origin (credentials, path, query, or fragment present)",
+            ));
+        }
+        let apex = &self.devserver_proxy_origin;
+        if url.scheme() != apex.scheme()
+            || url.port_or_known_default() != apex.port_or_known_default()
+        {
+            return Err(InvalidNodeBase::new(
+                raw,
+                "scheme or effective port differs from the proxy apex",
+            ));
+        }
+        let apex_host = apex
+            .host_str()
+            .expect("DEVSERVER_PROXY_ORIGIN requires a host");
+        let node_host = url.host_str().expect("canonical origin requires a host");
+        // The leading dot in the suffix keeps lookalikes like
+        // `evilusr.chan.app` from matching the `usr.chan.app` apex.
+        let suffix = format!(".{apex_host}");
+        let child = node_host
+            .strip_suffix(&suffix)
+            .ok_or_else(|| InvalidNodeBase::new(raw, "host is outside the proxy apex namespace"))?;
+        if child.is_empty() || child.contains('.') {
+            return Err(InvalidNodeBase::new(
+                raw,
+                "host is not exactly one DNS label below the proxy apex",
+            ));
+        }
+        Ok(url)
+    }
+}
+
+/// One validated tenant origin: where entry URLs for one live
+/// devserver point. Constructed only from a controller-reported node
+/// base that passed the proxy-namespace check, so the entry `aud`,
+/// `proxy_origin`, and `entry_url` can never drift apart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TenantOrigin {
+    /// Full origin: `{scheme}://{owner}--{disc}.{node-host}[:port]`.
+    pub origin: String,
+    /// The same authority without the scheme (`host[:port]`): the
+    /// input `canonical_audience` canonicalizes into the entry `aud`.
+    pub authority: String,
+}
+
+/// A controller row whose node base cannot anchor a tenant origin.
+/// Minting from it anyway would redirect browsers and desktops to a
+/// host no proxy serves (or one outside the deployment), so the entry
+/// and roster paths surface it as an upstream failure instead of
+/// falling back to the shared apex.
+#[derive(Debug, thiserror::Error)]
+#[error("controller proxy_base_url {raw:?} rejected: {reason}")]
+pub struct InvalidNodeBase {
+    raw: String,
+    reason: &'static str,
+}
+
+impl InvalidNodeBase {
+    fn new(raw: &str, reason: &'static str) -> Self {
+        Self {
+            raw: raw.to_string(),
+            reason,
+        }
     }
 }
 
@@ -266,39 +342,109 @@ fn parse_bool_env(name: &str, default: bool) -> anyhow::Result<bool> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn devserver_host_for_basic() {
-        let cfg = Config {
+    fn test_cfg(apex: &str) -> Config {
+        Config {
             bind_addr: "127.0.0.1:7000".parse().unwrap(),
             base_url: "http://localhost:7000".parse().unwrap(),
-            devserver_proxy_origin: "https://proxy.example.test".parse().unwrap(),
+            devserver_proxy_origin: apex.parse().unwrap(),
             devserver_tunnel_origin: "https://tunnel.example.test".parse().unwrap(),
             database_url: "x".into(),
             cookie_secure: false,
             profile_client: ProfileClient::new("http://x/".parse().unwrap(), "x".into()).unwrap(),
             internal_auth_token: "x".into(),
             identity_admin_token: String::new(),
-            devserver_wildcard_suffix: ".devserver.chan.app".into(),
-            workspace_public_scheme: "https".into(),
-            workspace_public_port: String::new(),
             workspace_admin: None,
             workspace_gate_secret: "x".into(),
             providers: vec![],
-        };
-        assert_eq!(
-            cfg.devserver_host_for("alice", "0123456789abcdef0123456789abcdef"),
-            "alice--0123456789ab.devserver.chan.app"
-        );
+        }
+    }
+
+    #[test]
+    fn tenant_origin_prefixes_owner_and_disc_to_the_node_host() {
+        let cfg = test_cfg("https://usr.chan.app");
+        let t = cfg
+            .tenant_origin_for(
+                "alice",
+                "0123456789abcdef0123456789abcdef",
+                "https://p1.usr.chan.app",
+            )
+            .expect("valid node base");
+        assert_eq!(t.origin, "https://alice--0123456789ab.p1.usr.chan.app");
+        assert_eq!(t.authority, "alice--0123456789ab.p1.usr.chan.app");
+
         // Lowercased explicitly on both parts: the proxy's host parse
         // and the canonical aud are lowercase.
-        assert_eq!(
-            cfg.devserver_host_for("USER-1", "ABCDEFABCDEFABCDEF"),
-            "user-1--abcdefabcdef.devserver.chan.app"
-        );
+        let t = cfg
+            .tenant_origin_for("USER-1", "ABCDEFABCDEFABCDEF", "https://p1.usr.chan.app")
+            .expect("valid node base");
+        assert_eq!(t.origin, "https://user-1--abcdefabcdef.p1.usr.chan.app");
+
         // Short (test-fixture) ids are used whole.
-        assert_eq!(
-            cfg.devserver_host_for("alice", "abc123"),
-            "alice--abc123.devserver.chan.app"
-        );
+        let t = cfg
+            .tenant_origin_for("alice", "abc123", "https://p1.usr.chan.app")
+            .expect("valid node base");
+        assert_eq!(t.origin, "https://alice--abc123.p1.usr.chan.app");
+    }
+
+    #[test]
+    fn tenant_origin_preserves_node_scheme_and_non_default_port() {
+        // A non-default port survives only when the apex itself carries
+        // it (the effective ports must match); the tenant origin keeps
+        // the explicit suffix.
+        let cfg = test_cfg("https://usr.chan.app:8443");
+        let t = cfg
+            .tenant_origin_for("alice", "abc123", "https://p1.usr.chan.app:8443")
+            .expect("non-default port node base");
+        assert_eq!(t.origin, "https://alice--abc123.p1.usr.chan.app:8443");
+        assert_eq!(t.authority, "alice--abc123.p1.usr.chan.app:8443");
+
+        let cfg = test_cfg("http://usr.localtest.me:7002");
+        let t = cfg
+            .tenant_origin_for("alice", "abc123", "http://p1.usr.localtest.me:7002")
+            .expect("http dev node base");
+        assert_eq!(t.origin, "http://alice--abc123.p1.usr.localtest.me:7002");
+    }
+
+    #[test]
+    fn tenant_origin_rejects_node_bases_outside_the_namespace() {
+        let cfg = test_cfg("https://usr.chan.app");
+        let id = "abc123";
+        for bad in [
+            // The bare apex is the shared ingress, not a node.
+            "https://usr.chan.app",
+            // Two labels below the apex is not a node base.
+            "https://deep.p1.usr.chan.app",
+            // A different namespace entirely.
+            "https://p1.evil.example.net",
+            // A suffix lookalike must not strip to a child label.
+            "https://p1.usr.chan.app.evil.net",
+            // Scheme and effective port must match the apex.
+            "http://p1.usr.chan.app",
+            "https://p1.usr.chan.app:8443",
+        ] {
+            assert!(
+                cfg.tenant_origin_for("alice", id, bad).is_err(),
+                "{bad} must not mint"
+            );
+        }
+    }
+
+    #[test]
+    fn tenant_origin_rejects_non_canonical_node_bases() {
+        let cfg = test_cfg("https://usr.chan.app");
+        let id = "abc123";
+        for bad in [
+            "not a url",
+            "ftp://p1.usr.chan.app",
+            "https://user@p1.usr.chan.app",
+            "https://p1.usr.chan.app/path",
+            "https://p1.usr.chan.app/?q=1",
+            "https://p1.usr.chan.app/#frag",
+        ] {
+            assert!(
+                cfg.tenant_origin_for("alice", id, bad).is_err(),
+                "{bad} must not mint"
+            );
+        }
     }
 }

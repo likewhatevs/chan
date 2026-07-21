@@ -38,10 +38,10 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use identity::config::Config;
+use identity::devserver_control_client::DevserverControlClient;
 use identity::http;
 use identity::profile_client::ProfileClient;
 use identity::providers::github::{GitHubEndpoints, GitHubProvider};
-use identity::workspace_admin_client::WorkspaceAdminClient;
 
 const PROFILE_TOKEN: &str = "test-profile-token";
 
@@ -123,23 +123,20 @@ impl TestApp {
         let cfg = Arc::new(Config {
             bind_addr: "127.0.0.1:0".parse().unwrap(),
             base_url,
-            devserver_proxy_origin: "https://proxy.example.test".parse().unwrap(),
+            devserver_proxy_origin: "https://usr.chan.app".parse().unwrap(),
             devserver_tunnel_origin: "https://tunnel.example.test".parse().unwrap(),
             database_url: url.clone(),
             cookie_secure: false,
             profile_client,
             internal_auth_token: "test-internal".to_string(),
             identity_admin_token: String::new(),
-            devserver_wildcard_suffix: ".devserver.chan.app".to_string(),
-            workspace_public_scheme: "https".to_string(),
-            workspace_public_port: String::new(),
             // Point the proxy-admin client at the same mock server; its
             // /admin/v1/* paths don't collide with profile's /v1/users/*.
             // Tests that need a live devserver mock the tunnel list (see
             // `mock_live_devserver`); the rest get an empty list via the
             // no-match error path, which `me` tolerates.
             workspace_admin: Some(
-                WorkspaceAdminClient::new(profile.uri().parse().unwrap(), "test-admin".into())
+                DevserverControlClient::new(profile.uri().parse().unwrap(), "test-admin".into())
                     .unwrap(),
             ),
             workspace_gate_secret: "test-workspace-gate-secret-32-bytes-aa".to_string(),
@@ -701,6 +698,8 @@ async fn mock_live_devservers(app: &TestApp, username: &str, devserver_ids: &[&s
                 "devserver_id": id,
                 "peer_addr": null,
                 "connected_at": now,
+                "proxy_id": "p1",
+                "proxy_base_url": "https://p1.usr.chan.app",
             })
         })
         .collect();
@@ -711,9 +710,10 @@ async fn mock_live_devservers(app: &TestApp, username: &str, devserver_ids: &[&s
         .await;
 }
 
-/// The disc wildcard host identity mints for `(username, dsid)`.
+/// The tenant host identity mints for `(username, dsid)` on `p1`,
+/// the node the live-devserver mocks report.
 fn disc_host(username: &str, dsid: &str) -> String {
-    format!("{username}--{}.devserver.chan.app", &dsid[..12])
+    format!("{username}--{}.p1.usr.chan.app", &dsid[..12])
 }
 
 #[tokio::test]
@@ -1141,6 +1141,62 @@ async fn share_landing_multi_live_falls_back_to_first_accessible() {
         )),
         "got {location}"
     );
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn share_landing_node_base_outside_the_namespace_is_502() {
+    // Fail-closed: a controller row identity cannot place under the
+    // configured apex is an upstream error, never a mint against the
+    // shared apex.
+    let app = TestApp::new().await;
+    let mut c = Client::new(&app);
+    let caller_uid = fake_user_id();
+    happy_login(&app, &mut c, caller_uid, "alice@x.com").await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/users/{caller_uid}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(live_user_body(
+            caller_uid,
+            "alice@x.com",
+            "alice",
+        )))
+        .mount(&app.profile)
+        .await;
+    let owner_uid = Uuid::new_v4();
+    Mock::given(method("GET"))
+        .and(path("/v1/users/by-username"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(live_user_body(
+            owner_uid,
+            "owner@x.com",
+            "owner-handle",
+        )))
+        .mount(&app.profile)
+        .await;
+    let dsid = "a".repeat(64);
+    let now = chrono::Utc::now().to_rfc3339();
+    Mock::given(method("GET"))
+        .and(path("/admin/v1/users/owner-handle/tunnels"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+            "user": "owner-handle",
+            "devserver_id": dsid,
+            "peer_addr": null,
+            "connected_at": now,
+            "proxy_id": "p1",
+            "proxy_base_url": "https://p1.evil.example.net",
+        }])))
+        .mount(&app.profile)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/v1/users/{owner_uid}/devservers/{dsid}/access"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"role": "editor"})))
+        .mount(&app.profile)
+        .await;
+
+    let (s, _, body, _) = c.send(Method::GET, "/s/owner-handle/photos", None).await;
+    assert_eq!(s, StatusCode::BAD_GATEWAY, "got {body}");
+    assert_eq!(body, json!({"error": "upstream unreachable"}));
     app.cleanup().await;
 }
 

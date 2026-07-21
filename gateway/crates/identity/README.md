@@ -36,6 +36,8 @@ createdb chan_gateway
 export DATABASE_URL=postgres://localhost/chan_gateway
 export BIND_ADDR=127.0.0.1:7000
 export BASE_URL=http://127.0.0.1:7000
+export DEVSERVER_PROXY_ORIGIN=http://usr.localtest.me:7002
+export DEVSERVER_TUNNEL_ORIGIN=http://usr.localtest.me:7002
 export PROFILE_SERVICE_URL=http://127.0.0.1:7001
 export PROFILE_AUTH_TOKEN=dev-service-token
 export IDENTITY_INTERNAL_TOKEN=dev-internal-token
@@ -45,7 +47,7 @@ export GITHUB_CLIENT_SECRET=...
 cargo run -p identity
 ```
 
-Hostnames derive from `CHAN_DOMAIN` (default `localtest.me`) and `PUBLIC_SCHEME` (default `http`); `BASE_URL` defaults to `<scheme>://id.<domain>` and is set explicitly above only to pin the loopback port. For the full local stack, prefer `packaging/gateway/scripts/dev/setup.sh`
+Public origins are set explicitly (`BASE_URL`, `DEVSERVER_PROXY_ORIGIN`, `DEVSERVER_TUNNEL_ORIGIN`); there is no hostname derivation from a base domain. For the full local stack, prefer `packaging/gateway/scripts/dev/setup.sh`
 + `packaging/gateway/scripts/dev/run.sh`.
 
 Register a GitHub OAuth app at `https://github.com/settings/developers` with callback `http://127.0.0.1:7000/auth/github/callback`. The other providers follow the same pattern.
@@ -57,6 +59,9 @@ Required:
 | Name                      | Notes                                       |
 |---------------------------|---------------------------------------------|
 | `DATABASE_URL`            | Postgres connection string                  |
+| `BASE_URL`                | identity's canonical public origin          |
+| `DEVSERVER_PROXY_ORIGIN`  | proxy namespace apex origin; node bases must sit one label below it |
+| `DEVSERVER_TUNNEL_ORIGIN` | tunnel ingress origin                       |
 | `PROFILE_SERVICE_URL`     | profile-service HTTP base URL               |
 | `PROFILE_AUTH_TOKEN`      | bearer for profile-service calls            |
 | `IDENTITY_INTERNAL_TOKEN` | bearer devserver-proxy presents on validate |
@@ -69,24 +74,13 @@ Provider credentials (each pair optional; leave both unset to disable):
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
 - `GITLAB_CLIENT_ID`, `GITLAB_CLIENT_SECRET`
 
-Domain (single source; see [`packaging/gateway/packaging/domain.env`](../../../packaging/gateway/packaging/domain.env)):
-
-| Name                       | Default        | Purpose                     |
-|----------------------------|----------------|-----------------------------|
-| `CHAN_DOMAIN`              | `localtest.me` | base domain; derives hosts  |
-| `PUBLIC_SCHEME`            | `http`         | scheme for built URLs       |
-
 Optional knobs:
 
 | Name                       | Default                   | Purpose               |
 |----------------------------|---------------------------|-----------------------|
 | `BIND_ADDR`                | `127.0.0.1:7000`          | listen address        |
-| `BASE_URL`                 | `<scheme>://id.<domain>`  | OAuth callback origin |
 | `COOKIE_SECURE`            | `false`                   | HTTPS-only cookie     |
-| `DEVSERVER_WILDCARD_SUFFIX`| `.devserver.<domain>`     | redirect host suffix  |
-| `DEVSERVER_PUBLIC_SCHEME`  | `PUBLIC_SCHEME`           | workspace redirect scheme |
-| `DEVSERVER_PUBLIC_PORT`    | unset                     | `:port` for dev       |
-| `DEVSERVER_ADMIN_URL`      | unset                     | devserver-proxy admin base |
+| `DEVSERVER_ADMIN_URL`      | unset                     | devserver-control admin base |
 | `DEVSERVER_ADMIN_TOKEN`    | unset                     | enables tunnel evict on revoke / delete |
 | `RUSTRICT_ALLOWLIST`       | unset                     | comma-separated usernames exempt from the profanity filter |
 | `IDENTITY_OAUTH_ENDPOINTS_BASE` | unset (stock github.com) | GitHub OAuth/API endpoint origin override for local e2e stubs; never set in production |

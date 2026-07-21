@@ -26,11 +26,11 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use gateway_common::devserver_gate;
 use identity::api_tokens::{ApiTokenService, NewToken, RequestMeta, TokenOrigin};
 use identity::config::Config;
+use identity::devserver_control_client::DevserverControlClient;
 use identity::http;
 use identity::profile_client::ProfileClient;
 use identity::providers::github::GitHubProvider;
 use identity::token_throttle::TokenThrottle;
-use identity::workspace_admin_client::WorkspaceAdminClient;
 
 async fn admin_pool(url: &str) -> PgPool {
     PgPoolOptions::new()
@@ -52,6 +52,10 @@ struct TestApp {
 
 impl TestApp {
     async fn new() -> Self {
+        Self::with_proxy_origin("https://usr.chan.app").await
+    }
+
+    async fn with_proxy_origin(proxy_origin: &str) -> Self {
         let url = std::env::var("TEST_DATABASE_URL")
             .expect("TEST_DATABASE_URL must be set; e.g. postgres://localhost/chan_gateway_test");
         pg_reaper::reap_idle(&url).await;
@@ -100,20 +104,17 @@ impl TestApp {
         let cfg = Arc::new(Config {
             bind_addr: "127.0.0.1:0".parse().unwrap(),
             base_url: "http://localhost:7000/".parse().unwrap(),
-            devserver_proxy_origin: "https://proxy.example.test".parse().unwrap(),
+            devserver_proxy_origin: proxy_origin.parse().unwrap(),
             devserver_tunnel_origin: "https://tunnel.example.test".parse().unwrap(),
             database_url: url.clone(),
             cookie_secure: false,
             profile_client,
             internal_auth_token: "test-internal".to_string(),
             identity_admin_token: String::new(),
-            devserver_wildcard_suffix: ".devserver.chan.app".to_string(),
-            workspace_public_scheme: "https".to_string(),
-            workspace_public_port: String::new(),
             // Same mock server backs the proxy-admin client; its
             // /admin/v1/* paths don't collide with profile's /v1/*.
             workspace_admin: Some(
-                WorkspaceAdminClient::new(profile.uri().parse().unwrap(), "test-admin".into())
+                DevserverControlClient::new(profile.uri().parse().unwrap(), "test-admin".into())
                     .unwrap(),
             ),
             workspace_gate_secret: "test-workspace-gate-secret-32-bytes-aa".to_string(),
@@ -189,6 +190,24 @@ fn placeholder_username(id: Uuid) -> String {
 }
 
 async fn mock_tunnels(app: &TestApp, username: &str, devserver_ids: &[&str]) {
+    mock_tunnels_on(
+        app,
+        username,
+        devserver_ids,
+        "p1",
+        "https://p1.usr.chan.app",
+    )
+    .await;
+}
+
+/// Mock the controller tunnel list with every row on the given node.
+async fn mock_tunnels_on(
+    app: &TestApp,
+    username: &str,
+    devserver_ids: &[&str],
+    proxy_id: &str,
+    proxy_base_url: &str,
+) {
     let now = chrono::Utc::now().to_rfc3339();
     let rows: Vec<Value> = devserver_ids
         .iter()
@@ -198,6 +217,8 @@ async fn mock_tunnels(app: &TestApp, username: &str, devserver_ids: &[&str]) {
                 "devserver_id": id,
                 "peer_addr": null,
                 "connected_at": now,
+                "proxy_id": proxy_id,
+                "proxy_base_url": proxy_base_url,
             })
         })
         .collect();
@@ -231,9 +252,10 @@ async fn post_entry_body(app: &TestApp, pat: &str, body: Value) -> (StatusCode, 
     (status, v)
 }
 
-/// The disc wildcard host identity mints for `(username, dsid)`.
+/// The tenant host identity mints for `(username, dsid)` on `p1`,
+/// the node the default tunnel mock reports.
 fn disc_host(username: &str, dsid: &str) -> String {
-    format!("{username}--{}.devserver.chan.app", &dsid[..12])
+    format!("{username}--{}.p1.usr.chan.app", &dsid[..12])
 }
 
 #[tokio::test]
@@ -697,4 +719,90 @@ async fn entry_404_reasons_unchanged_for_account_pat() {
     assert_eq!(s, StatusCode::NOT_FOUND);
     assert_eq!(body["reason"], "devserver_offline");
     app.cleanup().await;
+}
+
+// ---------------------------------------------------------------
+// Node-origin minting
+// ---------------------------------------------------------------
+
+#[tokio::test]
+async fn entry_origin_preserves_node_non_default_port() {
+    // The apex carries a non-default port, so the node base may too;
+    // the minted aud, proxy_origin, and entry_url all keep it.
+    let app = TestApp::with_proxy_origin("https://usr.chan.app:8443").await;
+    let uid = app.insert_user().await;
+    let username = placeholder_username(uid);
+    let pat = app.desktop_pat(uid).await;
+
+    let dsid = "9".repeat(64);
+    mock_tunnels_on(
+        &app,
+        &username,
+        &[&dsid],
+        "p1",
+        "https://p1.usr.chan.app:8443",
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/users/{uid}/devservers/{dsid}/access")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"role": "owner"})))
+        .mount(&app.profile)
+        .await;
+
+    let (s, body) = post_entry(&app, &pat).await;
+    assert_eq!(s, StatusCode::OK, "got {body}");
+    let origin = format!("https://{}--{}.p1.usr.chan.app:8443", username, &dsid[..12]);
+    assert_eq!(body["proxy_origin"], origin);
+    let entry_url = body["entry_url"].as_str().expect("entry_url");
+    assert!(
+        entry_url.starts_with(&format!("{origin}/?t=")),
+        "got {entry_url}"
+    );
+    // The aud carries the same authority, non-default port included.
+    let token = entry_url.split("?t=").nth(1).expect("t= in entry_url");
+    let claims = devserver_gate::decode(
+        b"test-workspace-gate-secret-32-bytes-aa",
+        token,
+        devserver_gate::TokenType::Entry,
+        &format!("{}--{}.p1.usr.chan.app:8443", username, &dsid[..12]),
+        &dsid,
+    )
+    .expect("entry token decodes against the ported authority");
+    assert_eq!(claims.role, "owner");
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn entry_node_base_outside_the_namespace_is_upstream_error() {
+    // Fail-closed: a controller row identity cannot place under the
+    // configured apex is a 502, never a mint against the shared apex.
+    for bad_base in [
+        "https://usr.chan.app",             // the bare apex is not a node
+        "https://other.example.net",        // outside the namespace
+        "https://p1.usr.chan.app.evil.net", // suffix lookalike
+        "https://p1.usr.chan.app/path",     // not an origin
+        "http://p1.usr.chan.app",           // scheme mismatch
+    ] {
+        let app = TestApp::new().await;
+        let uid = app.insert_user().await;
+        let username = placeholder_username(uid);
+        let pat = app.desktop_pat(uid).await;
+
+        let dsid = "b".repeat(64);
+        mock_tunnels_on(&app, &username, &[&dsid], "p1", bad_base).await;
+        Mock::given(method("GET"))
+            .and(path(format!("/v1/users/{uid}/devservers/{dsid}/access")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"role": "owner"})))
+            .mount(&app.profile)
+            .await;
+
+        let (s, body) = post_entry(&app, &pat).await;
+        assert_eq!(s, StatusCode::BAD_GATEWAY, "base {bad_base}: got {body}");
+        assert_eq!(
+            body,
+            json!({"error": "upstream unreachable"}),
+            "base {bad_base}"
+        );
+        app.cleanup().await;
+    }
 }

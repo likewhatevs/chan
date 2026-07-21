@@ -10,6 +10,7 @@ pub mod api_tokens;
 pub mod config;
 pub mod desktop_authorize;
 pub mod desktop_roster;
+pub mod devserver_control_client;
 pub mod error;
 pub mod http;
 pub mod pages;
@@ -17,7 +18,6 @@ pub mod profile_client;
 pub mod providers;
 pub mod static_files;
 pub mod token_throttle;
-pub mod workspace_admin_client;
 
 pub use config::Config;
 pub use error::{Error, Result};
