@@ -803,7 +803,12 @@ async fn devserver_discovery_routes_multiple_local_instances() {
         server_b.out.dump()
     );
 
-    let root_a = sandbox.workspace("handoff-a");
+    // The devserver keys its workspace registry under canonicalize_normalized
+    // (resolves symlinks), so list_workspaces returns the canonical path. On
+    // macOS /var and /tmp are symlinks (-> /private/...), so compare against the
+    // canonical root or the equality misses; on Linux this is a no-op.
+    let root_a = std::fs::canonicalize(sandbox.workspace("handoff-a"))
+        .expect("canonicalize devserver A workspace root");
     let (status, output) =
         run_handoff_open(&sandbox, home_a.path(), runtime, &root_a, Some("")).await;
     assert!(status.success(), "matching-home handoff failed:\n{output}");
@@ -823,7 +828,8 @@ async fn devserver_discovery_routes_multiple_local_instances() {
         "matching CHAN_HOME must not touch devserver B"
     );
 
-    let root_b = sandbox.workspace("handoff-explicit-b");
+    let root_b = std::fs::canonicalize(sandbox.workspace("handoff-explicit-b"))
+        .expect("canonicalize devserver B workspace root");
     let selector_b = addr_b.port().to_string();
     let (status, output) =
         run_handoff_open(&sandbox, home_a.path(), runtime, &root_b, Some(&selector_b)).await;
@@ -888,7 +894,8 @@ async fn devserver_discovery_routes_multiple_local_instances() {
         "stopping B must leave exactly A's discovery socket"
     );
 
-    let root_after = sandbox.workspace("handoff-after-b-stop");
+    let root_after = std::fs::canonicalize(sandbox.workspace("handoff-after-b-stop"))
+        .expect("canonicalize post-stop workspace root");
     let (status, output) =
         run_handoff_open(&sandbox, unmatched_home.path(), runtime, &root_after, None).await;
     assert!(
