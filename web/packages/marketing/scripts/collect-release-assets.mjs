@@ -273,15 +273,17 @@ async function collectManifest(release, options) {
   }
 
   const assets = [];
-  for (const name of [...cliAssets(), ...desktopAssets(version), ...gatewayDebAssets(version)]) {
+  for (const name of [...cliAssets(), ...desktopAssets(version)]) {
     assets.push(await collectAsset(name, releaseAssets, options));
   }
-  // Windows is required by the verifier (release.yml gates publish on the
-  // windows-artifacts job), but the collector keeps it OPTIONAL on purpose: it
-  // also walks archived releases via --latest-count, and older releases predate
-  // the Windows artifacts, so a missing Windows asset must not fail their
-  // metadata. Collect it only when the release actually shipped it.
-  for (const name of windowsAssets(version)) {
+  // Gateway .debs and Windows are REQUIRED by the verifier for the release
+  // being cut (release.yml gates publish on the gateway and windows jobs), but
+  // the collector keeps them OPTIONAL on purpose: it also walks archived
+  // releases via --latest-count, and an older release legitimately predates a
+  // gateway service (devserver-control arrived in 0.74.0) or the Windows
+  // artifacts, so a missing one must not fail that release's /dl metadata.
+  // Collect each only when the release actually shipped it.
+  for (const name of [...gatewayDebAssets(version), ...windowsAssets(version)]) {
     if (!releaseAssets.has(name)) continue;
     assets.push(await collectAsset(name, releaseAssets, options));
   }

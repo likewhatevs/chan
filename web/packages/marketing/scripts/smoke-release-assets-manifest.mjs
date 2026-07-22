@@ -129,6 +129,32 @@ try {
     "history asset uses digest",
   );
 
+  // An archived release that predates a gateway service (devserver-control
+  // arrived in 0.74.0) ships no deb for it, so the collector must skip the
+  // missing gateway deb the way it skips Windows, not throw and abort the whole
+  // /dl history. Reproduces the 0.74.0 GA pages-artifact failure.
+  const controlDebs = (v) =>
+    gatewayDebAssets(v).filter((name) => name.includes("devserver-control"));
+  const sparse = runFixtureCollect(
+    "sparse-gateway",
+    [{ releaseVersion: "0.74.0" }, { releaseVersion: "0.73.0", omit: controlDebs("0.73.0") }],
+    { latestCount: 5 },
+  );
+  assertEqual(
+    JSON.stringify(sparse.manifests.map((manifest) => manifest.tag)),
+    JSON.stringify(["v0.74.0", "v0.73.0"]),
+    "archived release missing a gateway service is still collected",
+  );
+  const archived = sparse.manifests.find((manifest) => manifest.tag === "v0.73.0");
+  assert(
+    !archived.assets.some((asset) => asset.name.includes("devserver-control")),
+    "the gateway service the archived release lacks is absent from its manifest",
+  );
+  assert(
+    archived.assets.some((asset) => asset.name.includes("chan-gateway-identity")),
+    "the gateway services the archived release did ship are still collected",
+  );
+
   // A GA forced tag that leads the history keeps its place at the front.
   const forced = runFixtureCollect("forced", history, { latestCount: 2, tag: "v0.15.9" });
   assertEqual(
@@ -293,8 +319,9 @@ function runCollect(label, releaseVersion, extraNames, digestNames = new Set()) 
 // A release object in the shape of the GitHub API, with a digest on every
 // non-sig asset so collection needs no asset bytes; only the updater
 // signature is read from disk (into assetDir).
-function buildReleaseObject({ releaseVersion, prerelease = false, draft = false }, assetDir) {
+function buildReleaseObject({ releaseVersion, prerelease = false, draft = false, omit = [] }, assetDir) {
   const releaseTag = `v${releaseVersion}`;
+  const omitSet = new Set(omit);
   const release = {
     tag_name: releaseTag,
     published_at: "2026-05-27T00:00:00Z",
@@ -304,6 +331,7 @@ function buildReleaseObject({ releaseVersion, prerelease = false, draft = false 
     assets: [],
   };
   for (const name of namesFor(releaseVersion)) {
+    if (omitSet.has(name)) continue;
     const asset = {
       name,
       url: `https://api.github.com/repos/fiorix/chan/releases/assets/${encodeURIComponent(name)}`,
