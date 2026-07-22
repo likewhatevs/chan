@@ -1,5 +1,7 @@
 # COPR Build Provenance And Publication Verification
 
+> Status: shipped in [v0.74.0](../../release/release-v0.74.0.md).
+
 Status: accepted scope for v0.74.0. Two defects in the same publisher: COPR builds whatever `main` points at rather than the released tag, and nothing in CI observes whether COPR published at all.
 
 ## Problem

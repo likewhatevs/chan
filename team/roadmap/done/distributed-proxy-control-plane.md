@@ -1,5 +1,7 @@
 # chan-gateway v0.72.0 distributed proxy control plane
 
+> Status: shipped in [v0.74.0](../../release/release-v0.74.0.md).
+
 Status: accepted scope for v0.74.0, deferred out of both v0.72.0 and v0.73.0.
 **Steps 1 to 9 and the accepted security hardening are implemented,
 own-gated, adversarially reviewed, live-verified, and final-gated on the

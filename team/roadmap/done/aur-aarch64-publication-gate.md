@@ -1,5 +1,7 @@
 # Make The Arch aarch64 AUR Validation Gate Publication
 
+> Status: withdrawn in [v0.74.0](../../release/release-v0.74.0.md); aarch64 AUR CI validation was removed rather than made a gate, and the aarch64 PKGBUILD still ships.
+
 Status: accepted scope for v0.74.0, re-scoped after the v0.73.0 GA run. The ARM leg ran for the first time and failed at its first step on an upstream TLS certificate fault, so the work is now a fetch fix first and the gate wiring second.
 
 ## Problem

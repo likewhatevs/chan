@@ -1,5 +1,7 @@
 # Release Asset Verifier Misses The Windows Artifacts
 
+> Status: shipped in [v0.74.0](../../release/release-v0.74.0.md).
+
 Status: accepted scope for v0.74.0. Small, concrete gap found during the v0.73.0 release.
 
 ## Problem

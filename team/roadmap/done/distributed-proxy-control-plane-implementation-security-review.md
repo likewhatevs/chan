@@ -1,5 +1,7 @@
 # chan-gateway v0.74.0 control-plane implementation security review
 
+> Status: shipped in [v0.74.0](../../release/release-v0.74.0.md).
+
 Status: complete historical review, with the branch-tip reassessment below.
 The original decision was to accept the hardening proposal with mandatory
 amendments and refuse `v074/ctl` at

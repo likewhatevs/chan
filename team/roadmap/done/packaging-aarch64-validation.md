@@ -1,6 +1,6 @@
 # aarch64 Packaging Validation
 
-> Status: delivered in part in [v0.73.0](../../release/release-v0.73.0.md); the remainder is tracked as [aur-aarch64-publication-gate](../v0.74.0/aur-aarch64-publication-gate.md).
+> Status: delivered in part in [v0.73.0](../../release/release-v0.73.0.md); the remainder is tracked as [aur-aarch64-publication-gate](aur-aarch64-publication-gate.md).
 
 The COPR half is closed by evidence: aarch64 was already green there and the harvested per-chroot results are recorded below, which retires this item's original premise. The AUR half is wired but unproven. `aur-validate-arm` now runs on every GA release instead of only on manual dispatch, so v0.73.0 produces the first real Arch Linux ARM result; by owner ruling it is observed evidence and does **not** gate `aur-publish`, because an unproven job must not block a first AUR publication. Once one ARM cell has passed, adding it to `aur-publish`'s `needs` closes the item.
 

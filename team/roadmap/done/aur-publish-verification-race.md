@@ -1,5 +1,7 @@
 # The AUR Publish Verification Races The RPC Index And Reports Red On Success
 
+> Status: shipped in [v0.74.0](../../release/release-v0.74.0.md).
+
 Status: accepted scope for v0.74.0. A confirmed defect observed on the v0.73.0 GA run.
 
 ## Problem
@@ -48,7 +50,7 @@ Recorded so the next reader has the full picture, not only the defect.
 
 Both AUR repositories now exist. `chan` and `chan-desktop` are live at 0.73.0-1 with maintainer `fiorix`. Every future release pushes to an existing pkgbase, which is the faster indexing case, so the false red this item fixes will be intermittent rather than certain from here on. That makes it more dangerous, not less: a check that reds sometimes is exactly the shape an operator learns to dismiss.
 
-For completeness, `aur-validate-arm` failed for both packages on the same run, at its very first step, with `curl: (60) SSL: no alternative certificate subject name matches target host name 'os.archlinuxarm.org'`: the upstream Arch Linux ARM host's TLS certificate does not cover its own hostname. The job never reached the keyring bootstrap, the rolling `-Syu`, `makepkg --syncdeps`, the native ARM Tauri build, the namcap gate or the install smokes, so everything below the rootfs import at `.github/workflows/publish-downstream.yml:470-483` remains unproven. It carries `continue-on-error: true` (`.github/workflows/publish-downstream.yml:454`) and is absent from `aur-publish`'s `needs`, so it blocked nothing. That leg is the subject of a separate item, `team/roadmap/v0.74.0/aur-aarch64-publication-gate.md`, whose stated precondition is one GA release in which both ARM cells pass; the v0.73.0 run did not supply it.
+For completeness, `aur-validate-arm` failed for both packages on the same run, at its very first step, with `curl: (60) SSL: no alternative certificate subject name matches target host name 'os.archlinuxarm.org'`: the upstream Arch Linux ARM host's TLS certificate does not cover its own hostname. The job never reached the keyring bootstrap, the rolling `-Syu`, `makepkg --syncdeps`, the native ARM Tauri build, the namcap gate or the install smokes, so everything below the rootfs import at `.github/workflows/publish-downstream.yml:470-483` remains unproven. It carries `continue-on-error: true` (`.github/workflows/publish-downstream.yml:454`) and is absent from `aur-publish`'s `needs`, so it blocked nothing. That leg is the subject of a separate item, `team/roadmap/done/aur-aarch64-publication-gate.md`, whose stated precondition is one GA release in which both ARM cells pass; the v0.73.0 run did not supply it.
 
 ## Boundaries
 

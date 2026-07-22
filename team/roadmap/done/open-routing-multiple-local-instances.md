@@ -1,5 +1,7 @@
 # Make `chan open` Route Correctly When Several Local Instances Are Running
 
+> Status: shipped in [v0.74.0](../../release/release-v0.74.0.md).
+
 Status: accepted scope for v0.74.0. A confirmed defect, traced from a user report of `chan open` reaching the wrong devserver, plus the routing gap the same report exposed when chan-desktop and a devserver run side by side. Every finding below is established by code trace and a host permission check; none of it has been reproduced live, and the live repro is acceptance item 11.
 
 ## Problem

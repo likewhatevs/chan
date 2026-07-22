@@ -1,5 +1,7 @@
 # The Submit Chord Is Chosen By The Sender And Never Validated Against The Target
 
+> Status: shipped in [v0.74.0](../../release/release-v0.74.0.md).
+
 Status: accepted scope for v0.74.0. A confirmed defect with a live user report.
 
 ## Problem

@@ -1,5 +1,7 @@
 # Fold Chevrons Appear Next To `#` Comments Inside Fenced Code Blocks
 
+> Status: shipped in [v0.74.0](../../release/release-v0.74.0.md).
+
 Status: accepted scope for v0.74.0. A confirmed defect with a user report.
 
 ## Problem

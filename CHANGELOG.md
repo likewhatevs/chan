@@ -4,7 +4,9 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [v0.74.0] - 2026-07-22
+
+v0.74.0 lands the distributed proxy control plane: the gateway coordinates every devserver-proxy through one authenticated, database-free control service, with cryptographic admission leases, bounded opaque browser sessions, and durable revocation. Around it, `chan open` routes deterministically when several local instances run, `cs terminal write --submit` becomes server-authoritative, the devserver bearer token can be rotated and no longer persists into WebView snapshots, macOS wake stops re-running the control-terminal connect script, and a set of editor fixes restore fenced-heading folds, code-block contrast, the command-launcher focus border, and the diagram flip. Packaging makes the AUR publish check advisory, adds a COPR publication probe, and removes the aarch64 AUR CI validation.
 
 ### Added
 

@@ -1,5 +1,7 @@
 # Rotate The Devserver Bearer Token, And Keep It Out Of Snapshotted Scrollback
 
+> Status: shipped in [v0.74.0](../../release/release-v0.74.0.md).
+
 Status: accepted scope for v0.74.0. Two related credential-handling findings in the devserver token path, surfaced while diagnosing an unrelated control-terminal defect. Hardening, not an incident: both require an attacker who already has a foothold that would be serious on its own.
 
 ## Problem

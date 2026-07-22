@@ -19,26 +19,33 @@ Each item is one Markdown file that names an observed behavior or need, the evid
 
 ## Active
 
-### v0.74.0
+### v0.75.0
 
 | item | state | what needs to happen |
 | --- | --- | --- |
-| [distributed-proxy-control-plane](v0.74.0/distributed-proxy-control-plane.md) | steps 1 to 9 plus mandatory hardening implemented, adversarially reviewed, live-verified, and final-gated on `v074/ctl`; ready to merge | merge when the v0.74.0 integration window opens; carry the classified defense-in-depth and operations items separately |
-| [distributed-proxy-control-plane-hardening](v0.74.0/distributed-proxy-control-plane-hardening.md) | accepted and implemented; all known merge-blocking authorization, revocation, browser, and supported-deployment findings closed | carry the explicitly classified defense-in-depth and operations items as follow-ups; no blocker remains against this merge candidate |
-| [loopback-redirect-desktop-signin](v0.74.0/loopback-redirect-desktop-signin.md) | **NOT READY TO IMPLEMENT**; designed and security-reviewed, and that review found three exploitable gaps in the naive shape | refine the design against the real call graph, settle the verifier-keyed variant, produce a file-level plan, and only then implement, after the control plane merges |
-| [drop-self-built-desktop-packages](v0.74.0/drop-self-built-desktop-packages.md) | blocked behind the loopback redirect; the CLI half already shipped in v0.73.0 | once loopback lands, drop the four Tauri desktop `.deb`/`.rpm` and fix every release-asset consumer in the same commit |
-| [aur-aarch64-publication-gate](v0.74.0/aur-aarch64-publication-gate.md) | ran for the first time at v0.73.0 GA and failed at its first step: the ALARM rootfs host presents a certificate that does not cover its own name, so everything below the download is still unproven | make the fetch resilient while keeping the pinned GPG verification as the integrity control, get one green cell, then drop `continue-on-error` and add the job to `aur-publish`'s `needs` in the same edit |
-| [aur-publish-verification-race](v0.74.0/aur-publish-verification-race.md) | confirmed defect: the post-push RPC check allows only ~50s, so v0.73.0 published both AUR packages successfully and still reported red | treat `git push` as authoritative and the RPC poll as advisory, widen the budget, and distinguish not-yet-indexed from a real version mismatch |
-| [windows-deeplink-second-instance](v0.74.0/windows-deeplink-second-instance.md) | inferred from source, never reproduced; very likely subsumed by the loopback redirect | reproduce it on Windows first, then confirm loopback closes it and decide whether to keep `chan://` registered at all |
-| [copr-build-provenance](v0.74.0/copr-build-provenance.md) | COPR rebuilds `main`'s HEAD rather than the released tag, and nothing verifies it published | pin the SCM packages to the tag or forbid pushing to `main` in that window, and add a post-publication build-status probe proven able to go red |
-| [terminal-submit-chord-authority](v0.74.0/terminal-submit-chord-authority.md) | confirmed defect: `--submit` is the sender's guess and nothing validates it against the target, so every cross-agent pair whose templates differ silently fails | make the server authoritative over the chord at enqueue, and expose each session's derived agent so a sender never has to guess |
-| [control-terminal-wake-rerun](v0.74.0/control-terminal-wake-rerun.md) | confirmed defect: a macOS wake re-dials the control terminal and re-runs the devserver connect script | gate the wake recycle off control terminals; script death marks the connection down, with no replacement session, viewport clear, or automatic rerun |
-| [open-routing-multiple-local-instances](v0.74.0/open-routing-multiple-local-instances.md) | confirmed defect: one discovery socket per uid with no port or `CHAN_HOME` in its name, and an unconditional unlink before bind, so a second same-user devserver silently steals it; separately, a plain-shell `chan open` never probes what is live when a desktop and a devserver both run | give each devserver its own instance socket taken under the live-owner flock, add an `Identify` verb and a `--devserver=<port>` selector, make selection refuse rather than guess, route on live instances instead of personality alone, and stop the 8787 collision hint blaming a handoff that never ran |
-| [devserver-token-rotation](v0.74.0/devserver-token-rotation.md) | the devserver bearer token is minted once and never rotates, and control-terminal scrollback carrying it is snapshotted into WebView storage | decide a rotation story and exclude control windows from the snapshot |
-| [release-asset-verification-coverage](v0.74.0/release-asset-verification-coverage.md) | the release asset verifier does not require the Windows zip or installer, and only ever runs on a real GA | cover every produced asset, ideally from one source, and give the verifier a mode that can be exercised before the tag |
-| [markdown-heading-detection-in-fences](v0.74.0/markdown-heading-detection-in-fences.md) | confirmed defect: the WYSIWYG fold gutter regexes raw lines, so a `#` comment inside a fenced code block gets a chevron that folds to end of document, and two formatting chords rewrite such a line and destroy code | detect headings from the syntax tree rather than raw lines, once, and apply it to the fold service, the gutter, the click handler and the two format commands |
+| [loopback-redirect-desktop-signin](v0.75.0/loopback-redirect-desktop-signin.md) | **NOT READY TO IMPLEMENT**; designed and security-reviewed, and that review found three exploitable gaps in the naive shape | refine the design against the real call graph, settle the verifier-keyed variant, and produce a file-level plan before implementing; the control-plane dependency cleared in v0.74.0 |
+| [drop-self-built-desktop-packages](v0.75.0/drop-self-built-desktop-packages.md) | blocked behind the loopback redirect; the CLI half already shipped in v0.73.0 | once loopback lands, drop the four Tauri desktop `.deb`/`.rpm` and fix every release-asset consumer in the same commit |
+| [windows-deeplink-second-instance](v0.75.0/windows-deeplink-second-instance.md) | inferred from source, never reproduced; very likely subsumed by the loopback redirect | reproduce it on Windows first, then confirm loopback closes it and decide whether to keep `chan://` registered at all |
+| [terminal-mouse-toggle](v0.75.0/terminal-mouse-toggle.md) | accepted feature, deferred out of v0.74.0; no mouse toggle exists and "mouse" is five independent mechanisms | settle the "stop TUIs capturing the mouse" vs "kill all mouse" variant, then add a `terminal.*` config boolean and a `TerminalSection.svelte` checkbox wired like `scrollback_mb` |
 
 ## Completed
+
+### v0.74.0
+
+Shipped 2026-07-22; see [release-v0.74.0](../release/release-v0.74.0.md). Closed items in [`done/`](done/):
+
+- [distributed-proxy-control-plane](done/distributed-proxy-control-plane.md) - the gateway coordinates devserver-proxies through one authenticated control service, replacing uncoordinated singletons.
+- [distributed-proxy-control-plane-hardening](done/distributed-proxy-control-plane-hardening.md) - the accepted security hardening (Ed25519 admission leases, opaque sessions, durable revocation) shipped with it.
+- [distributed-proxy-control-plane-implementation-security-review](done/distributed-proxy-control-plane-implementation-security-review.md) - the independent adversarial re-review that cleared the hardening to merge.
+- [open-routing-multiple-local-instances](done/open-routing-multiple-local-instances.md) - `chan open` routes deterministically when several local instances run.
+- [terminal-submit-chord-authority](done/terminal-submit-chord-authority.md) - the server owns the submit chord and `cs terminal list` shows each session's derived agent.
+- [control-terminal-wake-rerun](done/control-terminal-wake-rerun.md) - a macOS wake no longer re-runs the devserver connect script on the control terminal.
+- [devserver-token-rotation](done/devserver-token-rotation.md) - the devserver bearer token rotates by verb and by age, and stays out of WebView snapshots.
+- [markdown-heading-detection-in-fences](done/markdown-heading-detection-in-fences.md) - fold chevrons no longer appear beside `#` comments in fenced code; headings come from the syntax tree.
+- [release-asset-verification-coverage](done/release-asset-verification-coverage.md) - the release-asset verifier single-sources the required list and requires the Windows artifacts.
+- [aur-publish-verification-race](done/aur-publish-verification-race.md) - the AUR post-push RPC check is advisory, not a false red.
+- [copr-build-provenance](done/copr-build-provenance.md) - a frozen-main window plus a publication-provenance probe for COPR.
+- [aur-aarch64-publication-gate](done/aur-aarch64-publication-gate.md) - withdrawn: aarch64 AUR CI validation was removed rather than made a gate; the aarch64 PKGBUILD still ships.
 
 ### v0.73.0
 

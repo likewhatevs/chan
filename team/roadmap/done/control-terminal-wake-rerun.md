@@ -1,5 +1,7 @@
 # Complete The Control-Terminal Reconnect Fix Across The Wake Path
 
+> Status: shipped in [v0.74.0](../../release/release-v0.74.0.md).
+
 Status: accepted scope for v0.74.0. A confirmed defect with a live user report, and it is the unfinished part of the fix shipped in `a61d5748` (v0.70.2), not a new bug class and not a v0.71 regression.
 
 ## Problem

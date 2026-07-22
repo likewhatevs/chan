@@ -1,5 +1,7 @@
 # chan-gateway v0.74.0 control plane hardening
 
+> Status: shipped in [v0.74.0](../../release/release-v0.74.0.md).
+
 Status: **accepted, implemented, and green on `v074/ctl`; ready to merge when
 the v0.74.0 integration window opens.** The findings below remain the pinned
 2026-07-20 pre-hardening audit
