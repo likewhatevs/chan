@@ -39,6 +39,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and drains tunnels and bridges. The controller retains disconnected authority
   markers for 60 seconds, so a second disconnect cannot create a false revoke
   acknowledgement window. Controller HA remains out of scope.
+- **The devserver bearer token can be rotated.** An operator `rotate` verb and a
+  live, bearer-gated `POST /api/devserver/rotate-token` route mint a fresh token
+  and retire the old one from the next request without a restart, and a
+  devserver whose token predates 30 days re-mints it on cold start (so the first
+  0.74.0 start rotates once, retiring every pre-0.74.0 token).
 
 ### Changed
 
@@ -53,6 +58,56 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   require the double-submit CSRF value; WebSockets require the exact canonical
   Origin; and credentialed responses are non-cacheable, non-sniffable,
   non-frameable, and no-referrer. Query parameters are never proxy credentials.
+- **Gateway auth cookies are renamed to `__Host-` names.**
+  `__Host-devserver_gate`, `__Host-devserver_csrf`, and `__Host-id_session`
+  replace their prior names; existing browser sessions re-establish at the
+  0.74.0 cutover.
+- **`cs terminal write --submit` is server-authoritative.** The server derives
+  each matched session's agent from its spawn command and `CHAN_AGENT` and
+  applies that session's chord, so a mismatched sender guess and a mixed-agent
+  `--tab-group` broadcast both submit correctly, and a shell target receives
+  plain text; a sender/target mismatch is noted in the ack. `cs terminal list`
+  (and `--json`) now reports each session's derived `agent` (`-` for a shell),
+  so a sender can discover a target's agent at runtime, and
+  `CHAN_SUBMIT_<AGENT>` template overrides are read from the server's
+  environment (and its `<config>/chan/submit.toml`), not the writer's.
+
+### Fixed
+
+- **`chan open` routes deterministically when several local instances run.**
+  Each devserver takes its own discovery socket under a live-owner flock, an
+  `Identify` verb reports which instance is live, and a
+  `--devserver[=<port|url>]` selector targets one and refuses rather than
+  guessing; routing follows the live instances instead of personality alone, and
+  the stale port-8787 collision hint no longer blames a devserver handoff that
+  never ran.
+- **macOS wake no longer re-runs the devserver connect script on the control
+  terminal.** A wake used to re-dial the control terminal and re-run its connect
+  script; the wake recycle is now gated off control terminals, and a connect
+  script's death marks the connection down with no replacement session, viewport
+  clear, or automatic rerun.
+- **The devserver bearer token no longer persists into WebView terminal
+  snapshots.** Control-terminal scrollback carrying the token is excluded from
+  the snapshot written to WebView storage, and any existing snapshot carrying the
+  token marker is pruned when the window reloads.
+- **Fold chevrons no longer appear beside `#` comments inside fenced code, inline
+  code, or frontmatter.** Heading detection now reads the editor syntax tree
+  rather than a raw-line regex, so folding a heading above a fenced block no
+  longer stops at a fenced `#`, and the bullet and heading formatting chords no
+  longer rewrite a fenced `#` line. Indented headings (up to three leading
+  spaces) now fold.
+- **Fenced code blocks contrast against the page again.** The dark code-block
+  background regained a distinct slab (a regression since v0.70.3, where an
+  opaque page fill buried it), now spanning the content column with even side
+  margins; the dark table header and stripe tokens are matched to the same
+  surface.
+- **The command launcher's focus-colour command recolours the pane's focus
+  border.** Choosing a focus colour from the command launcher now writes the
+  highlight colour the border reads, matching the hamburger-menu control, instead
+  of updating only the selection and check-mark.
+- **A diagram's render flip always rotates forward.** The de-render tumble (on
+  the cursor re-entering the source) mirrored the render flip and rotated
+  backward; it now continues the same forward rotation.
 
 ### Operators
 
@@ -73,6 +128,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   schema changes. Runtime profile and identity roles receive only their
   required table privileges; identity has no direct access to the durable
   control-revocation outbox.
+- **Release-asset verification single-sources the required list and requires the
+  Windows artifacts.** The verifier derives the required gateway `.deb` set from
+  the gateway service list instead of a hardcoded count, now requires the Windows
+  CLI zip and NSIS installer, and gains a local `--release-json` mode that can be
+  exercised before the tag.
+- **aarch64 AUR CI validation is removed.** Its failures were CI-environment
+  issues (the ALARM rootfs certificate, then pacman's Landlock download sandbox
+  under the nested container), not package defects, so it never became a
+  publication gate; the aarch64 PKGBUILD still ships for users to build natively.
+  This supersedes the v0.73.0 note that a later release would make AUR
+  publication wait for the aarch64 build.
 
 ## [v0.73.0] - 2026-07-20
 
