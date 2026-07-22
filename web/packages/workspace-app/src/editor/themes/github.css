@@ -106,8 +106,13 @@
   --chan-editor-quote-border: #3d444d;
   --chan-editor-hr-color: #3d444d;
   --chan-editor-table-border: #3d444d;
-  --chan-editor-table-header-bg: #151b23;
-  --chan-editor-table-stripe-bg: #151b23;
+  /* Header/stripe fills match the code-block slab (owner directive): like
+     the fence bg, GitHub's canonical #151b23 sits BELOW chan's #1c1c1e page
+     and read as sunk rather than filled. Plain rows stay on the page colour
+     and the #3d444d borders carry the structure, so the header/stripe-vs-
+     plain distinction is unchanged - just lifted instead of sunk. */
+  --chan-editor-table-header-bg: #262c36;
+  --chan-editor-table-stripe-bg: #262c36;
 }
 
 /*

@@ -980,10 +980,15 @@
      editor stopped showing selected text.
 
      Instead the fill lives on a .cm-content::before pseudo-element at
-     z-index:-2, strictly behind the selection layer, so the selection
-     shows on top of the page. Positioning it to .cm-content (which we
-     make position:relative) keeps the page pixel-aligned with the text
-     while .cm-content itself stays transparent. */
+     z-index:-4: strictly behind the selection layer (-1) AND behind
+     the code-block slab ::before (-3), which shares this stacking
+     context because neither .cm-content nor .cm-line forms one. The
+     opaque page fill must stay the BOTTOM layer - at -2 it buried the
+     -3 slab and code blocks lost their background. Ordering, back to
+     front: page fill (-4) < code slab (-3) < selection (-1) < text.
+     Positioning it to .cm-content (which we make position:relative)
+     keeps the page pixel-aligned with the text while .cm-content
+     itself stays transparent. */
   :global(.chan-page-capped .md-wysiwyg-cm6) {
     background: var(--page-shade);
   }
@@ -994,7 +999,7 @@
     content: "";
     position: absolute;
     inset: 0;
-    z-index: -2;
+    z-index: -4;
     background: var(--bg);
     pointer-events: none;
   }
@@ -1089,7 +1094,7 @@
      so the whole fenced block reads as one continuous slab.
      The slab is painted by a ::before (further down), NOT by a
      `background` on the line itself: CodeMirror's drawSelection layer
-     sits at z-index -2, so an opaque line background buried the
+     sits at z-index -1, so an opaque line background buried the
      selection highlight - text selected inside a code block was
      invisible. `position: relative` (no z-index, so it forms no
      stacking context) anchors the ::before and the floating badge
@@ -1121,11 +1126,12 @@
     box-sizing: border-box;
   }
   /* The slab itself: a non-interactive layer pinned to the line's
-     padding box, sitting at z-index -3 so it paints BEHIND the
-     selection layer (-2) but still behind the text (normal flow).
-     `inset: 0` resolves against the padding box, which the 18px
-     transparent right border already shortens - so it reproduces the
-     old slab's exact bounds. */
+     padding box, sitting at z-index -3: BEHIND the selection layer
+     (-1, so selecting text inside a code block stays visible) but
+     ABOVE the opaque page fill (-4, or the slab itself disappears -
+     the v0.70.3..v0.74.0 regression). `inset: 0` resolves against the
+     padding box, which the 18px transparent right border already
+     shortens - so it reproduces the old slab's exact bounds. */
   :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-fence-opener::before),
   :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-fence-closer::before),
   :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-code-block::before) {

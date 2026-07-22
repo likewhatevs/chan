@@ -5,6 +5,7 @@ import {
   NAMED_PANE_HEX,
   applyInitialPaneColor,
   applyLivePaneColor,
+  applyNamedFocusColor,
   namedForPaneHex,
   normalizeHexColor,
   seedInitialFocusColor,
@@ -12,6 +13,9 @@ import {
 } from "./paneColor";
 import paneSource from "../components/Pane.svelte?raw";
 import clientSource from "../api/client.ts?raw";
+// Importing the module registers the launcher focus-colour commands.
+import "./commands/panes";
+import { availableCommands, type CommandContext } from "./commands";
 
 const CSS_VAR = "--pane-highlight-color";
 
@@ -254,14 +258,52 @@ describe("syncLiveFocusColorMenu (live watch → menu)", () => {
   });
 });
 
-describe("Pane.svelte doSetFocusColor persists + recolours per library", () => {
-  test("keeps the existing per-window preset call", () => {
-    expect(paneSource).toMatch(/setWindowFocusColor\(color\);/);
+describe("launcher focus-colour command applies the doc-root var", () => {
+  // The focused-pane border reads var(--pane-highlight-color, ...), which
+  // WINS over the data-focus-color preset whenever it is set - so a launcher
+  // command that only updates the selection is invisibly masked. The command
+  // must apply the var exactly like the pane menu button does.
+  test("app.pane.focusColor.orange sets --pane-highlight-color to the mapped hex", () => {
+    const ctx: CommandContext = {
+      terminalOnly: false,
+      terminalControl: false,
+      activeSurface: null,
+      activeSide: null,
+      activeTabId: null,
+    };
+    const command = availableCommands(ctx).find(
+      (candidate) => candidate.id === "app.pane.focusColor.orange",
+    );
+    if (!command) throw new Error("app.pane.focusColor.orange not registered");
+    command.run();
+    expect(document.documentElement.style.getPropertyValue(CSS_VAR)).toBe(
+      NAMED_PANE_HEX.orange,
+    );
   });
-  test("sets --pane-highlight-color to the mapped hex live", () => {
-    expect(paneSource).toMatch(/const hex = NAMED_PANE_HEX\[color\];/);
+});
+
+describe("applyNamedFocusColor applies the full preset path", () => {
+  // The extracted shared body: selection, doc-root var, persist - in that
+  // order, with the hex handed to persist so callers cannot re-derive it
+  // differently.
+  test("selects, recolours the doc root, and persists the mapped hex", () => {
+    const setColor = vi.fn();
+    const persist = vi.fn();
+    applyNamedFocusColor("green", setColor, persist);
+    expect(setColor).toHaveBeenCalledWith("green");
+    expect(document.documentElement.style.getPropertyValue(CSS_VAR)).toBe(
+      NAMED_PANE_HEX.green,
+    );
+    expect(persist).toHaveBeenCalledWith(NAMED_PANE_HEX.green);
+  });
+});
+
+describe("Pane.svelte doSetFocusColor persists + recolours per library", () => {
+  test("delegates to the shared applyNamedFocusColor path", () => {
+    // The button and the launcher command must share ONE apply body; the
+    // button injects the selection setter and its best-effort persist.
     expect(paneSource).toMatch(
-      /setProperty\("--pane-highlight-color", hex\)/,
+      /applyNamedFocusColor\(color, setWindowFocusColor, /,
     );
   });
   test("fires api.setLocalColor(hex) best-effort, swallowing failure", () => {

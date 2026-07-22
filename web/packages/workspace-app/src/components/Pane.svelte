@@ -102,7 +102,7 @@
     windowLibraryId,
   } from "../api/client";
   import { ApiError } from "../api/errors";
-  import { NAMED_PANE_HEX } from "../state/paneColor";
+  import { applyNamedFocusColor } from "../state/paneColor";
   import { onDestroy, onMount } from "svelte";
   import { applyPageWidthToElement, pageWidth } from "../state/pageWidth.svelte";
 
@@ -500,24 +500,23 @@
 
   function doSetFocusColor(color: FocusColor): void {
     closePaneMenus();
-    // Keep the per-window preset + checkmark behaviour intact.
-    setWindowFocusColor(color);
-    // Repurposed as the per-LIBRARY pane-highlight colour. Recolour THIS
-    // window's active pane immediately, then persist it to the window's own
+    // ONE shared apply path with the launcher's app.pane.focusColor.*
+    // commands (applyNamedFocusColor): per-window preset + checkmark, then
+    // the per-LIBRARY doc-root recolour, then persist to the window's own
     // serving host. The PUT fires the server's colour broadcast, so
     // every OTHER open window of this library live-updates via its
     // `/api/library/local-color/watch` subscription (App.svelte), and future
     // windows still mint with it via `?pane=`.
-    const hex = NAMED_PANE_HEX[color];
-    document.documentElement.style.setProperty("--pane-highlight-color", hex);
-    // Best-effort: a read-only / no-store serving surface answers 403/404.
-    // Swallow it -- a failed persist must never break the menu or throw -- but LOG
-    // the status so a persist FAILURE on a surface that DOES have a store (e.g. a
-    // local desktop window whose per-tenant token is rejected by the launcher
-    // bearer gate) is visible instead of silently lost.
-    void api.setLocalColor(hex).catch((err: unknown) => {
-      const status = err instanceof ApiError ? err.status : "?";
-      console.warn(`setLocalColor failed (status ${status}); colour not persisted`, err);
+    applyNamedFocusColor(color, setWindowFocusColor, (hex) => {
+      // Best-effort: a read-only / no-store serving surface answers 403/404.
+      // Swallow it -- a failed persist must never break the menu or throw -- but LOG
+      // the status so a persist FAILURE on a surface that DOES have a store (e.g. a
+      // local desktop window whose per-tenant token is rejected by the launcher
+      // bearer gate) is visible instead of silently lost.
+      void api.setLocalColor(hex).catch((err: unknown) => {
+        const status = err instanceof ApiError ? err.status : "?";
+        console.warn(`setLocalColor failed (status ${status}); colour not persisted`, err);
+      });
     });
   }
 

@@ -96,6 +96,30 @@ export function applyLivePaneColor(color: string | null): void {
   if (hex) document.documentElement.style.setProperty(CSS_VAR, hex);
 }
 
+/// Apply a named focus-colour preset end to end - the ONE shared path for the
+/// pane hamburger button AND the command-launcher `app.pane.focusColor.*`
+/// commands, so the two cannot drift: select the preset (menu checkmark +
+/// future splits) via the injected setter, write `--pane-highlight-color` on
+/// the document root so THIS window's active pane recolours immediately (the
+/// border prefers the var over the `data-focus-color` preset, so a
+/// selection-only change is invisibly masked whenever the var is already
+/// set - the launcher bug), then hand the mapped hex to the injected persist
+/// (the per-library PUT whose broadcast live-updates every other window).
+/// Setter and persist are injected like the seed/sync helpers below, keeping
+/// this module free of the tabs state and api modules (no import cycle).
+export function applyNamedFocusColor(
+  color: FocusColor,
+  setColor: (color: FocusColor) => void,
+  persist: (hex: string) => void,
+): void {
+  setColor(color);
+  const hex = NAMED_PANE_HEX[color];
+  if (typeof document !== "undefined") {
+    document.documentElement.style.setProperty(CSS_VAR, hex);
+  }
+  persist(hex);
+}
+
 /// Boot-seed the per-window focus-colour menu checkmark so it matches the
 /// library colour the window opened with. If `?pane=` resolved to one of the
 /// four preset hexes, invoke `setColor` with that named preset so
