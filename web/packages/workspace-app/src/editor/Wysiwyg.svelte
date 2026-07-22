@@ -1114,15 +1114,18 @@
        longhand props beat the shorthand-default cascade order. */
     padding-left: 0.75em !important;
     padding-right: 0.75em !important;
-    /* The CM6 fold gutter eats ~18px on the LEFT of the editor; the
-       right side has no gutter, so the slab would bleed to the
-       editor's right edge while the left edge sits flush with the
-       post-gutter content edge - visibly lopsided. The 18px
-       transparent right border shrinks the PADDING box (the ::before's
-       absolute containing block), so the slab stops 18px short on the
-       right, mirroring the left gutter - same effect the old
-       background-clip:padding-box gave. */
-    border-right: 18px solid transparent;
+    /* The code-block line lives inside .cm-content, which has no
+       horizontal padding, so the slab (::before, inset:0 on this line's
+       padding box) already sits flush to the content column's left edge
+       - the same edge the paragraphs and dividers use. The CM6 fold
+       gutter is a SEPARATE column to the LEFT of .cm-content, NOT a left
+       inset of this line, so nothing pulls the slab's left edge in; a
+       right border would only shorten the right and make it lopsided.
+       So no right inset: the slab spans the content column flush on both
+       sides, symmetric with body text. Scoped to this code-block line
+       rule alone - the fold gutter, diagrams, and everything else are
+       untouched. */
+    border-right: 0;
     box-sizing: border-box;
   }
   /* The slab itself: a non-interactive layer pinned to the line's
