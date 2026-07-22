@@ -221,7 +221,11 @@ function flipOutGhost(view: EditorView, from: number, widget: DiagramWidget): vo
           .animate(
             [
               { transform: "perspective(1200px) rotateX(0deg)", opacity: 1 },
-              { transform: "perspective(1200px) rotateX(-90deg)", opacity: 0.2 },
+              // +90 (not -90): the fold-out CONTINUES the forward rotation
+              // the mount flip started (-90 -> 0), instead of mirroring it
+              // back the way it came - both transitions read as the same
+              // forward tumble.
+              { transform: "perspective(1200px) rotateX(90deg)", opacity: 0.2 },
             ],
             { duration: FLIP_MS, easing: "ease", fill: "forwards" },
           )

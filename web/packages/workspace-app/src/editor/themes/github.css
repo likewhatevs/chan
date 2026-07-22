@@ -75,9 +75,13 @@
  * Dark variant. Colors come from GitHub Primer dark - picked off
  * github.com's rendered markdown surface, NOT from the editor
  * surface (which is a different palette). The body color #f0f6fc
- * and link #4493f8 are the load-bearing tokens; code-block bg
- * #151b23 is GitHub's current dark fenced-block color (older
- * builds used #161b22).
+ * and link #4493f8 are the load-bearing tokens. The code-block bg
+ * is NOT GitHub's canonical #151b23: that value sits BELOW chan's
+ * dark page #1c1c1e and blends into it (GitHub's page is the much
+ * darker #0d1117, so their fence reads as a lift; ours must lift
+ * off #1c1c1e instead). #262c36 keeps the Primer dark slate hue
+ * while sitting clearly above the page, so the borderless WYSIWYG
+ * slab carries its own contrast.
  *
  * Surface body theme overrides pair their selector with the root one
  * so a Hybrid Editor switched to dark inside a globally-light
@@ -92,7 +96,7 @@
   --chan-editor-h6-color: #9198a1;
 
   --chan-editor-inline-code-bg: rgba(101, 108, 118, 0.4);
-  --chan-editor-code-block-bg: #151b23;
+  --chan-editor-code-block-bg: #262c36;
   --chan-editor-code-block-color: #f0f6fc;
   --chan-editor-code-block-border: transparent;
 

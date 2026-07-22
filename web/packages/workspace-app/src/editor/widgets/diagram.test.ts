@@ -287,12 +287,13 @@ describe("diagram wiring", () => {
     // The forward flip plays on widget mount; the reverse needs a ghost
     // because CM removes the widget DOM instantly on enter. Needs real layout
     // + WAAPI (jsdom has neither), so behaviour is browser-verified; this pins
-    // the mechanism. The ghost rotateX-folds from 0 to -90 (mirror of the
-    // forward -90 -> 0) over the same duration.
+    // the mechanism. The ghost rotateX-folds from 0 to +90, CONTINUING the
+    // forward rotation the mount flip started (-90 -> 0) rather than
+    // mirroring it, over the same duration.
     expect(diagramSrc).toMatch(/cacheFace\(this\.spec, this\.source, this\.dark, res\.svg\)/);
     expect(diagramSrc).toMatch(/function flipOutGhost/);
     expect(diagramSrc).toMatch(/rotateX\(0deg\)/);
-    expect(diagramSrc).toMatch(/rotateX\(-90deg\)/);
+    expect(diagramSrc).toMatch(/rotateX\(90deg\)/);
     expect(diagramSrc).toMatch(/if \(update\.docChanged \|\| !update\.selectionSet\) return/);
     expect(diagramSrc).toMatch(/flipOutGhost\(update\.view, it\.from, widget\)/);
   });
