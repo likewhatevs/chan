@@ -63,11 +63,6 @@ on:
         description: AUR pkgrel (raise for a packaging-only repair)
         required: false
         default: "1"
-      aur_validate_arm:
-        description: Run aarch64 AUR validation on dispatch (GA observes it)
-        required: false
-        default: false
-        type: boolean
 
 concurrency:
   group: publish-downstream-${{ github.event.workflow_run.head_branch || inputs.tag }}
@@ -452,88 +447,6 @@ jobs:
             target/aur-ci-out/${{ matrix.pkgbase }}/.SRCINFO
           include-hidden-files: true
           if-no-files-found: error
-
-  # Arch Linux ARM aarch64 is declared by both recipes. Build it on every
-  # successful GA release, using the same package path as x86_64, but observe
-  # rather than gate it for v0.73.0. This leg has never completed end to end
-  # and cannot be proven before a tag carrying the systemd-analyze fix;
-  # v0.72.0 also never reached the AUR. Do not let the unproven first ARM run
-  # block the first AUR publication for a second release. Once it passes,
-  # v0.74.0 adds aur-validate-arm to aur-publish's needs.
-  # Manual dispatches opt in because an ARM run is expensive and a
-  # distro-specific diagnostic may not need it.
-  #
-  # `inputs` (not `github.event.inputs`) is what preserves a boolean
-  # input as a Boolean: the raw event payload carries the string "false",
-  # which is truthy and would run ARM on every dispatch.
-  aur-validate-arm:
-    if: >-
-      (github.event_name == 'workflow_dispatch' &&
-       (inputs.targets == 'all' || inputs.targets == 'aur') &&
-       inputs.aur_validate_arm &&
-       !contains(inputs.tag, '-')) ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
-       startsWith(github.event.workflow_run.head_branch, 'v') &&
-       !contains(github.event.workflow_run.head_branch, '-'))
-    # Keep evidence failures visible on this job without making a red workflow
-    # the expected outcome until ARM joins the AUR publication gate.
-    continue-on-error: true
-    strategy:
-      fail-fast: false
-      matrix:
-        pkgbase: [chan, chan-desktop]
-    runs-on: ubuntu-24.04-arm
-    env:
-      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
-      AUR_PKGREL: ${{ github.event_name == 'workflow_dispatch' && inputs.aur_pkgrel || '1' }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_sha }}
-
-      # Upstream Arch publishes no aarch64 image, so import Arch Linux
-      # ARM's signed rootfs on the native runner.
-      - name: Import the Arch Linux ARM rootfs
-        run: |
-          set -euo pipefail
-          # os.archlinuxarm.org serves a certificate that does not cover its
-          # own hostname, so fetch from certificate-valid mirrors that carry
-          # both the rootfs and its signature. The pinned-key gpg verify below
-          # is the integrity anchor and runs on whatever the fetch produced;
-          # certificate verification is never relaxed to reach a broken host.
-          mirrors=(
-            https://ca.us.mirror.archlinuxarm.org/os
-            https://fl.us.mirror.archlinuxarm.org/os
-          )
-          fetched=""
-          for base in "${mirrors[@]}"; do
-            url="$base/ArchLinuxARM-aarch64-latest.tar.gz"
-            if curl -fsSL --retry 3 "$url" -o /tmp/archlinuxarm.tar.gz \
-              && curl -fsSL --retry 3 "$url.sig" -o /tmp/archlinuxarm.tar.gz.sig; then
-              fetched="$base"
-              break
-            fi
-            echo "::warning::$base did not serve both the rootfs and its signature; trying the next mirror"
-          done
-          if [ -z "$fetched" ]; then
-            echo "::error::no Arch Linux ARM mirror served both the rootfs and its signature"
-            exit 1
-          fi
-          echo "Fetched the Arch Linux ARM rootfs from $fetched"
-          gpg --batch --keyserver hkps://keyserver.ubuntu.com \
-            --recv-keys 68B3537F39A313B3E574D06777193F152BDBE6A6
-          fingerprint=$(gpg --batch --with-colons --fingerprint \
-            68B3537F39A313B3E574D06777193F152BDBE6A6 \
-            | awk -F: '$1 == "fpr" { print $10; exit }')
-          test "$fingerprint" = 68B3537F39A313B3E574D06777193F152BDBE6A6
-          gpg --batch --verify /tmp/archlinuxarm.tar.gz.sig /tmp/archlinuxarm.tar.gz
-          docker import /tmp/archlinuxarm.tar.gz chan-archlinuxarm:aarch64 >/dev/null
-
-      - name: Render, build, install, and smoke
-        env:
-          PKGBASE: ${{ matrix.pkgbase }}
-        run: packaging/distros/arch/build-in-ci.sh chan-archlinuxarm:aarch64
 
   aur-publish:
     if: >-
